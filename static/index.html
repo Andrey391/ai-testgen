@@ -1,0 +1,1581 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Test Generator</title>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#fff;--ink:#1c2230;--muted:#6b7385;--line:#e3e6ec;
+  --accent:#3b5bdb;--accent-ink:#fff;--ok:#2b8a3e;--bad:#c92a2a;--warn:#b7791f;--soft:#eef2ff;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#12151b;--panel:#1a1e27;--ink:#e6e9ef;--muted:#98a0b3;--line:#2b303c;
+  --accent:#6c8cff;--accent-ink:#0d1020;--ok:#51cf66;--bad:#ff6b6b;--warn:#fcc419;--soft:#232a3d;
+}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;align-items:center;gap:18px;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:16px;margin:0}
+#projBox{display:flex;gap:6px;align-items:center}
+#projSel{width:auto;max-width:240px;font-weight:600}
+nav button{background:none;border:0;color:var(--muted);font:inherit;padding:6px 10px;border-radius:6px;cursor:pointer}
+nav button.on{color:var(--ink);background:var(--soft);font-weight:600}
+main{padding:16px 20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.card + .card{margin-top:12px}
+h2{margin:0 0 4px;font-size:17px}
+h3{margin:0 0 6px;font-size:15px}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+label.inline{display:flex;align-items:center;gap:6px;margin:0;color:var(--ink);font-size:14px}
+label.inline input{width:auto}
+input,textarea,select{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px}
+textarea{resize:vertical}
+textarea.code{font:12px/1.5 ui-monospace,Consolas,monospace}
+button.btn,a.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:6px 12px;cursor:pointer;text-decoration:none;display:inline-block}
+button.btn:hover,a.btn:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.danger{color:var(--bad)}
+button.small,a.small{padding:3px 8px;font-size:12px}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+.muted{color:var(--muted)}
+.hidden{display:none!important}
+.start{max-width:680px;margin:20px auto}
+.studio{display:grid;grid-template-columns:320px 1fr 380px;gap:14px;height:calc(100vh - 90px)}
+.col{display:flex;flex-direction:column;min-height:0}
+.chat{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px}
+.msg{padding:8px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word}
+.msg.user{background:var(--soft);align-self:flex-end;max-width:90%}
+.msg.agent{background:var(--bg);border:1px solid var(--line)}
+.msg.system{color:var(--muted);font-size:13px}
+.pending{border:1px solid var(--accent);border-radius:8px;padding:10px;margin-top:8px;background:var(--soft)}
+.status{font-size:12px;color:var(--muted);margin:6px 0}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px}
+.dot.run{background:var(--warn);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.3}}
+.live{position:relative;flex:1;min-height:0;display:flex;align-items:flex-start;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
+.live img{max-width:100%;border:1px solid var(--line);border-radius:6px;display:block}
+.live.picking img{cursor:crosshair;outline:2px solid var(--accent)}
+.urlbar{font-size:12px;color:var(--muted);margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.steps{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.step{border:1px solid var(--line);border-radius:8px;padding:8px;display:grid;grid-template-columns:22px 1fr auto;gap:6px;align-items:start}
+.step .n{font-size:12px;color:var(--muted);padding-top:3px}
+.step .d{outline:none;border-radius:4px;padding:1px 3px}
+.step .d:focus{background:var(--bg)}
+.step .meta{font-size:11px;color:var(--muted);margin-top:3px;word-break:break-all}
+.step .acts{display:flex;flex-direction:column;gap:2px}
+.step .acts button{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 4px;font-size:13px}
+.badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:10px;background:var(--soft);color:var(--accent);margin-right:4px;white-space:nowrap}
+.badge.assert{background:none;border:1px solid var(--ok);color:var(--ok)}
+.badge.ok{background:none;border:1px solid var(--ok);color:var(--ok)}
+.badge.bad{background:none;border:1px solid var(--bad);color:var(--bad)}
+.badge.warn{background:none;border:1px solid var(--warn);color:var(--warn)}
+.badge.off{background:none;border:1px solid var(--line);color:var(--muted)}
+.st-passed{border-left:3px solid var(--ok)}
+.st-failed{border-left:3px solid var(--bad)}
+.err{color:var(--bad);font-size:12px}
+.ok{color:var(--ok)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:500}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--bg)}
+.scen{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin-top:14px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;font-size:12px;margin:6px 0}
+.runlog{margin-top:10px}
+.runlog .r{display:flex;gap:8px;padding:4px 0;border-bottom:1px dashed var(--line)}
+.login{max-width:340px;margin:12vh auto}
+details.opt{margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
+.hint{font-size:12px;color:var(--muted);margin-top:4px}
+.hint a{color:var(--accent)}
+.settings{display:grid;grid-template-columns:200px 1fr;gap:14px;align-items:start}
+.subnav{display:flex;flex-direction:column;gap:2px;position:sticky;top:10px}
+.subnav button{text-align:left;background:none;border:0;color:var(--muted);font:inherit;padding:8px 10px;border-radius:6px;cursor:pointer}
+.subnav button.on{background:var(--soft);color:var(--ink);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:0 14px}
+.checks{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:4px}
+.stage{border-left:3px solid var(--accent)}
+.stage.disabled{border-left-color:var(--line);opacity:.8}
+.stage-head{display:flex;align-items:center;gap:10px}
+.stage-head .num{width:24px;height:24px;border-radius:50%;background:var(--soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.flow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.flow .chip{padding:4px 10px;border-radius:14px;border:1px solid var(--line);font-size:12px;color:var(--muted)}
+.flow .chip.on{border-color:var(--accent);color:var(--accent)}
+.flow .chip.cur{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.flow .chip.off{text-decoration:line-through}
+.skills-layout{display:grid;grid-template-columns:280px 1fr;gap:12px;align-items:start}
+.skill-item{padding:8px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.skill-item:hover{background:var(--bg)}
+.skill-item.on{border-color:var(--accent);background:var(--soft)}
+.tools{max-height:220px;overflow:auto;font-size:12px;margin-top:6px}
+.log{max-height:260px;overflow:auto;font-size:12px}
+.log div{padding:2px 0;border-bottom:1px dashed var(--line)}
+.log .error{color:var(--bad)}
+.log .warn{color:var(--warn)}
+.projects{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:12px}
+.projects > .card{margin-top:0;display:flex;flex-direction:column;gap:6px}
+.projects > .card.cur{border-color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.wizard{max-width:920px;margin:0 auto}
+.wz-steps{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0 12px}
+.wz-steps button{font:inherit;font-size:13px;padding:5px 12px;border-radius:14px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+.wz-steps button.done{border-color:var(--ok);color:var(--ok)}
+.wz-steps button.cur{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.wz-steps button:disabled{cursor:default}
+.slot{border-left:3px solid var(--line)}
+.slot.ready{border-left-color:var(--ok)}
+.slot .card{background:var(--bg);margin-top:10px}
+@media (max-width:1100px){.studio{grid-template-columns:1fr;height:auto}.chat,.steps{max-height:360px}
+  .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
+  .grid2,.grid3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Test Generator</h1>
+  <div id="projBox" class="hidden">
+    <select id="projSel" title="Проект"></select>
+    <button class="btn small" id="newProjBtn" title="Новый проект">+</button>
+  </div>
+  <nav class="hidden">
+    <button data-tab="home" class="on">Проекты</button>
+    <button data-tab="studio" data-needs-project>Studio</button>
+    <button data-tab="tests" data-needs-project>Тесты</button>
+    <button data-tab="req" data-needs-project>Требования</button>
+    <button data-tab="pipe" data-needs-project>Конвейер</button>
+    <button data-tab="proj" data-needs-project>Проект</button>
+  </nav>
+  <span class="grow"></span>
+  <span class="muted hidden" id="whoami"></span>
+  <button class="btn hidden" id="logoutBtn">Выйти</button>
+</header>
+<main>
+
+<!-- ============ LOGIN ============ -->
+<section id="loginBox" class="hidden">
+  <form class="card login" id="loginForm">
+    <h2>Вход</h2>
+    <label>Логин</label><input id="lUser" autocomplete="username" required>
+    <label>Пароль</label><input id="lPass" type="password" autocomplete="current-password" required>
+    <div class="err" id="lErr" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:10px"><span class="grow"></span>
+      <button class="btn primary" type="submit">Войти</button></div>
+    <div class="hint hidden" id="toSignup" style="margin-top:10px">Нет аккаунта? <a href="#" data-auth="signup">Зарегистрироваться</a></div>
+  </form>
+  <form class="card login hidden" id="signupForm">
+    <h2>Регистрация</h2>
+    <label>Логин</label><input id="sUser" autocomplete="username" required maxlength="64">
+    <label>Пароль</label><input id="sPass" type="password" autocomplete="new-password" required minlength="8">
+    <label>Повторите пароль</label><input id="sPass2" type="password" autocomplete="new-password" required minlength="8">
+    <div class="hint">Логин: буквы, цифры и . _ @ -. Пароль: не короче 8 символов.</div>
+    <div class="err" id="sErr" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:10px"><span class="grow"></span>
+      <button class="btn primary" type="submit">Зарегистрироваться</button></div>
+    <div class="hint" style="margin-top:10px">Уже есть аккаунт? <a href="#" data-auth="login">Войти</a></div>
+  </form>
+</section>
+
+<!-- ============ PROJECTS ============ -->
+<section id="tab-home" class="hidden">
+  <div id="homeList">
+    <div class="card">
+      <div class="row">
+        <div class="grow"><h2>Проекты</h2>
+          <div class="muted">Проект — это тестируемое приложение и ресурсы, на которых строится вся работа: источник требований (Jira/Confluence), система управления тестами (Zephyr Scale), движок браузера (Playwright MCP) и инструменты агента. Создайте проект и подключите ресурсы — сценарии, генерация, прогоны и публикация дальше используют их автоматически.</div></div>
+        <button class="btn primary" id="homeNew">+ Новый проект</button>
+      </div>
+    </div>
+    <div class="projects" id="projCards"></div>
+  </div>
+
+  <div id="wizard" class="wizard hidden">
+    <div class="row"><h2 class="grow" id="wzTitle">Новый проект</h2>
+      <button class="btn" id="wzClose">К списку проектов</button></div>
+    <div class="wz-steps" id="wzSteps"></div>
+
+    <div data-wz="1" class="card">
+      <h3>Тестируемое приложение</h3>
+      <label>Название проекта</label><input id="wzName" placeholder="Интернет-магазин" maxlength="120">
+      <label>Описание</label><textarea id="wzDesc" rows="2"></textarea>
+      <label>URL приложения</label><input id="wzUrl" placeholder="https://staging.example.com">
+      <div class="hint">С этого адреса агент начинает каждый сценарий; при запуске его можно переопределить.</div>
+      <div class="row">
+        <div class="grow"><label>Логин в приложении</label><input id="wzLogin" autocomplete="off"></div>
+        <div class="grow"><label>Пароль</label><input id="wzPass" type="password" autocomplete="new-password"></div>
+      </div>
+      <div class="hint">Необязательно. Агент видит только <code>{{username}}</code>/<code>{{password}}</code>: пароль хранится на сервере и не попадает в модель, шаги и экспорт.</div>
+      <div class="row" style="margin-top:12px"><span class="err grow" id="wz1Err"></span>
+        <button class="btn primary" id="wz1Next">Создать проект →</button></div>
+    </div>
+
+    <div data-wz="2" class="hidden">
+      <div class="card">
+        <h3>Подключения к ресурсам</h3>
+        <div class="muted">Подключите системы, с которыми работает команда: заполните поля и нажмите «Сохранить и проверить» — студия запустит MCP-сервер и покажет его инструменты. Токены хранятся на сервере и не показываются в интерфейсе. Без подключений работают файлы .md, текст требований и встроенный Playwright; любой ресурс можно добавить позже в «Проект → Подключения».</div>
+      </div>
+      <div id="wzSlots"></div>
+      <div class="card row" style="margin-top:12px">
+        <button class="btn" data-wzgo="1">← Назад</button><span class="grow"></span>
+        <button class="btn primary" data-wzgo="3">Далее →</button></div>
+    </div>
+
+    <div data-wz="3" class="hidden">
+      <div class="card">
+        <h3>Как проект использует ресурсы</h3>
+        <div class="muted">Привязка подключений к этапам процесса генерации. Остальные параметры этапов (скиллы, модель, лимиты) — в «Проект → Процесс генерации».</div>
+        <div class="grid2">
+          <div><label>Источник требований</label><select id="wzReq"></select></div>
+          <div><label>Движок браузера</label><select id="wzEngine"></select></div>
+        </div>
+        <label>Во время генерации агент может читать (только чтение)</label>
+        <div class="checks" id="wzTools"></div>
+        <div class="hint">Например, сам открыть задачу Jira или найти похожие тест-кейсы в Zephyr.</div>
+        <div class="grid2">
+          <div><label>Публикация тест-кейсов и результатов прогонов</label><select id="wzPub"></select></div>
+          <div><label>Отбор сценариев из требований</label>
+            <select id="wzSelect">
+              <option value="manual">Вручную</option>
+              <option value="all">Все автоматически</option>
+              <option value="high">Только high-приоритет</option>
+            </select></div>
+        </div>
+        <div class="hint" id="wzWarn"></div>
+      </div>
+      <div class="card row" style="margin-top:12px">
+        <button class="btn" data-wzgo="2">← Назад</button><span class="err grow" id="wz3Err"></span>
+        <button class="btn primary" id="wzFinish">Готово — к требованиям</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STUDIO ============ -->
+<section id="tab-studio" class="hidden">
+  <div id="startForm" class="card start">
+    <h2>Новый тест-кейс</h2>
+    <div class="muted">Опишите сценарий обычным языком — AI-агент пройдёт его в браузере и запишет шаги. Тест сохранится в проект <b class="projName"></b>.</div>
+    <label>URL приложения</label><input id="fUrl" placeholder="https://www.saucedemo.com">
+    <label>Название теста</label><input id="fName" placeholder="Покупка товара">
+    <label>Сценарий</label>
+    <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
+    <div class="grid2">
+      <div><label>Движок браузера</label>
+        <select id="fEngine">
+          <option value="">Как в настройках проекта</option>
+          <option value="builtin">Встроенный Playwright</option>
+          <option value="playwright-mcp">Playwright MCP</option>
+        </select></div>
+    </div>
+    <details class="opt">
+      <summary>Учётные данные для входа в приложение (по умолчанию — из настроек проекта)</summary>
+      <div class="row">
+        <div class="grow"><label>Логин</label><input id="fLogin" autocomplete="off"></div>
+        <div class="grow"><label>Пароль</label><input id="fPass" type="password" autocomplete="new-password"></div>
+      </div>
+      <div class="hint">Агент вводит их как <code>{{username}}</code> и <code>{{password}}</code>: пароль не передаётся в модель и не попадает в шаги теста и экспорт. Если поля пустые, используются логин и пароль проекта.</div>
+    </details>
+    <div class="row" style="margin-top:10px">
+      <label class="inline"><input type="checkbox" id="fAuto"> Auto-Pilot</label>
+      <label class="inline"><input type="checkbox" id="fHeaded"> Показать реальное окно браузера</label>
+      <span class="grow"></span>
+      <button class="btn primary" id="startBtn">Начать генерацию</button>
+    </div>
+  </div>
+
+  <div id="workspace" class="studio hidden">
+    <div class="card col">
+      <div class="row"><b id="wsTitle" class="grow"></b>
+        <label class="inline"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
+      </div>
+      <div class="status"><span class="dot" id="stDot"></span><span id="stText"></span></div>
+      <div class="chat" id="chat"></div>
+      <div id="pendingBox" class="pending hidden">
+        <div class="muted" style="font-size:12px">Агент предлагает шаг:</div>
+        <div id="pendingText" style="margin:4px 0 8px"></div>
+        <div class="row">
+          <button class="btn primary" id="contBtn">Continue</button>
+          <button class="btn" id="rejBtn">Отклонить</button>
+        </div>
+      </div>
+      <button class="btn hidden" id="resumeBtn" style="margin-top:8px">Продолжить с AI</button>
+      <div class="row" style="margin-top:8px">
+        <input id="chatIn" placeholder="Подсказка агенту или доп. инструкция…" class="grow">
+        <button class="btn" id="chatBtn">→</button>
+      </div>
+    </div>
+
+    <div class="card col">
+      <div class="row" style="margin-bottom:6px">
+        <b class="grow">Live View <span class="badge" id="engineBadge"></span></b>
+        <select id="mode" style="width:auto">
+          <option value="off">Режим: просмотр</option>
+          <option value="picker">Element Picker</option>
+          <option value="record">Record &amp; Play</option>
+        </select>
+        <select id="pickAction" style="width:auto">
+          <option value="click">клик</option>
+          <option value="fill">ввод текста</option>
+          <option value="hover">наведение</option>
+          <option value="select_option">выбор в списке</option>
+          <option value="assert_visible">проверка: элемент виден</option>
+          <option value="assert_text_present">проверка: текст на странице</option>
+        </select>
+      </div>
+      <div class="urlbar" id="urlbar"></div>
+      <div class="live" id="live"><img id="shot" alt=""></div>
+      <div class="muted" style="font-size:12px;margin-top:6px" id="modeHint">Выберите Element Picker или Record &amp; Play, чтобы добавлять шаги кликом по экрану.</div>
+    </div>
+
+    <div class="card col">
+      <div class="row" style="margin-bottom:8px">
+        <b class="grow">Шаги теста <span class="muted" id="stepCount"></span></b>
+        <button class="btn" id="addStepBtn">+ шаг</button>
+        <button class="btn primary" id="saveBtn">Сохранить</button>
+      </div>
+      <div id="addStep" class="hidden" style="margin-bottom:8px">
+        <div class="row">
+          <select id="asAction" style="width:auto">
+            <option value="navigate">открыть URL</option>
+            <option value="press_key">нажать клавишу</option>
+            <option value="scroll">прокрутить (up/down)</option>
+            <option value="wait">ждать (сек)</option>
+            <option value="assert_text_present">проверка: текст</option>
+            <option value="assert_url_contains">проверка: URL содержит</option>
+          </select>
+          <input id="asValue" placeholder="значение" class="grow">
+        </div>
+        <div class="row" style="margin-top:6px">
+          <input id="asDesc" placeholder="описание шага (необязательно)" class="grow">
+          <button class="btn" id="asGo">Выполнить</button>
+        </div>
+      </div>
+      <div class="steps" id="steps"></div>
+      <div id="savedBar" class="row hidden" style="margin-top:8px">
+        <span class="muted grow">Сохранено</span>
+        <button class="btn" id="runSavedBtn">Запустить</button>
+        <a class="btn small" id="expPy" target="_blank">.py</a>
+        <a class="btn small" id="expFeat" target="_blank">.feature</a>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span class="grow"></span>
+        <button class="btn" id="newBtn">Новый тест</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TESTS ============ -->
+<section id="tab-tests" class="hidden">
+  <div class="card">
+    <table><thead><tr><th>Тест</th><th>Шагов</th><th>Последний запуск</th><th>Zephyr</th><th></th></tr></thead>
+    <tbody id="testsBody"></tbody></table>
+    <div class="row" style="margin-top:10px">
+      <label class="inline"><input type="checkbox" id="runHeaded"> Запускать в видимом окне</label>
+    </div>
+  </div>
+  <div class="card runlog hidden" id="runBox"></div>
+</section>
+
+<!-- ============ REQUIREMENTS -> SCENARIOS ============ -->
+<section id="tab-req" class="hidden">
+  <div class="card">
+    <div class="muted">Загрузите требования из Jira или Confluence (через MCP-подключение проекта), из файла .md или вставьте текст — AI предложит тест-сценарии по правилам этапа «Сценарии» из настроек проекта. Любой сценарий можно отправить в Studio, а все требования целиком — в конвейер.</div>
+    <label>Ссылка на задачу Jira или страницу Confluence</label>
+    <div class="row">
+      <input id="srcLink" class="grow" placeholder="https://company.atlassian.net/browse/PROJ-123  ·  …/wiki/spaces/TEAM/pages/123456/…  ·  PROJ-123">
+      <button class="btn" id="srcFetch">Загрузить</button>
+      <span class="muted">или</span>
+      <button class="btn" id="srcFileBtn">Файл .md</button>
+      <input type="file" id="srcFile" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple class="hidden">
+    </div>
+    <div class="hint" id="srcStatus"></div>
+    <label>Требования</label>
+    <textarea id="reqText" rows="7" placeholder="Как покупатель, я хочу добавлять товары в корзину, чтобы оформить заказ…"></textarea>
+    <label>URL приложения (необязательно)</label><input id="reqUrl">
+    <div class="row" style="margin-top:10px"><span class="muted grow" id="reqStatus"></span>
+      <button class="btn" id="reqToPipe">В конвейер →</button>
+      <button class="btn primary" id="reqBtn">Сгенерировать сценарии</button></div>
+  </div>
+  <div id="reqAssume" class="muted" style="margin-top:12px"></div>
+  <div class="scen" id="scenList"></div>
+</section>
+
+<!-- ============ PIPELINE ============ -->
+<section id="tab-pipe" class="hidden">
+  <div class="card">
+    <h2>Запуск конвейера</h2>
+    <div class="muted">Полный процесс по настройкам проекта: требования → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div>
+    <div class="flow" id="pipeFlow"></div>
+    <label>Ссылки на требования (Jira / Confluence, по одной в строке)</label>
+    <textarea id="pipeLinks" rows="2" placeholder="https://company.atlassian.net/browse/PROJ-123"></textarea>
+    <div class="row"><label class="grow">Текст требований (необязательно)</label>
+      <button class="btn small" id="pipeFileBtn">Файл .md</button>
+      <input type="file" id="pipeFile" accept=".md,.markdown,.txt" multiple class="hidden"></div>
+    <textarea id="pipeText" rows="4"></textarea>
+    <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
+    <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
+      <button class="btn primary" id="pipeStart">Запустить</button></div>
+  </div>
+
+  <div class="card hidden" id="jobBox"></div>
+
+  <div class="card">
+    <h3>История запусков</h3>
+    <table><thead><tr><th>Запуск</th><th>Статус</th><th>Тестов</th><th>Кто</th></tr></thead>
+    <tbody id="jobsBody"></tbody></table>
+  </div>
+</section>
+
+<!-- ============ PROJECT SETTINGS ============ -->
+<section id="tab-proj" class="hidden">
+  <div class="settings">
+    <div class="subnav">
+      <button data-sub="general" class="on">Общие</button>
+      <button data-sub="conns">Подключения (MCP)</button>
+      <button data-sub="process">Процесс генерации</button>
+      <button data-sub="skills">Скиллы</button>
+    </div>
+    <div>
+      <!-- General -->
+      <div data-subpanel="general">
+        <div class="card">
+          <h3>Проект</h3>
+          <label>Название</label><input id="pName">
+          <label>Описание</label><textarea id="pDesc" rows="2"></textarea>
+          <label>URL приложения по умолчанию</label><input id="pUrl" placeholder="https://staging.example.com">
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="pMsg"></span>
+            <button class="btn primary" id="pSave">Сохранить</button></div>
+        </div>
+        <div class="card">
+          <h3>Учётные данные тестируемого приложения</h3>
+          <div class="muted">Используются по умолчанию при генерации и прогонах тестов проекта. Агент видит только <code>{{username}}</code>/<code>{{password}}</code>; пароль хранится на сервере и не попадает в модель, шаги и экспорт.</div>
+          <div class="row">
+            <div class="grow"><label>Логин</label><input id="pLogin" autocomplete="off"></div>
+            <div class="grow"><label>Пароль</label><input id="pPass" type="password" autocomplete="new-password"></div>
+          </div>
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="pcMsg"></span>
+            <button class="btn primary" id="pcSave">Сохранить</button></div>
+        </div>
+        <div class="card" id="dangerBox">
+          <h3>Удаление проекта</h3>
+          <div class="muted">Удаляются все тесты, скиллы, история запусков и секреты подключений проекта. Доступно администратору.</div>
+          <div class="row" style="margin-top:10px"><span class="grow"></span>
+            <button class="btn danger" id="pDelete">Удалить проект</button></div>
+        </div>
+      </div>
+
+      <!-- Connections -->
+      <div data-subpanel="conns" class="hidden">
+        <div class="card">
+          <h3>Подключения MCP</h3>
+          <div class="muted">Внешние системы проекта: Jira/Confluence — источник требований, Zephyr Scale — публикация тест-кейсов и результатов, Playwright MCP — движок браузера, любой другой MCP-сервер — дополнительные инструменты агента. Токены хранятся на сервере и не показываются в интерфейсе.</div>
+          <div class="row" style="margin-top:10px">
+            <select id="connPreset" style="width:auto"></select>
+            <button class="btn primary" id="connAdd">Добавить подключение</button>
+          </div>
+        </div>
+        <div id="connList"></div>
+      </div>
+
+      <!-- Process -->
+      <div data-subpanel="process" class="hidden">
+        <div class="card">
+          <h3>Процесс генерации тест-кейсов</h3>
+          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — значения по умолчанию студии (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+        </div>
+
+        <div class="card stage">
+          <div class="stage-head"><span class="num">1</span><h3 class="grow" style="margin:0">Требования</h3></div>
+          <label>Подключение Jira/Confluence</label>
+          <select data-p="requirements.connection" data-conn="atlassian"></select>
+          <div class="hint">Ссылки на задачи и страницы загружаются через это MCP-подключение. Также можно загрузить .md или вставить текст.</div>
+        </div>
+
+        <div class="card stage" data-stage="scenarios">
+          <div class="stage-head"><span class="num">2</span><h3 class="grow" style="margin:0">Сценарии</h3>
+            <label class="inline"><input type="checkbox" data-p="scenarios.enabled"> включён</label></div>
+          <div class="hint">Количество сценариев не ограничено — его определяет покрытие требований. Выключен — все требования целиком уходят агенту как один сценарий.</div>
+          <div class="grid3">
+            <div><label>Отбор сценариев</label>
+              <select data-p="scenarios.select">
+                <option value="manual">Вручную</option>
+                <option value="all">Все автоматически</option>
+                <option value="high">Только high-приоритет</option>
+              </select></div>
+            <div></div>
+          </div>
+          <label>Типы сценариев</label>
+          <div class="checks" data-list="scenarios.types" data-kind="types"></div>
+          <label>Скиллы</label>
+          <div class="checks" data-list="scenarios.skills" data-kind="skills" data-stage="scenarios"></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="scenarios.model" class="modelIn"></div>
+            <div><label>Effort</label><select data-p="scenarios.effort" class="effortSel"></select></div>
+          </div>
+        </div>
+
+        <div class="card stage">
+          <div class="stage-head"><span class="num">3</span><h3 class="grow" style="margin:0">Генерация теста в браузере</h3></div>
+          <div class="grid3">
+            <div><label>Движок браузера</label>
+              <select data-p="authoring.engine">
+                <option value="builtin">Встроенный Playwright</option>
+                <option value="playwright-mcp">Playwright MCP</option>
+              </select></div>
+            <div><label>Подключение Playwright MCP</label><select data-p="authoring.browser_connection" data-conn="playwright"></select></div>
+            <div><label>Лимит шагов Auto-Pilot</label><input type="number" min="1" max="200" data-p="authoring.max_steps"></div>
+          </div>
+          <div class="checks" style="margin-top:10px">
+            <label class="inline"><input type="checkbox" data-p="authoring.autopilot"> Auto-Pilot в конвейере (иначе шаги ждут подтверждения в Studio)</label>
+            <label class="inline"><input type="checkbox" data-p="authoring.headless"> Без окна браузера (headless)</label>
+          </div>
+          <label>Инструменты подключений для агента (только чтение)</label>
+          <div class="checks" data-list="authoring.tool_connections" data-kind="toolconns"></div>
+          <div class="hint">Например, агент сможет сам прочитать задачу Jira или существующие тест-кейсы Zephyr во время генерации.</div>
+          <label>Скиллы</label>
+          <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="authoring.model" class="modelIn"></div>
+            <div><label>Effort</label><select data-p="authoring.effort" class="effortSel"></select></div>
+          </div>
+        </div>
+
+        <div class="card stage" data-stage="run">
+          <div class="stage-head"><span class="num">4</span><h3 class="grow" style="margin:0">Прогон</h3>
+            <label class="inline"><input type="checkbox" data-p="run.enabled"> включён в конвейере</label></div>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="run.self_heal"> Самолечение локаторов (AgentRx)</label>
+            <label class="inline"><input type="checkbox" data-p="run.analyze_failures"> Анализ причин падения</label>
+            <label class="inline"><input type="checkbox" data-p="run.headless"> Без окна браузера</label>
+          </div>
+          <label>Скиллы</label>
+          <div class="checks" data-list="run.skills" data-kind="skills" data-stage="run"></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="run.model" class="modelIn"></div>
+            <div><label>Effort</label><select data-p="run.effort" class="effortSel"></select></div>
+          </div>
+        </div>
+
+        <div class="card stage" data-stage="publish">
+          <div class="stage-head"><span class="num">5</span><h3 class="grow" style="margin:0">Публикация в Zephyr</h3>
+            <label class="inline"><input type="checkbox" data-p="publish.enabled"> включена</label></div>
+          <div class="grid2">
+            <div><label>Подключение</label><select data-p="publish.connection" data-conn="publish"></select></div>
+            <div><label>Папка тест-кейсов</label><input data-p="publish.folder" placeholder="AI generated"></div>
+          </div>
+          <div class="checks" style="margin-top:10px">
+            <label class="inline"><input type="checkbox" data-p="publish.report_runs"> Отправлять результаты прогонов (test execution)</label>
+          </div>
+          <label>Скиллы публикации тест-кейса</label>
+          <div class="checks" data-list="publish.skills" data-kind="skills" data-stage="publish"></div>
+          <label>Скиллы отправки результата прогона</label>
+          <div class="checks" data-list="publish.run_skills" data-kind="skills" data-stage="publish"></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="publish.model" class="modelIn"></div>
+            <div><label>Effort</label><select data-p="publish.effort" class="effortSel"></select></div>
+          </div>
+        </div>
+
+        <div class="card row" style="position:sticky;bottom:10px">
+          <span class="muted grow" id="procMsg"></span>
+          <button class="btn primary" id="procSave">Сохранить процесс</button>
+        </div>
+      </div>
+
+      <!-- Skills -->
+      <div data-subpanel="skills" class="hidden">
+        <div class="card">
+          <h3>Скиллы</h3>
+          <div class="muted">Инструкции для этапов процесса в формате SKILL.md (front matter <code>name / description / stage</code> и Markdown). Встроенные скиллы можно переопределить для проекта — оригинал восстанавливается кнопкой «Сбросить». Подключаются к этапам во вкладке «Процесс генерации».</div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn" id="skNew">+ Новый скилл</button>
+            <button class="btn" id="skImportBtn">Импорт .md</button>
+            <input type="file" id="skImport" accept=".md,.markdown,text/markdown" class="hidden">
+          </div>
+        </div>
+        <div class="skills-layout" style="margin-top:12px">
+          <div class="card" id="skList"></div>
+          <div class="card" id="skEditor">
+            <div class="row"><b class="grow" id="skTitle">Выберите скилл</b>
+              <span id="skBadges"></span></div>
+            <label>Имя (латиница, цифры, дефис)</label><input id="skName">
+            <label>SKILL.md</label>
+            <textarea id="skText" class="code" rows="24"></textarea>
+            <div class="row" style="margin-top:10px">
+              <span class="muted grow" id="skMsg"></span>
+              <a class="btn" id="skDownload" target="_blank">Скачать</a>
+              <button class="btn danger" id="skDelete">Удалить</button>
+              <button class="btn primary" id="skSave">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const api = async (method, url, body) => {
+  const r = await fetch(url, {method, headers: {'Content-Type': 'application/json'},
+                              body: body ? JSON.stringify(body) : undefined});
+  if (r.status === 401 && !url.startsWith('/api/auth/')) { showLogin(); throw new Error('Требуется вход'); }
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
+  return r.status === 204 ? null : r.json();
+};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {get: k => { try { return localStorage.getItem(k) } catch { return null } },
+               set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }};
+const fmtTime = t => t ? new Date(t * 1000).toLocaleString() : '';
+const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
+const setPath = (o, p, v) => { const ks = p.split('.'); ks.slice(0, -1).reduce((x, k) => x[k], o)[ks.at(-1)] = v; };
+
+let ME = null, PID = null, PROJ = null, PROJECTS = [], PRESETS = [], SKILLS = [];
+
+// ---- login
+function showLogin() {
+  clearTimeout(pollTimer); clearTimeout(jobTimer);
+  $$('main > section').forEach(x => x.classList.add('hidden'));
+  $('nav').classList.add('hidden'); $('#projBox').classList.add('hidden');
+  $('#whoami').classList.add('hidden'); $('#logoutBtn').classList.add('hidden');
+  $('#loginBox').classList.remove('hidden');
+  showAuthForm('login');
+  api('GET', '/api/auth/me').then(me => $('#toSignup').classList.toggle('hidden', !me.signup)).catch(() => {});
+}
+function showAuthForm(which) {
+  $('#loginForm').classList.toggle('hidden', which !== 'login');
+  $('#signupForm').classList.toggle('hidden', which !== 'signup');
+  $('#lErr').textContent = $('#sErr').textContent = '';
+  (which === 'login' ? $('#lUser') : $('#sUser')).focus();
+}
+$$('[data-auth]').forEach(a => a.onclick = e => { e.preventDefault(); showAuthForm(a.dataset.auth); });
+async function loggedIn(me) {
+  ME = me;
+  $('#loginBox').classList.add('hidden');
+  $('nav').classList.remove('hidden'); $('#projBox').classList.remove('hidden');
+  $('#whoami').textContent = me.user + (me.is_admin && me.auth_enabled ? ' (админ)' : '');
+  $('#whoami').classList.toggle('hidden', !me.auth_enabled);
+  $('#logoutBtn').classList.toggle('hidden', !me.auth_enabled);
+  $('#defModel').textContent = `${me.model}, effort ${me.effort}`;
+  $$('.modelIn').forEach(i => i.placeholder = me.model);
+  $$('.effortSel').forEach(s => s.innerHTML = `<option value="">по умолчанию (${esc(me.effort)})</option>` +
+    ['low', 'medium', 'high', 'xhigh', 'max'].map(e => `<option>${e}</option>`).join(''));
+  try { PRESETS = await api('GET', '/api/mcp/presets'); } catch {}
+  $('#connPreset').innerHTML = PRESETS.filter(p => !p.admin_only || ME.is_admin)
+    .map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
+  await loadProjects(store.get('tg_project'));
+  showTab('home');
+  if (!PROJECTS.length) openWizard(null);   // first start: begin with creating a project
+  if (SID) poll();
+}
+$('#loginForm').onsubmit = async e => {
+  e.preventDefault(); $('#lErr').textContent = '';
+  try {
+    await api('POST', '/api/auth/login', {username: $('#lUser').value, password: $('#lPass').value});
+    $('#lPass').value = '';
+    loggedIn(await api('GET', '/api/auth/me'));
+  } catch (err) { $('#lErr').textContent = err.message; }
+};
+$('#signupForm').onsubmit = async e => {
+  e.preventDefault(); $('#sErr').textContent = '';
+  if ($('#sPass').value !== $('#sPass2').value) { $('#sErr').textContent = 'Пароли не совпадают'; return; }
+  try {
+    await api('POST', '/api/auth/register', {username: $('#sUser').value, password: $('#sPass').value});
+    $('#sPass').value = $('#sPass2').value = '';
+    loggedIn(await api('GET', '/api/auth/me'));
+  } catch (err) { $('#sErr').textContent = err.message; }
+};
+$('#logoutBtn').onclick = async () => { await api('POST', '/api/auth/logout'); showLogin(); };
+
+// ---- projects
+async function loadProjects(select) {
+  const list = PROJECTS = await api('GET', '/api/projects');
+  $('#projSel').innerHTML = list.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const pid = list.some(p => p.id === select) ? select : list[0]?.id;
+  if (pid) await switchProject(pid); else PID = PROJ = null;
+  // Without a project only the projects page makes sense.
+  $$('[data-needs-project]').forEach(b => b.classList.toggle('hidden', !PID));
+  $('#projSel').classList.toggle('hidden', !PID);
+}
+async function switchProject(pid) {
+  PID = pid; store.set('tg_project', pid);
+  $('#projSel').value = pid;
+  PROJ = await api('GET', `/api/projects/${pid}`);
+  SKILLS = await api('GET', `/api/projects/${pid}/skills`);
+  $$('.projName').forEach(x => x.textContent = PROJ.name);
+  if (!$('#fUrl').value || $('#fUrl').dataset.auto) { $('#fUrl').value = PROJ.base_url; $('#fUrl').dataset.auto = '1'; }
+  $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+  $('#fLogin').placeholder = PROJ.app_username || '';
+  $('#pipeUrl').placeholder = PROJ.base_url || 'https://…';
+  const tab = $('nav button.on').dataset.tab;
+  if (tab === 'home' && WIZ && WIZ.pid !== pid) showHomeList();
+  else if (tab === 'home' && !WIZ) renderHome();
+  if (tab === 'tests') loadTests();
+  if (tab === 'pipe') loadPipe();
+  if (tab === 'proj') loadSettings();
+}
+$('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
+$('#projSel').onchange = () => switchProject($('#projSel').value);
+$('#newProjBtn').onclick = () => { showTab('home'); openWizard(null); };
+async function refreshProject() { PROJ = await api('GET', `/api/projects/${PID}`); }
+
+// ---- tabs
+$$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function showTab(t) {
+  $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  ['home', 'studio', 'tests', 'req', 'pipe', 'proj'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
+  if (t === 'home') showHomeList();
+  if (t === 'tests') loadTests();
+  if (t === 'pipe') loadPipe();
+  if (t === 'proj') loadSettings();
+}
+
+// ---- studio
+let SID = null, STATE = null, TEST_ID = null, pollTimer = null, shotBusy = false, editing = false;
+const STATUS = {starting: 'Запуск браузера…', thinking: 'Агент думает…', executing: 'Выполняется шаг…',
+  awaiting_approval: 'Ожидает подтверждения', idle: 'Ожидает вас', done: 'Готово', error: 'Ошибка', closed: 'Закрыта'};
+const ENGINES = {'builtin': 'Playwright', 'playwright-mcp': 'Playwright MCP'};
+
+$('#startBtn').onclick = async () => {
+  const url = $('#fUrl').value.trim(), scenario = $('#fScenario').value.trim();
+  if (!url || !scenario) return alert('Укажите URL и сценарий');
+  $('#startBtn').disabled = true;
+  try {
+    const r = await api('POST', '/api/sessions', {project_id: PID, url, scenario,
+      name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
+      engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value});
+    openSession(r.id);
+  } catch (e) { alert(e.message) } finally { $('#startBtn').disabled = false; }
+};
+
+function openSession(sid) {
+  SID = sid; TEST_ID = null; STATE = null;
+  $('#startForm').classList.add('hidden'); $('#workspace').classList.remove('hidden');
+  $('#savedBar').classList.add('hidden');
+  $('#chat').innerHTML = $('#steps').innerHTML = ''; $('#shot').removeAttribute('src');
+  showTab('studio');
+  poll();
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  if (!SID) return;
+  try { STATE = await api('GET', `/api/sessions/${SID}`); render(); refreshShot(); }
+  catch (e) { if (/not found/i.test(e.message)) { closeWorkspace(); return; } }
+  pollTimer = setTimeout(poll, 900);
+}
+
+function refreshShot() {
+  if (shotBusy) return;
+  shotBusy = true;
+  const img = new Image();
+  img.onload = () => { $('#shot').src = img.src; shotBusy = false; };
+  img.onerror = () => { shotBusy = false; };
+  img.src = `/api/sessions/${SID}/screenshot?t=${Date.now()}`;
+}
+
+function render() {
+  const s = STATE;
+  $('#wsTitle').textContent = s.name;
+  const busy = ['starting', 'thinking', 'executing'].includes(s.status);
+  $('#stDot').className = 'dot' + (busy ? ' run' : '');
+  $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}`;
+  $('#autoToggle').checked = s.autopilot;
+  $('#urlbar').textContent = s.page_url || s.url;
+  $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
+  const mcp = s.engine !== 'builtin';
+  $('#mode').disabled = $('#pickAction').disabled = mcp;
+  if (mcp) { $('#mode').value = 'off'; $('#live').classList.remove('picking');
+    $('#modeHint').textContent = 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Element Picker доступен со встроенным движком.'; }
+  if (s.test_id && !TEST_ID) showSaved(s.test_id);
+
+  const chat = $('#chat');
+  const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
+  chat.innerHTML = s.chat.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join('');
+  if (atBottom) chat.scrollTop = chat.scrollHeight;
+
+  const p = s.pending;
+  $('#pendingBox').classList.toggle('hidden', !p || s.autopilot);
+  if (p) $('#pendingText').innerHTML = `<span class="badge">${esc(p.name)}</span>${esc(p.step.description)}` +
+      (p.step.value ? ` <span class="muted">(${esc(p.step.value)})</span>` : '');
+  $('#resumeBtn').classList.toggle('hidden', !(['idle', 'error'].includes(s.status)) || s.autopilot);
+
+  if (!editing) renderSteps(s.steps);
+}
+
+function locText(l) {
+  if (!l || !l.length) return '';
+  const c = l[0];
+  return c.kind === 'role' ? `role=${c.role}[name="${c.name}"]` : `${c.kind}=${c.value}`;
+}
+
+function renderSteps(steps) {
+  $('#stepCount').textContent = steps.length ? `(${steps.length})` : '';
+  $('#steps').innerHTML = steps.map((st, i) => `
+    <div class="step st-${st.status}" data-i="${i}">
+      <div class="n">${i + 1}</div>
+      <div>
+        <span class="badge ${st.action.startsWith('assert') ? 'assert' : ''}">${esc(st.action)}</span>
+        <span class="d" contenteditable="true" data-i="${i}">${esc(st.description)}</span>
+        <div class="meta">${st.value ? 'значение: ' + esc(st.value) + ' · ' : ''}${esc(locText(st.locator))}${st.source !== 'ai' ? ' · ' + esc(st.source) : ''}${st.healed ? ' · healed' : ''}</div>
+        ${st.error ? `<div class="err">${esc(st.error)}</div>` : ''}
+      </div>
+      <div class="acts">
+        <button title="Вверх" data-op="up" data-i="${i}">▲</button>
+        <button title="Вниз" data-op="down" data-i="${i}">▼</button>
+        <button title="Удалить" data-op="del" data-i="${i}">✕</button>
+      </div>
+    </div>`).join('');
+}
+
+$('#steps').addEventListener('focusin', e => { if (e.target.classList.contains('d')) editing = true; });
+$('#steps').addEventListener('focusout', async e => {
+  if (!e.target.classList.contains('d')) return;
+  const i = +e.target.dataset.i;
+  const steps = STATE.steps.slice();
+  steps[i] = {...steps[i], description: e.target.textContent.trim()};
+  STATE.steps = steps;
+  await api('PUT', `/api/sessions/${SID}/steps`, {steps});
+  editing = false;
+});
+$('#steps').addEventListener('click', async e => {
+  const op = e.target.dataset.op; if (!op) return;
+  const i = +e.target.dataset.i, steps = STATE.steps.slice();
+  if (op === 'del') steps.splice(i, 1);
+  if (op === 'up' && i > 0) [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]];
+  if (op === 'down' && i < steps.length - 1) [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]];
+  STATE.steps = steps; renderSteps(steps);
+  await api('PUT', `/api/sessions/${SID}/steps`, {steps});
+});
+
+$('#contBtn').onclick = () => api('POST', `/api/sessions/${SID}/continue`).then(poll);
+$('#rejBtn').onclick = () => {
+  const fb = prompt('Почему отклоняете? (подсказка агенту, можно пусто)');
+  if (fb === null) return;
+  api('POST', `/api/sessions/${SID}/reject`, {text: fb}).then(poll);
+};
+$('#resumeBtn').onclick = () => api('POST', `/api/sessions/${SID}/resume`).then(poll);
+$('#autoToggle').onchange = e => api('POST', `/api/sessions/${SID}/autopilot`, {on: e.target.checked});
+const sendChat = () => {
+  const t = $('#chatIn').value.trim(); if (!t) return;
+  $('#chatIn').value = '';
+  api('POST', `/api/sessions/${SID}/chat`, {text: t}).then(poll);
+};
+$('#chatBtn').onclick = sendChat;
+$('#chatIn').onkeydown = e => { if (e.key === 'Enter') sendChat(); };
+
+$('#mode').onchange = () => {
+  const m = $('#mode').value;
+  $('#live').classList.toggle('picking', m !== 'off');
+  $('#modeHint').textContent = m === 'off' ? 'Выберите Element Picker или Record & Play, чтобы добавлять шаги кликом по экрану.'
+    : m === 'picker' ? 'Кликните по элементу — выбранное действие выполнится и запишется как шаг.'
+    : 'Запись: каждый клик по экрану выполняется в браузере и записывается. Для ввода текста выберите «ввод текста».';
+};
+$('#shot').onclick = async e => {
+  const mode = $('#mode').value; if (mode === 'off' || !SID) return;
+  const img = e.target, r = img.getBoundingClientRect();
+  const x = (e.clientX - r.left) * img.naturalWidth / r.width;
+  const y = (e.clientY - r.top) * img.naturalHeight / r.height;
+  const action = $('#pickAction').value;
+  let value = '';
+  if (action === 'fill' || action === 'select_option') {
+    value = prompt(action === 'fill' ? 'Текст для ввода:' : 'Пункт списка:');
+    if (value === null) return;
+  }
+  try { await api('POST', `/api/sessions/${SID}/pick`, {x, y, action, value, source: mode}); }
+  catch (err) { alert(err.message); }
+  poll();
+};
+
+$('#addStepBtn').onclick = () => $('#addStep').classList.toggle('hidden');
+$('#asGo').onclick = async () => {
+  try {
+    await api('POST', `/api/sessions/${SID}/manual`, {action: $('#asAction').value,
+      value: $('#asValue').value, description: $('#asDesc').value});
+    $('#asValue').value = $('#asDesc').value = '';
+  } catch (e) { alert(e.message); }
+  poll();
+};
+
+function showSaved(id) {
+  TEST_ID = id;
+  $('#savedBar').classList.remove('hidden');
+  $('#expPy').href = `/api/tests/${id}/export?format=playwright`;
+  $('#expFeat').href = `/api/tests/${id}/export?format=gherkin`;
+}
+$('#saveBtn').onclick = async () => {
+  try {
+    const t = await api('POST', `/api/sessions/${SID}/save`);
+    showSaved(t.id);
+    if (t.warnings?.length) alert('Тест сохранён.\n\n' + t.warnings.join('\n'));
+  } catch (e) { alert(e.message); }
+};
+$('#runSavedBtn').onclick = () => { showTab('tests'); runTest(TEST_ID); };
+function closeWorkspace() {
+  SID = null; clearTimeout(pollTimer);
+  $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
+}
+$('#newBtn').onclick = async () => {
+  if (!confirm('Закрыть текущую сессию? Несохранённые шаги пропадут.')) return;
+  await api('DELETE', `/api/sessions/${SID}`);
+  closeWorkspace();
+};
+
+// ---- saved tests
+const VERDICT = {product_bug: 'Дефект продукта', test_issue: 'Проблема теста', environment: 'Окружение', unknown: 'Не ясно'};
+function hasPublish() {
+  return PROJ.connections.some(c => c.enabled && (c.id === PROJ.pipeline.publish.connection ||
+    (!PROJ.pipeline.publish.connection && c.preset === 'zephyr')));
+}
+async function loadTests() {
+  if (!PID) return;
+  const tests = await api('GET', `/api/tests?project_id=${PID}`);
+  const pub = hasPublish();
+  $('#testsBody').innerHTML = tests.map(t => {
+    const lr = t.last_run, z = t.external?.zephyr;
+    return `<tr><td><b>${esc(t.name)}</b>${t.engine === 'playwright-mcp' ? ' <span class="badge off">MCP</span>' : ''}<div class="muted" style="font-size:12px">${esc(t.url)}</div></td>
+    <td>${t.steps}</td>
+    <td>${lr ? (lr.passed ? '<span class="ok">passed</span>' : '<span class="err">failed</span>')
+        + (lr.healed ? ` · healed ${lr.healed}` : '')
+        + (lr.analysis ? ` <span class="badge warn" title="${esc(lr.analysis.summary)}">${esc(VERDICT[lr.analysis.verdict] || lr.analysis.verdict)}</span>` : '')
+        + `<div class="muted" style="font-size:12px">${fmtTime(lr.at)}</div>` : '—'}</td>
+    <td>${z ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : '—'}</td>
+    <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
+      <a class="btn small" target="_blank" href="/api/tests/${t.id}/export?format=playwright">.py</a>
+      <a class="btn small" target="_blank" href="/api/tests/${t.id}/export?format=gherkin">.feature</a>
+      ${pub ? `<button class="btn small" onclick="publishTest('${t.id}', this)">${z ? 'Обновить в Zephyr' : '→ Zephyr'}</button>` : ''}
+      <button class="btn small" title="Свой логин и пароль для этого теста (иначе — из проекта)" onclick="editCreds('${t.id}')">🔑</button>
+      <button class="btn danger small" onclick="delTest('${t.id}')">Удалить</button></td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">В проекте пока нет тестов. Создайте тест в Studio или запустите конвейер.</td></tr>';
+}
+async function publishTest(id, btn) {
+  btn.disabled = true; btn.textContent = 'Публикация…';
+  try {
+    const r = await api('POST', `/api/tests/${id}/publish`);
+    alert((r.status === 'ok' ? 'Опубликовано: ' : 'Не удалось: ') + (r.key || '') + '\n' + (r.summary || ''));
+  } catch (e) { alert(e.message); }
+  loadTests();
+}
+async function editCreds(id) {
+  const c = await api('GET', `/api/tests/${id}/credentials`);
+  const username = prompt('Логин для этого теста (пусто — логин проекта):', c.username);
+  if (username === null) return;
+  const password = prompt(c.has_password ? 'Новый пароль (пусто — оставить сохранённый):' : 'Пароль (пусто — пароль проекта):', '');
+  if (password === null) return;
+  await api('PUT', `/api/tests/${id}/credentials`, {username, password});
+}
+async function delTest(id) { if (confirm('Удалить тест?')) { await api('DELETE', `/api/tests/${id}`); loadTests(); } }
+async function runTest(id) {
+  const t = await api('GET', `/api/tests/${id}`);
+  const {id: rid} = await api('POST', `/api/tests/${id}/run`, {headless: $('#runHeaded').checked ? false : null});
+  const box = $('#runBox'); box.classList.remove('hidden');
+  const tick = async () => {
+    const r = await api('GET', `/api/runs/${rid}`);
+    const rep = r.report || {}, res = rep.results || [];
+    box.innerHTML = `<b>Запуск: ${esc(t.name)}</b> — <span>${esc(r.status)}</span>${r.error ? `<div class="err">${esc(r.error)}</div>` : ''}` +
+      t.steps.map((s, i) => {
+        const x = res[i];
+        const icon = !x ? '<span class="muted">…</span>' : x.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>';
+        return `<div class="r">${icon}<div>${i + 1}. ${esc(s.description)}${x && x.healed ? ' <span class="badge">self-healed</span>' : ''}${x && x.error ? `<div class="err">${esc(x.error)}</div>` : ''}</div></div>`;
+      }).join('') +
+      (rep.analysis ? `<div class="card" style="margin-top:10px"><b>Анализ падения: ${esc(VERDICT[rep.analysis.verdict] || rep.analysis.verdict)}</b>
+        <div>${esc(rep.analysis.summary)}</div>${rep.analysis.suggestion ? `<div class="muted" style="margin-top:4px">${esc(rep.analysis.suggestion)}</div>` : ''}</div>` : '') +
+      (rep.zephyr ? `<div class="hint">Zephyr: ${esc(rep.zephyr.key || '')} ${esc(rep.zephyr.summary || '')}</div>` : '');
+    if (r.status === 'running') setTimeout(tick, 800); else loadTests();
+  };
+  tick();
+}
+
+// ---- requirements sources: Jira / Confluence (MCP) and .md files
+function appendText(ta, title, text) {
+  const cur = ta.value.trim();
+  ta.value = (cur ? cur + '\n\n---\n\n' : '') + (title && !text.startsWith('#') ? `# ${title}\n\n` : '') + text.trim();
+}
+$('#srcFetch').onclick = async () => {
+  const link = $('#srcLink').value.trim(); if (!link) return;
+  $('#srcFetch').disabled = true; $('#srcStatus').textContent = 'Загрузка через MCP Atlassian…';
+  try {
+    const r = await api('POST', '/api/requirements/fetch', {project_id: PID, link});
+    appendText($('#reqText'), r.title, r.text);
+    $('#srcStatus').innerHTML = `<span class="ok">Загружено:</span> ${esc(r.kind === 'jira' ? 'Jira' : 'Confluence')} · ${esc(r.title)}` +
+      (r.truncated ? ' · <span class="err">текст обрезан</span>' : '');
+    $('#srcLink').value = '';
+  } catch (e) {
+    $('#srcStatus').innerHTML = `<span class="err">${esc(e.message)}</span>` +
+      (/подключ|Atlassian/i.test(e.message) ? ' · <a href="#" onclick="openSettings(\'conns\');return false">Настроить подключения</a>' : '');
+  } finally { $('#srcFetch').disabled = false; }
+};
+$('#srcLink').onkeydown = e => { if (e.key === 'Enter') $('#srcFetch').click(); };
+$('#srcFileBtn').onclick = () => $('#srcFile').click();
+$('#srcFile').onchange = async e => {
+  const files = [...e.target.files];
+  for (const f of files) appendText($('#reqText'), '', await f.text());
+  $('#srcStatus').innerHTML = files.length ? `<span class="ok">Загружено:</span> ${files.map(f => esc(f.name)).join(', ')}` : '';
+  e.target.value = '';
+};
+$('#reqToPipe').onclick = () => {
+  $('#pipeText').value = $('#reqText').value; $('#pipeUrl').value = $('#reqUrl').value;
+  showTab('pipe');
+};
+
+// ---- requirements -> scenarios
+let SCEN = [];
+$('#reqBtn').onclick = async () => {
+  const requirements = $('#reqText').value.trim(); if (!requirements) return;
+  $('#reqBtn').disabled = true; $('#reqStatus').textContent = 'Анализ требований…';
+  try {
+    const r = await api('POST', '/api/scenarios', {project_id: PID, requirements, url: $('#reqUrl').value});
+    SCEN = r.scenarios;
+    $('#reqStatus').textContent = `Фича: ${r.feature}`;
+    $('#reqAssume').innerHTML = r.assumptions.length ? '<b>Допущения:</b> ' + r.assumptions.map(esc).join('; ') : '';
+    $('#scenList').innerHTML = SCEN.map((s, i) => scenarioCard(s, `<button class="btn primary" onclick="toStudio(${i})">Сгенерировать тест в Studio</button>`)).join('');
+  } catch (e) { $('#reqStatus').textContent = e.message; }
+  finally { $('#reqBtn').disabled = false; }
+};
+function scenarioCard(s, footer) {
+  return `<div class="card"><div class="row"><b class="grow">${esc(s.title)}</b>
+    <span class="badge">${esc(s.type)}</span><span class="badge">${esc(s.priority)}</span></div>
+    ${s.preconditions ? `<div class="muted" style="font-size:12px;margin-top:4px">Предусловия: ${esc(s.preconditions)}</div>` : ''}
+    <div style="margin-top:6px">${esc(s.instructions)}</div>
+    <div style="margin-top:6px"><b style="font-size:12px">Ожидаемый результат:</b> ${esc(s.expected_result)}</div>
+    ${s.gherkin ? `<pre>${esc(s.gherkin)}</pre>` : ''}${footer}</div>`;
+}
+function toStudio(i) {
+  const s = SCEN[i];
+  if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
+  if ($('#reqUrl').value) { $('#fUrl').value = $('#reqUrl').value; delete $('#fUrl').dataset.auto; }
+  $('#fName').value = s.title;
+  $('#fScenario').value = (s.preconditions ? `Предусловия: ${s.preconditions}\n` : '') + s.instructions + '\nОжидаемый результат: ' + s.expected_result;
+  showTab('studio');
+}
+
+// ---- pipeline
+const STAGES = [['requirements', 'Требования'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['publishing', 'Публикация']];
+const JOB_STATUS = {running: 'Выполняется', awaiting_selection: 'Ждёт выбора сценариев', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
+const ITEM_STATUS = {queued: ['в очереди', 'off'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], publishing: ['публикация', 'warn'],
+  done: ['готово', 'ok'], needs_attention: ['нужен человек', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
+let JOB = null, jobTimer = null;
+
+function stageEnabled(key) {
+  const p = PROJ.pipeline;
+  return {requirements: true, scenarios: p.scenarios.enabled, authoring: true, running: p.run.enabled, publishing: p.publish.enabled}[key];
+}
+function flowHtml(current) {
+  return STAGES.map(([k, t]) => `<span class="chip ${stageEnabled(k) ? 'on' : 'off'} ${k === current ? 'cur' : ''}">${t}</span>`).join('<span class="muted">→</span>');
+}
+async function loadPipe() {
+  if (!PID) return;
+  $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process');return false">настроить</a>`;
+  const jobs = await api('GET', `/api/projects/${PID}/jobs`);
+  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
+    <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
+    <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Запусков пока не было.</td></tr>';
+  if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
+}
+$('#pipeFileBtn').onclick = () => $('#pipeFile').click();
+$('#pipeFile').onchange = async e => { for (const f of e.target.files) appendText($('#pipeText'), '', await f.text()); e.target.value = ''; };
+$('#pipeStart').onclick = async () => {
+  $('#pipeErr').textContent = '';
+  const links = $('#pipeLinks').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const text = $('#pipeText').value.trim();
+  if (!links.length && !text) { $('#pipeErr').textContent = 'Укажите ссылки на требования или текст'; return; }
+  if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
+  $('#pipeStart').disabled = true;
+  try {
+    const r = await api('POST', `/api/projects/${PID}/jobs`, {links, text, url: $('#pipeUrl').value.trim()});
+    $('#pipeLinks').value = $('#pipeText').value = '';
+    openJob(r.id); loadPipe();
+  } catch (e) { $('#pipeErr').textContent = e.message; }
+  finally { $('#pipeStart').disabled = false; }
+};
+async function openJob(jid) {
+  clearTimeout(jobTimer);
+  try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { alert(e.message); return; }
+  renderJob();
+  if (['running', 'awaiting_selection'].includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid), 1500);
+  else if (!$('#tab-pipe').classList.contains('hidden')) loadPipe();
+}
+function renderJob() {
+  const j = JOB, box = $('#jobBox');
+  box.classList.remove('hidden');
+  const live = ['running', 'awaiting_selection'].includes(j.status);
+  let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
+    ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}</div>
+    <div class="flow">${flowHtml(live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '')}</div>`;
+  if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
+  if (j.requirements.length) html += `<div class="hint">Требования: ${j.requirements.map(r => esc(r.title || r.source)).join(' · ')}</div>`;
+  if (j.feature) html += `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>`;
+  if (j.assumptions?.length) html += `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>`;
+  if (j.status === 'awaiting_selection') {
+    html += `<div class="row" style="margin-top:10px"><b class="grow">Выберите сценарии для генерации тестов</b>
+      <button class="btn small" onclick="$$('.jsel').forEach(c=>c.checked=true)">все</button>
+      <button class="btn small" onclick="$$('.jsel').forEach(c=>c.checked=false)">ни одного</button>
+      <button class="btn primary" onclick="selectScenarios()">Сгенерировать тесты</button></div>
+      <div class="scen">${j.scenarios.map((s, i) => scenarioCard(s,
+        `<label class="inline" style="margin-top:8px"><input type="checkbox" class="jsel" value="${i}" ${s.priority !== 'low' ? 'checked' : ''}> генерировать тест</label>`)).join('')}</div>`;
+  }
+  if (j.items.length) {
+    html += `<table style="margin-top:10px"><thead><tr><th>Сценарий</th><th>Статус</th><th>Прогон</th><th>Zephyr</th><th></th></tr></thead><tbody>` +
+      j.items.map(it => {
+        const [st, cls] = ITEM_STATUS[it.status] || [it.status, 'off'];
+        const run = it.run ? (it.run.passed ? '<span class="ok">passed</span>' : '<span class="err">failed</span>') +
+          (it.run.healed ? ` · healed ${it.run.healed}` : '') +
+          (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
+        const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
+          : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
+        return `<tr><td><b>${esc(it.title)}</b> ${it.priority ? `<span class="badge">${esc(it.priority)}</span>` : ''}
+            ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}</td>
+          <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${z}</td>
+          <td>${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
+            ${it.test_id ? `<button class="btn small" onclick="showTab('tests')">Тест</button>` : ''}</td></tr>`;
+      }).join('') + '</tbody></table>';
+  }
+  html += `<details class="opt" ${live ? 'open' : ''}><summary>Журнал (${j.log.length})</summary><div class="log">` +
+    j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString()} — ${esc(l.text)}</div>`).join('') + '</div></details>';
+  box.innerHTML = html;
+}
+async function selectScenarios() {
+  const indices = $$('.jsel').filter(c => c.checked).map(c => +c.value);
+  if (!indices.length) return alert('Выберите хотя бы один сценарий');
+  await api('POST', `/api/jobs/${JOB.id}/select`, {indices});
+  openJob(JOB.id);
+}
+async function cancelJob() {
+  if (!confirm('Остановить конвейер?')) return;
+  await api('POST', `/api/jobs/${JOB.id}/cancel`); openJob(JOB.id);
+}
+
+// ---- projects page and the new project wizard
+// What each kind of resource is for in the process.
+const ROLES = {
+  atlassian: ['Источник требований', 'Задачи Jira и страницы Confluence, из которых строятся сценарии. Только чтение.'],
+  zephyr: ['Управление тестами', 'Куда публикуются тест-кейсы и результаты прогонов.'],
+  playwright: ['Движок браузера', 'Агент проходит сценарии через Playwright MCP вместо встроенного Playwright.'],
+  custom: ['Дополнительные инструменты', 'Любой MCP-сервер: инструменты чтения получает агент при генерации, остальные (кроме удаления) — этап публикации.'],
+};
+let WIZ = null;   // {pid, step, suggestPublish}
+
+function showHomeList() {
+  WIZ = null;
+  $('#wizard').classList.add('hidden'); $('#homeList').classList.remove('hidden');
+  renderHome();
+}
+async function renderHome() {
+  try { PROJECTS = await api('GET', '/api/projects'); } catch { return; }
+  $('#projCards').innerHTML = PROJECTS.map(p => {
+    const chips = p.connections.map(c => {
+      const [state, cls] = connState(c);
+      return `<span class="badge ${cls}" title="${esc(state)}">${esc(c.name)}</span>`;
+    }).join('') || '<span class="muted" style="font-size:12px">Подключений нет — только файлы, текст и встроенный Playwright</span>';
+    return `<div class="card ${p.id === PID ? 'cur' : ''}">
+      <div class="row"><b class="grow">${esc(p.name)}</b><span class="muted" style="font-size:12px">тестов: ${p.tests}</span></div>
+      ${p.description ? `<div class="hint" style="margin:0">${esc(p.description)}</div>` : ''}
+      <div class="muted" style="font-size:12px">${p.base_url ? esc(p.base_url) : 'URL приложения не задан'}${p.has_app_login ? ' · логин задан' : ''}</div>
+      <div class="chips">${chips}</div>
+      <div class="row" style="margin-top:auto;padding-top:6px">
+        <button class="btn primary small" onclick="openProject('${p.id}')">Открыть</button>
+        <button class="btn small" onclick="openWizard('${p.id}')">Настроить подключения</button></div></div>`;
+  }).join('') || '<div class="card muted">Проектов пока нет.</div>';
+}
+async function openProject(pid) {
+  if (pid !== PID) await switchProject(pid);
+  showTab('req');
+}
+$('#homeNew').onclick = () => openWizard(null);
+$('#wzClose').onclick = () => { if (PID) showTab('home'); };
+
+async function openWizard(pid) {
+  if (pid && pid !== PID) await switchProject(pid);
+  WIZ = {pid, step: pid ? 2 : 1, suggestPublish: false};
+  $('#homeList').classList.add('hidden'); $('#wizard').classList.remove('hidden');
+  $('#wzClose').classList.toggle('hidden', !PROJECTS.length);
+  $('#wzName').value = pid ? PROJ.name : ''; $('#wzDesc').value = pid ? PROJ.description || '' : '';
+  $('#wzUrl').value = pid ? PROJ.base_url || '' : '';
+  $('#wzLogin').value = pid ? PROJ.app_username || '' : ''; $('#wzPass').value = '';
+  $('#wzPass').placeholder = pid && PROJ.app_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#wz1Err').textContent = $('#wz3Err').textContent = '';
+  renderWizard();
+  if (!pid) $('#wzName').focus();
+}
+function renderWizard() {
+  const w = WIZ;
+  $('#wzTitle').textContent = w.pid ? `Настройка проекта «${PROJ.name}»` : 'Новый проект';
+  $('#wz1Next').textContent = w.pid ? 'Сохранить и продолжить →' : 'Создать проект →';
+  $('#wzSteps').innerHTML = [[1, 'Приложение'], [2, 'Подключения к ресурсам'], [3, 'Привязка к процессу']].map(([n, t]) =>
+    `<button data-wzgo="${n}" class="${n === w.step ? 'cur' : n < w.step || w.pid ? 'done' : ''}" ${!w.pid && n > 1 ? 'disabled' : ''}>${n}. ${t}</button>`
+  ).join('<span class="muted">→</span>');
+  $$('[data-wz]').forEach(x => x.classList.toggle('hidden', +x.dataset.wz !== w.step));
+  if (w.step === 2) renderSlots();
+  if (w.step === 3) fillWizardProcess();
+}
+document.addEventListener('click', e => {
+  const go = e.target.closest('[data-wzgo]');
+  if (!go || !WIZ || go.disabled || (!WIZ.pid && +go.dataset.wzgo > 1)) return;
+  WIZ.step = +go.dataset.wzgo; renderWizard();
+});
+
+$('#wz1Next').onclick = async () => {
+  $('#wz1Err').textContent = '';
+  const body = {name: $('#wzName').value.trim(), description: $('#wzDesc').value, base_url: $('#wzUrl').value.trim()};
+  if (!body.name) { $('#wz1Err').textContent = 'Укажите название проекта'; return; }
+  if (body.base_url && !/^https?:\/\//i.test(body.base_url)) body.base_url = 'https://' + body.base_url;
+  $('#wz1Next').disabled = true;
+  try {
+    if (WIZ.pid) await api('PUT', `/api/projects/${WIZ.pid}`, body);
+    else WIZ.pid = (await api('POST', '/api/projects', body)).id;
+    if ($('#wzLogin').value.trim() || $('#wzPass').value)
+      await api('PUT', `/api/projects/${WIZ.pid}/credentials`, {username: $('#wzLogin').value, password: $('#wzPass').value});
+    $('#wzPass').value = '';
+    const w = WIZ;
+    await loadProjects(w.pid);   // switches to the project
+    WIZ = w; WIZ.step = 2; renderWizard();
+  } catch (e) { $('#wz1Err').textContent = e.message; }
+  finally { $('#wz1Next').disabled = false; }
+};
+
+function slotHead(pr) {
+  const conns = PROJ.connections.filter(c => c.preset === pr.id);
+  const ready = conns.some(c => c.enabled && c.check?.ok);
+  const [role, desc] = ROLES[pr.id] || [pr.title, pr.hint];
+  const state = !conns.length ? '<span class="badge off">не подключено</span>'
+    : ready ? '<span class="badge ok">готово</span>' : '<span class="badge warn">нужно проверить</span>';
+  return `<div class="row"><div class="grow"><b>${esc(role)}</b> · ${esc(pr.title)}<div class="hint" style="margin:0">${esc(desc)}</div></div>
+    ${state}<button class="btn small" onclick="wzAdd('${pr.id}', this)">${conns.length ? '+ ещё одно' : '+ Подключить'}</button></div>`;
+}
+function wizardPresets() { return PRESETS.filter(p => !p.admin_only || ME.is_admin); }
+function renderSlots() {
+  $('#wzSlots').innerHTML = wizardPresets().map(pr => {
+    const conns = PROJ.connections.filter(c => c.preset === pr.id);
+    return `<div class="card slot ${conns.some(c => c.enabled && c.check?.ok) ? 'ready' : ''}" data-slot="${pr.id}">
+      <div data-slot-head>${slotHead(pr)}</div>${conns.map(c => connCard(c, true)).join('')}</div>`;
+  }).join('');
+}
+function renderSlotHeads() {
+  wizardPresets().forEach(pr => {
+    const slot = document.querySelector(`[data-slot="${pr.id}"]`); if (!slot) return;
+    slot.querySelector('[data-slot-head]').innerHTML = slotHead(pr);
+    slot.classList.toggle('ready', PROJ.connections.some(c => c.preset === pr.id && c.enabled && c.check?.ok));
+  });
+}
+async function wzAdd(preset, btn) {
+  btn.disabled = true;
+  try {
+    if (preset === 'zephyr') WIZ.suggestPublish = true;
+    await addConn(preset);
+    const cards = document.querySelectorAll(`[data-slot="${preset}"] [data-conn-id]`);
+    cards[cards.length - 1]?.querySelector('[data-f]')?.focus();
+  } catch (e) { alert(e.message); btn.disabled = false; }
+}
+
+function fillWizardProcess() {
+  const p = PROJ.pipeline, conns = PROJ.connections;
+  const label = c => esc(c.name) + (c.enabled ? (c.check?.ok ? '' : ' — не проверено') : ' — выключено');
+  const opts = (list, cur) => list.map(c => `<option value="${c.id}" ${c.id === cur ? 'selected' : ''}>${label(c)}</option>`).join('');
+
+  const jira = conns.filter(c => c.preset === 'atlassian');
+  $('#wzReq').innerHTML = jira.length ? opts(jira, p.requirements.connection || jira[0].id)
+    : '<option value="">Только файлы .md и текст (Jira/Confluence не подключены)</option>';
+
+  const pw = conns.filter(c => c.preset === 'playwright');
+  const curPw = p.authoring.engine === 'playwright-mcp' ? (p.authoring.browser_connection || pw[0]?.id || '') : '';
+  $('#wzEngine').innerHTML = '<option value="">Встроенный Playwright</option>' +
+    pw.map(c => `<option value="${c.id}" ${c.id === curPw ? 'selected' : ''}>Playwright MCP: ${label(c)}</option>`).join('');
+
+  const tools = conns.filter(c => c.preset !== 'playwright');
+  $('#wzTools').innerHTML = tools.map(c => `<label class="inline"><input type="checkbox" value="${c.id}" ${p.authoring.tool_connections.includes(c.id) ? 'checked' : ''}> ${label(c)}</label>`).join('')
+    || '<span class="muted">— нет подключений с инструментами</span>';
+
+  const pub = conns.filter(c => ['zephyr', 'custom'].includes(c.preset));
+  const on = p.publish.enabled || (WIZ.suggestPublish && pub.length);
+  const curPub = on ? (p.publish.connection || pub.find(c => c.preset === 'zephyr')?.id || pub[0]?.id || '') : '';
+  $('#wzPub').innerHTML = '<option value="">Не публиковать</option>' +
+    pub.map(c => `<option value="${c.id}" ${c.id === curPub ? 'selected' : ''}>${label(c)}</option>`).join('');
+  $('#wzSelect').value = p.scenarios.select;
+  wizardWarn();
+}
+function wizardWarn() {
+  const ids = [$('#wzReq').value, $('#wzEngine').value, $('#wzPub').value,
+    ...$$('#wzTools input:checked').map(i => i.value)].filter(Boolean);
+  const bad = PROJ.connections.filter(c => ids.includes(c.id) && !(c.enabled && c.check?.ok));
+  $('#wzWarn').innerHTML = bad.length ? `<span class="err">Не проверены или выключены: ${bad.map(c => esc(c.name)).join(', ')}.</span> Вернитесь к шагу 2 и нажмите «Сохранить и проверить».` : '';
+}
+['#wzReq', '#wzEngine', '#wzPub', '#wzTools'].forEach(s => $(s).addEventListener('change', wizardWarn));
+
+$('#wzFinish').onclick = async () => {
+  $('#wz3Err').textContent = '';
+  const p = structuredClone(PROJ.pipeline);
+  p.requirements.connection = $('#wzReq').value;
+  p.authoring.engine = $('#wzEngine').value ? 'playwright-mcp' : 'builtin';
+  p.authoring.browser_connection = $('#wzEngine').value;
+  p.authoring.tool_connections = $$('#wzTools input:checked').map(i => i.value);
+  p.publish.enabled = !!$('#wzPub').value;
+  if ($('#wzPub').value) p.publish.connection = $('#wzPub').value;
+  p.scenarios.select = $('#wzSelect').value;
+  $('#wzFinish').disabled = true;
+  try {
+    PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: p});
+    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+    WIZ = null;
+    showTab('req');
+  } catch (e) { $('#wz3Err').textContent = e.message; }
+  finally { $('#wzFinish').disabled = false; }
+};
+
+// ---- project settings
+function openSettings(sub) { showTab('proj'); showSub(sub); }
+$$('.subnav button').forEach(b => b.onclick = () => showSub(b.dataset.sub));
+function showSub(sub) {
+  $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub));
+  $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
+}
+function loadSettings() {
+  if (!PROJ) return;
+  $('#pName').value = PROJ.name; $('#pDesc').value = PROJ.description || ''; $('#pUrl').value = PROJ.base_url || '';
+  $('#pLogin').value = PROJ.app_username || ''; $('#pPass').value = '';
+  $('#pPass').placeholder = PROJ.app_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#pMsg').textContent = $('#pcMsg').textContent = $('#procMsg').textContent = '';
+  $('#dangerBox').classList.toggle('hidden', !ME.is_admin);
+  renderConnections(); fillProcess(); renderSkillList();
+}
+$('#pSave').onclick = async () => {
+  try {
+    await api('PUT', `/api/projects/${PID}`, {name: $('#pName').value, description: $('#pDesc').value, base_url: $('#pUrl').value});
+    $('#pMsg').textContent = 'Сохранено';
+    const keep = PID; await loadProjects(keep);
+  } catch (e) { $('#pMsg').textContent = e.message; }
+};
+$('#pcSave').onclick = async () => {
+  try {
+    await api('PUT', `/api/projects/${PID}/credentials`, {username: $('#pLogin').value, password: $('#pPass').value});
+    await refreshProject(); loadSettings(); $('#pcMsg').textContent = 'Сохранено';
+  } catch (e) { $('#pcMsg').textContent = e.message; }
+};
+$('#pDelete').onclick = async () => {
+  const name = prompt(`Удалить проект со всеми тестами? Введите его название для подтверждения: ${PROJ.name}`);
+  if (name !== PROJ.name) return;
+  try {
+    await api('DELETE', `/api/projects/${PID}`); await loadProjects();
+    showTab('home'); if (!PID) openWizard(null);
+  } catch (e) { alert(e.message); }
+};
+
+// connections (the same card is used in the settings and in the new project wizard)
+function presetOf(c) { return PRESETS.find(p => p.id === c.preset) || {fields: []}; }
+function connState(c) {
+  if (!c.enabled) return ['выключено', 'off'];
+  if (c.missing?.length) return ['не заполнено: ' + c.missing.join(', '), 'warn'];
+  if (c.check?.ok) return ['работает', 'ok'];
+  if (c.check) return ['ошибка проверки', 'bad'];
+  return ['не проверено', 'off'];
+}
+function connBadge(c) {
+  const [text, cls] = connState(c);
+  return `<span class="badge ${cls}" data-status title="${esc(c.check?.error || (c.check?.at ? 'проверено ' + fmtTime(c.check.at) : ''))}">${esc(text)}</span>`;
+}
+function connCard(c, wizard) {
+  const pr = presetOf(c), locked = pr.admin_only && !ME.is_admin;
+  const fields = pr.fields.map(f => {
+    const set = c.secrets_set.includes(f.key);
+    const ph = f.secret && set ? 'сохранён — введите новый, чтобы заменить' : (f.placeholder || '');
+    const val = f.secret ? '' : (c.fields?.[f.key] || '');
+    const input = f.multiline ? `<textarea rows="3" class="code" data-f="${f.key}" placeholder="${esc(ph)}" ${locked ? 'disabled' : ''}>${esc(val)}</textarea>`
+      : `<input data-f="${f.key}" ${f.secret ? 'type="password" autocomplete="new-password"' : ''} value="${esc(val)}" placeholder="${esc(ph)}" ${locked ? 'disabled' : ''}>`;
+    return `<div><label>${esc(f.label)}${f.required ? ' *' : ''}${f.secret && set ? ` · <a href="#" onclick="clearSecret('${c.id}','${f.key}');return false">очистить</a>` : ''}</label>${input}</div>`;
+  }).join('');
+  const cmd = c.command || [pr.command, ...(pr.args || [])].filter(Boolean).join(' ') || (c.preset === 'atlassian' ? 'mcp-atlassian' : '');
+  const admin = ME.is_admin ? `<details class="opt"><summary>Запуск сервера (администратор)</summary>
+      <div class="grid2">
+        <div><label>Транспорт</label><select data-a="transport"><option value="stdio">stdio (команда)</option><option value="http" ${c.transport === 'http' ? 'selected' : ''}>HTTP (streamable)</option></select></div>
+        <div><label>Адрес HTTP-сервера</label><input data-a="url" value="${esc(c.url || '')}" placeholder="https://mcp.example.com/mcp"></div>
+      </div>
+      <label>Команда (пусто — по умолчанию: <code>${esc(cmd || '—')}</code>)</label><input data-a="command" value="${esc(c.command || '')}">
+      <label>${c.command ? 'Аргументы' : 'Дополнительные аргументы'} (по одному в строке)</label><textarea data-a="args" rows="2" class="code">${esc((c.args || []).join('\n'))}</textarea>
+      <label>Переменные окружения, не секретные (KEY=VALUE)</label><textarea data-a="env" rows="2" class="code">${esc(Object.entries(c.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'))}</textarea>
+    </details>` : `<div class="hint">Команда запуска: <code>${esc(cmd || c.url || '—')}</code></div>`;
+  return `<div class="card" data-conn-id="${c.id}">
+    <div class="row"><input data-name value="${esc(c.name)}" style="width:auto;font-weight:600" ${locked ? 'disabled' : ''}>
+      ${wizard ? '' : `<span class="badge">${esc(c.title)}</span>`}${connBadge(c)}
+      <label class="inline"><input type="checkbox" data-enabled ${c.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}> включено</label>
+      <span class="grow"></span>
+      ${locked ? '' : `<button class="btn danger small" onclick="delConn('${c.id}')">Удалить</button>`}</div>
+    <div class="hint">${esc(pr.hint || '')}${locked ? ' Изменить может только администратор.' : ''}</div>
+    ${fields ? `<div class="grid2">${fields}</div>` : ''}${admin}
+    <div class="row" style="margin-top:10px"><span class="muted grow" data-msg></span>
+      <button class="btn" data-test onclick="testConn('${c.id}', this)">Проверить</button>
+      ${locked ? '' : `<button class="btn primary" onclick="saveConn('${c.id}', this, ${wizard})">${wizard ? 'Сохранить и проверить' : 'Сохранить'}</button>`}</div>
+    <div class="tools" data-tools></div></div>`;
+}
+function renderConnections() {
+  $('#connList').innerHTML = PROJ.connections.map(c => connCard(c, false)).join('') || '<div class="card muted">Подключений пока нет.</div>';
+}
+// Settings and the wizard may both hold a card of the connection: use the visible one.
+const connEl = cid => $$(`[data-conn-id="${cid}"]`).find(e => e.offsetParent) || $(`[data-conn-id="${cid}"]`);
+function connsChanged() {
+  renderConnections(); fillProcess();
+  if (WIZ) renderWizard();
+}
+async function addConn(preset) {
+  await api('POST', `/api/projects/${PID}/connections`, {preset});
+  await refreshProject(); connsChanged();
+}
+$('#connAdd').onclick = () => addConn($('#connPreset').value).catch(e => alert(e.message));
+async function saveConn(cid, btn, verify) {
+  const card = btn.closest('[data-conn-id]');
+  const body = {name: card.querySelector('[data-name]').value, enabled: card.querySelector('[data-enabled]').checked, fields: {}};
+  card.querySelectorAll('[data-f]').forEach(i => body.fields[i.dataset.f] = i.value);
+  if (ME.is_admin) {
+    body.transport = card.querySelector('[data-a="transport"]').value;
+    body.url = card.querySelector('[data-a="url"]').value;
+    body.command = card.querySelector('[data-a="command"]').value;
+    body.args = card.querySelector('[data-a="args"]').value.split('\n').map(s => s.trim()).filter(Boolean);
+    body.env = card.querySelector('[data-a="env"]').value;
+  }
+  try {
+    await api('PUT', `/api/projects/${PID}/connections/${cid}`, body);
+    await refreshProject(); connsChanged();
+    const fresh = connEl(cid), c = PROJ.connections.find(x => x.id === cid);
+    fresh.querySelector('[data-msg]').textContent = 'Сохранено';
+    if (verify && c.enabled && !c.missing.length) await testConn(cid, fresh.querySelector('[data-test]'));
+  } catch (e) { card.querySelector('[data-msg]').textContent = e.message; }
+}
+async function clearSecret(cid, key) {
+  if (!confirm('Удалить сохранённое значение?')) return;
+  await api('DELETE', `/api/projects/${PID}/connections/${cid}/secrets/${key}`);
+  await refreshProject(); connsChanged();
+}
+async function delConn(cid) {
+  if (!confirm('Удалить подключение и его токены?')) return;
+  await api('DELETE', `/api/projects/${PID}/connections/${cid}`);
+  await refreshProject(); connsChanged();
+}
+async function testConn(cid, btn) {
+  const card = btn.closest('[data-conn-id]');
+  btn.disabled = true; card.querySelector('[data-msg]').textContent = 'Запуск MCP-сервера… (первый запуск через npx может занять минуту)';
+  try {
+    const r = await api('POST', `/api/projects/${PID}/connections/${cid}/test`);
+    card.querySelector('[data-msg]').innerHTML = `<span class="ok">Работает</span> · инструментов: ${r.tools.length}`;
+    const A = {read: ['чтение', 'ok'], write: ['запись', 'warn'], destructive: ['удаление — недоступно агентам', 'bad']};
+    card.querySelector('[data-tools]').innerHTML = r.tools.map(t => `<div><code>${esc(t.name)}</code> <span class="badge ${A[t.access][1]}">${A[t.access][0]}</span> <span class="muted">${esc(t.description)}</span></div>`).join('');
+  } catch (e) { card.querySelector('[data-msg]').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+  // The server remembered the result: refresh the status without re-rendering the card.
+  await refreshProject();
+  const c = PROJ.connections.find(x => x.id === cid);
+  if (c) card.querySelector('[data-status]').outerHTML = connBadge(c);
+  if (WIZ) renderSlotHeads();
+}
+
+// process
+const TYPES = {positive: 'позитивные', negative: 'негативные', edge: 'пограничные', boundary: 'граничные значения', accessibility: 'доступность', security: 'безопасность'};
+function connOptions(kind) {
+  const match = c => kind === 'publish' ? ['zephyr', 'custom'].includes(c.preset) : c.preset === kind;
+  const def = {atlassian: 'первое Jira/Confluence', playwright: 'первое Playwright MCP', publish: 'первое Zephyr'}[kind];
+  return `<option value="">По умолчанию (${def})</option>` + PROJ.connections.filter(match)
+    .map(c => `<option value="${c.id}">${esc(c.name)}${c.enabled ? '' : ' (выключено)'}</option>`).join('');
+}
+function fillProcess() {
+  $$('[data-conn]').forEach(s => s.innerHTML = connOptions(s.dataset.conn));
+  $$('[data-list]').forEach(box => {
+    const cur = getPath(PROJ.pipeline, box.dataset.list) || [];
+    let opts = [];
+    if (box.dataset.kind === 'types') opts = Object.entries(TYPES);
+    if (box.dataset.kind === 'toolconns') opts = PROJ.connections.filter(c => c.preset !== 'playwright').map(c => [c.id, c.name]);
+    if (box.dataset.kind === 'skills') opts = SKILLS.filter(s => [box.dataset.stage, 'any'].includes(s.stage) || cur.includes(s.name))
+      .map(s => [s.name, s.name, s.description]);
+    box.innerHTML = opts.map(([v, t, d]) => `<label class="inline" ${d ? `title="${esc(d)}"` : ''}><input type="checkbox" value="${esc(v)}" ${cur.includes(v) ? 'checked' : ''}> ${esc(t)}</label>`).join('')
+      || '<span class="muted">—</span>';
+  });
+  $$('[data-p]').forEach(el => {
+    const v = getPath(PROJ.pipeline, el.dataset.p);
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? '';
+  });
+  syncStages();
+}
+function syncStages() {
+  $$('.stage[data-stage]').forEach(card => {
+    const cb = card.querySelector(`[data-p="${card.dataset.stage}.enabled"]`);
+    card.classList.toggle('disabled', !cb.checked);
+  });
+}
+$$('[data-p$=".enabled"]').forEach(cb => cb.addEventListener('change', syncStages));
+function readProcess() {
+  const p = structuredClone(PROJ.pipeline);
+  $$('[data-p]').forEach(el => setPath(p, el.dataset.p, el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value));
+  $$('[data-list]').forEach(box => setPath(p, box.dataset.list, [...box.querySelectorAll('input:checked')].map(i => i.value)));
+  return p;
+}
+$('#procSave').onclick = async () => {
+  try {
+    PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: readProcess()});
+    fillProcess(); $('#procMsg').textContent = 'Сохранено';
+    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+  } catch (e) { $('#procMsg').textContent = e.message; }
+};
+
+// skills
+let SKILL = null;
+const STAGE_NAMES = {scenarios: 'сценарии', authoring: 'генерация', run: 'прогон', publish: 'публикация', any: 'любой этап'};
+function renderSkillList() {
+  $('#skList').innerHTML = SKILLS.map(s => `<div class="skill-item ${SKILL?.name === s.name ? 'on' : ''}" onclick="openSkill('${s.name}')">
+    <b>${esc(s.name)}</b> <span class="badge">${esc(STAGE_NAMES[s.stage] || s.stage)}</span>
+    ${s.overridden ? '<span class="badge warn">изменён</span>' : s.builtin ? '<span class="badge off">встроенный</span>' : '<span class="badge ok">проекта</span>'}
+    <div class="hint">${esc(s.description)}</div></div>`).join('');
+  if (!SKILL && SKILLS.length) openSkill(SKILLS[0].name);
+}
+async function openSkill(name) {
+  SKILL = await api('GET', `/api/projects/${PID}/skills/${name}`);
+  $('#skTitle').textContent = SKILL.name; $('#skName').value = SKILL.name; $('#skName').disabled = true;
+  $('#skText').value = SKILL.text; $('#skMsg').textContent = '';
+  $('#skBadges').innerHTML = SKILL.overridden ? '<span class="badge warn">изменён в проекте</span>' : SKILL.builtin ? '<span class="badge off">встроенный</span>' : '';
+  $('#skDelete').textContent = SKILL.overridden ? 'Сбросить к встроенному' : 'Удалить';
+  $('#skDelete').classList.toggle('hidden', SKILL.builtin && !SKILL.overridden);
+  $('#skDownload').href = `/api/projects/${PID}/skills/${name}?raw=1`;
+  $('#skDownload').classList.remove('hidden');
+  renderSkillList();
+}
+function newSkill(name, text) {
+  SKILL = {name: '', text: ''};
+  $('#skTitle').textContent = 'Новый скилл'; $('#skName').value = name || ''; $('#skName').disabled = false;
+  $('#skText').value = text || `---\nname: my-skill\ndescription: Что делает скилл и когда его применять\nstage: authoring\n---\n\n# Инструкции\n\n- …\n`;
+  $('#skBadges').innerHTML = ''; $('#skDelete').classList.add('hidden'); $('#skDownload').classList.add('hidden');
+  $('#skMsg').textContent = 'stage: scenarios, authoring, run, publish или any';
+  renderSkillList();
+}
+$('#skNew').onclick = () => newSkill();
+$('#skImportBtn').onclick = () => $('#skImport').click();
+$('#skImport').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const text = await f.text();
+  const m = text.match(/^name:\s*([^\n]+)/m);
+  const name = (m ? m[1] : f.name.replace(/\.(md|markdown)$/i, '').replace(/^SKILL$/i, '')).trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+  newSkill(name, text);
+};
+$('#skSave').onclick = async () => {
+  const name = $('#skName').value.trim();
+  if (!name) { $('#skMsg').textContent = 'Укажите имя'; return; }
+  try {
+    await api('PUT', `/api/projects/${PID}/skills/${name}`, {text: $('#skText').value});
+    SKILLS = await api('GET', `/api/projects/${PID}/skills`);
+    await openSkill(name); fillProcess(); $('#skMsg').textContent = 'Сохранено';
+  } catch (e) { $('#skMsg').textContent = e.message; }
+};
+$('#skDelete').onclick = async () => {
+  if (!SKILL?.name || !confirm(SKILL.overridden ? 'Вернуть встроенную версию скилла?' : 'Удалить скилл?')) return;
+  await api('DELETE', `/api/projects/${PID}/skills/${SKILL.name}`);
+  SKILLS = await api('GET', `/api/projects/${PID}/skills`);
+  const keep = SKILLS.find(s => s.name === SKILL.name);
+  SKILL = null;
+  if (keep) openSkill(keep.name); else renderSkillList();
+  fillProcess();
+};
+
+api('GET', '/api/auth/me').then(me => me.user ? loggedIn(me) : showLogin()).catch(showLogin);
+</script>
+</body>
+</html>
