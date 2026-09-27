@@ -5,12 +5,18 @@ data/projects/<id>/project.json   settings (no secrets)
 data/projects/<id>/tests/*.json   saved tests (storage.py)
 data/projects/<id>/skills/*.md    project skills (skills.py)
 data/projects/<id>/jobs/*.json    pipeline runs (pipeline.py)
+data/projects/<id>/runs/          run history of each test (runs.py)
+data/projects/<id>/suites/*.json  suite runs: all or tagged tests (suite.py)
+data/projects/<id>/baselines/     visual check baselines (checks.py)
+data/projects/<id>/traffic/*.har  requests recorded while authoring (traffic.py)
+data/projects/<id>/explore/       site maps built by the Planner (explorer.py)
 secrets/projects/<id>/            tokens of MCP connections, login for the app under test
 """
 from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import shutil
 import time
@@ -20,7 +26,9 @@ from pathlib import Path
 from . import vault
 from .llm import EFFORTS
 
-DATA = Path(__file__).resolve().parent.parent / "data"
+# TESTGEN_DATA_DIR moves the data folder, e.g. to a directory versioned with the
+# application so CI runs the same tests (python -m testgen.run).
+DATA = Path(os.environ.get("TESTGEN_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 ROOT = DATA / "projects"
 
 SCENARIO_TYPES = ["positive", "negative", "edge", "boundary", "accessibility", "security"]
@@ -30,6 +38,12 @@ SCENARIO_TYPES = ["positive", "negative", "edge", "boundary", "accessibility", "
 DEFAULT_PIPELINE = {
     "requirements": {
         "connection": "",          # Atlassian connection id; empty = the first one
+    },
+    "explore": {                   # Planner: crawl the site instead of (or besides) requirements
+        "max_pages": 20,
+        "max_depth": 2,
+        "login_test": "",          # saved test replayed first to log in (e.g. "Login")
+        "headless": True,
     },
     "scenarios": {
         "enabled": True,
@@ -51,10 +65,25 @@ DEFAULT_PIPELINE = {
     "run": {
         "enabled": True,
         "self_heal": True,
+        "heal_mode": "review",     # review: a person accepts healed locators | auto: rewritten at once
         "analyze_failures": True,
         "headless": True,
+        "retry_failed": True,      # re-run a failed test once: passed the second time = flaky
+        "trace": "failed",         # Playwright trace: always | failed | off
+        "keep_runs": 30,           # run history per test
+        "parallel": 2,             # tests at once in a suite run
+        "auto_quarantine": False,  # quarantine a test whose flip rate reaches flaky_threshold
+        "flaky_threshold": 30,     # percent
+        "a11y_impact": "serious",  # assert_accessible fails from this impact: minor|moderate|serious|critical
+        "visual_threshold": 1.0,   # assert_screenshot: percent of differing pixels allowed
         "skills": ["test-run-analysis"],
         "model": "", "effort": "",
+    },
+    "verify": {                    # mutation testing of a new test's assertions (mutations.py)
+        "enabled": False,
+        "mutants": 5,
+        "improve": True,           # weak assertions: the agent adds checks, then verify again
+        "headless": True,
     },
     "publish": {
         "enabled": False,
@@ -98,14 +127,28 @@ def normalize_pipeline(p: dict | None) -> dict:
                     defaults[key] = max(1, min(int(v), 200))
                 except (TypeError, ValueError):
                     pass
+            elif isinstance(default, float):
+                try:
+                    defaults[key] = max(0.0, min(float(v), 100.0))
+                except (TypeError, ValueError):
+                    pass
             elif isinstance(default, list):
                 defaults[key] = [str(x) for x in v if str(x).strip()] if isinstance(v, list) else default
             else:
                 defaults[key] = str(v or "").strip()
-    s, a = out["scenarios"], out["authoring"]
+    s, a, r, v = out["scenarios"], out["authoring"], out["run"], out["verify"]
     s["types"] = [t for t in s["types"] if t in SCENARIO_TYPES] or list(SCENARIO_TYPES)
     s["select"] = s["select"] if s["select"] in ("manual", "all", "high") else "manual"
     a["engine"] = a["engine"] if a["engine"] in ("builtin", "playwright-mcp") else "builtin"
+    r["heal_mode"] = r["heal_mode"] if r["heal_mode"] in ("review", "auto") else "review"
+    r["trace"] = r["trace"] if r["trace"] in ("always", "failed", "off") else "failed"
+    r["a11y_impact"] = r["a11y_impact"] if r["a11y_impact"] in ("minor", "moderate", "serious",
+                                                                  "critical") else "serious"
+    r["parallel"] = min(r["parallel"], 8)
+    r["flaky_threshold"] = min(r["flaky_threshold"], 100)
+    v["mutants"] = min(v["mutants"], 10)
+    out["explore"]["max_pages"] = min(out["explore"]["max_pages"], 100)
+    out["explore"]["max_depth"] = min(out["explore"]["max_depth"], 5)
     for stage in out.values():
         if "effort" in stage and stage["effort"] not in EFFORTS:
             stage["effort"] = ""

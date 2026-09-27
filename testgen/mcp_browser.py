@@ -25,10 +25,18 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from .browser import ELEMENT_INFO_JS, VIEWPORT, expand, locator_candidates
+from .browser import ELEMENT_INFO_JS, VIEWPORT, expand, group_candidates, locator_candidates
 from .mcp_hub import McpClient, McpError, error_text, result_text
+from .testdata import DataValues
 
 MAX_SNAPSHOT_CHARS = 40_000
+_STATE_JS = {
+    "assert_value": "(el) => el.value ?? ''",
+    "assert_checked": "(el) => !!el.checked || el.getAttribute('aria-checked') === 'true'",
+    "assert_enabled": "(el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true'",
+    "assert_element_text": "(el) => el.innerText || el.textContent || ''",
+    "assert_count": "",
+}
 _OWN_BROWSER_FLAGS = ("--browser", "--executable-path", "--cdp-endpoint", "--extension", "--endpoint")
 _chromium: str | None = None
 
@@ -96,6 +104,8 @@ class McpBrowser:
         self.credentials: dict[str, str] = {}
         self._url = ""
         self._shot = ""
+        self.testdata = DataValues()     # {{unique}}, {{faker.email}}...: one value per session
+        self._errors_seen = 0            # console errors already reported by assert_no_console_errors
         click = next((t for t in client.tools if t.name == "browser_click"), None)
         props = (click.inputSchema or {}).get("properties", {}) if click else {}
         # Older @playwright/mcp versions called the element parameter "ref".
@@ -135,7 +145,7 @@ class McpBrowser:
         return self._url
 
     def expand(self, value: str) -> str:
-        return expand(self.credentials, value)
+        return expand(self.credentials, value, self.testdata)
 
     async def describe(self) -> str:
         text = result_text(await self._call("browser_snapshot", {}))
@@ -165,6 +175,9 @@ class McpBrowser:
             target = {self.ref_key: ref, "element": step["description"][:200]}
             if a == "assert_visible" and not info.get("visible", True):
                 raise AssertionError("Element is not visible")
+            if a in _STATE_JS:
+                await self._assert_state(a, step, target, info)
+                return
         if a == "navigate":
             await self._call("browser_navigate", {"url": v})
         elif a == "click":
@@ -186,10 +199,39 @@ class McpBrowser:
             await self._call("browser_wait_for", {"text": self.expand(v)})
         elif a == "assert_url_contains":
             url = str(await self._evaluate("() => location.href"))
-            if v not in url:
+            if self.expand(v) not in url:
                 raise AssertionError(f"URL '{url}' does not contain '{v}'")
+        elif a == "assert_no_console_errors":
+            text = result_text(await self._call("browser_console_messages", {}))
+            errors = [line for line in text.splitlines() if re.match(r"\s*-?\s*\[error\]", line, re.I)
+                      and "Failed to load resource" not in line]
+            new, self._errors_seen = errors[self._errors_seen:], len(errors)
+            if new:
+                raise AssertionError(f"Ошибки в консоли браузера: {len(new)} — " + " | ".join(new[:3]))
+        elif a in ("assert_accessible", "assert_screenshot", "mock_route"):
+            raise ValueError("Этот шаг доступен только со встроенным движком Playwright")
         elif a != "assert_visible":
             raise ValueError(f"Unknown action {a}")
+
+    async def _assert_state(self, a: str, step: dict, target: dict, info: dict) -> None:
+        """Value / checked / enabled / text / count assertions, read with browser_evaluate.
+        Without an expected value (recorded by hand) the current one is taken."""
+        if a == "assert_count":
+            step["locator"] = [c for c in group_candidates(info) if c["kind"] in ("css", "testid")]
+            if not step["locator"]:
+                raise ValueError("This element is not part of a list or group of similar elements")
+            c = step["locator"][0]
+            css = c["value"] if c["kind"] == "css" else f'[data-testid="{c["value"]}"]'
+            actual = await self._evaluate(f"() => document.querySelectorAll({json.dumps(css)}).length")
+        else:
+            actual = await self._evaluate(_STATE_JS[a], target)
+        actual = str(actual).lower() if isinstance(actual, bool) else str(actual)
+        if not step.get("value"):
+            step["value"] = actual[:100]
+        want = self.expand(step["value"])
+        ok = (" ".join(want.split()) in " ".join(actual.split())) if a == "assert_element_text" else actual == want
+        if not ok:
+            raise AssertionError(f"Expected {want!r}, got {actual[:200]!r}")
 
     async def close(self) -> None:
         try:

@@ -4,17 +4,27 @@ Every interactive element on the page gets a short ref (e1, e2, ...) that the
 model uses to pick a target. When a step is recorded, the ref is turned into a
 list of stable locator candidates (test id, role+name, label, placeholder, css)
 so the saved test does not depend on refs and can be replayed / exported.
+
+The session also collects what the page reports while it runs: console errors,
+uncaught exceptions, failed requests and 4xx/5xx responses (`events`, used by
+assert_no_console_errors and by failure analysis), and, when asked, the XHR/fetch
+traffic of the scenario (`traffic`, for API tests and mocks; see traffic.py).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import re
-from typing import Any
+import time
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Error as PlaywrightError
+
+from .testdata import CREDENTIALS, PLACEHOLDER, DataValues
 
 VIEWPORT = {"width": 1280, "height": 800}
-PLACEHOLDER = re.compile(r"\{\{(username|password)\}\}")
+MAX_EVENTS = 300
+MAX_TRAFFIC = 500
 
 # Helpers shared by the page snapshot and the single-element probe (Playwright MCP engine).
 _HELPERS_JS = r"""
@@ -94,7 +104,7 @@ _HELPERS_JS = r"""
 """
 
 SNAPSHOT_JS = r"""
-({maxItems, point}) => {
+({maxItems, contentItems, point}) => {
   const SEL = 'a[href], button, input:not([type=hidden]), select, textarea, summary, ' +
     '[role=button], [role=link], [role=checkbox], [role=radio], [role=tab], [role=menuitem], ' +
     '[role=option], [role=combobox], [role=textbox], [role=searchbox], [role=switch], ' +
@@ -113,6 +123,18 @@ SNAPSHOT_JS = r"""
 
   const TESTID_ATTRS = ['data-testid', 'data-test', 'data-qa', 'data-test-id', 'data-cy'];
   const list = scored.slice(0, maxItems).map(s => s.el);
+  // Then a few content elements that assertions target: list items and rows (assert_count),
+  // messages, headings and test-id blocks (assert_element_text). They are listed after the
+  // interactive ones and never crowd them out.
+  const CONTENT = 'li, tr, h1, h2, h3, output, [role=alert], [role=status], [role=listitem], [role=row], ' +
+    TESTID_ATTRS.map(a => `[${a}]`).join(', ');
+  const content = [...document.querySelectorAll(CONTENT)]
+    .filter(el => !list.includes(el) && !el.matches(SEL) && visible(el) && clean(el.innerText))
+    .map(el => ({el, r: el.getBoundingClientRect()}))
+    .map(s => ({...s, inView: s.r.bottom > 0 && s.r.top < vh}))
+    .sort((a, b) => (b.inView - a.inView) || (Math.abs(a.r.top) - Math.abs(b.r.top)))
+    .slice(0, contentItems).map(s => s.el);
+  list.push(...content);
   // Element picker: make sure the element under the cursor is described too,
   // even when it is not interactive (e.g. a message we want to assert on).
   let picked = null;
@@ -220,12 +242,32 @@ def locator_candidates(e: dict) -> list[dict]:
     return unique
 
 
-def expand(credentials: dict, value: str) -> str:
-    """Replace {{username}} / {{password}} with real values (only when a step executes)."""
+
+
+def group_candidates(e: dict) -> list[dict]:
+    """Locators for the group an element belongs to (list items, table rows, cards):
+    used by assert_count, so unlike locator_candidates they may match many elements."""
+    c: list[dict] = []
+    if e.get("testid"):
+        attr = e.get("testid_attr") or "data-testid"
+        c.append({"kind": "testid", "value": e["testid"]} if attr == "data-testid"
+                 else {"kind": "css", "value": f'[{attr}="{e["testid"]}"]'})
+    css = e.get("css") or ""
+    if re.search(r":nth-of-type\(\d+\)$", css):
+        c.append({"kind": "css", "value": re.sub(r":nth-of-type\(\d+\)$", "", css)})
+    return c
+
+
+def expand(credentials: dict, value: str, data: DataValues | None = None) -> str:
+    """Replace {{username}} / {{password}} with real values and test data placeholders
+    ({{unique}}, {{faker.email}}...) with generated ones - only when a step executes."""
     def sub(m: re.Match) -> str:
-        if not credentials.get(m.group(1)):
-            raise ValueError(f"No {m.group(1)} set for this application: add login credentials")
-        return credentials[m.group(1)]
+        key = m.group(1)
+        if key in CREDENTIALS:
+            if not credentials.get(key):
+                raise ValueError(f"No {key} set for this application: add login credentials")
+            return credentials[key]
+        return (data if data is not None else DataValues())[key]
     return PLACEHOLDER.sub(sub, value or "")
 
 
@@ -258,8 +300,8 @@ class BrowserSession:
 
     engine = "builtin"
 
-    def __init__(self, pw: Playwright, browser: Browser):
-        self._pw = pw
+    def __init__(self, pw: Playwright | None, browser: Browser):
+        self._pw = pw                       # None: a shared browser (suite run), not ours to close
         self._browser = browser
         self.context: BrowserContext | None = None
         self.page: Page | None = None
@@ -267,15 +309,33 @@ class BrowserSession:
         # Login for the app under test. Steps hold {{username}} / {{password}}
         # placeholders; real values are substituted only when a step executes.
         self.credentials: dict[str, str] = {}
+        self.testdata = DataValues()        # {{unique}}, {{faker.email}}...: one value per run
+        self.events: list[dict] = []        # console errors, page errors, failed and 4xx/5xx requests
+        self.traffic: list[dict] | None = None   # XHR/fetch exchanges, when recording
+        self.step_index = -1                # the step being executed, for events and traffic
+        self.options: dict = {}             # project, test, run dir and thresholds for checks.py
+        self._errors_checked = 0            # assert_no_console_errors looks at errors after this
 
     @classmethod
-    async def launch(cls, headless: bool = True) -> "BrowserSession":
-        pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=headless)
+    async def launch(cls, headless: bool = True, browser: Browser | None = None,
+                     record_traffic: bool = False) -> "BrowserSession":
+        """A fresh context and page. With `browser` the context is created in that
+        shared browser, which close() then leaves running."""
+        pw = None
+        if browser is None:
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch(headless=headless)
         s = cls(pw, browser)
         s.context = await browser.new_context(viewport=VIEWPORT, locale="en-US")
         s.page = await s.context.new_page()
         s.context.on("page", s._on_new_page)
+        s.context.on("console", s._on_console)
+        s.context.on("weberror", s._on_page_error)
+        s.context.on("response", s._on_response)
+        s.context.on("requestfailed", s._on_request_failed)
+        if record_traffic:
+            s.traffic = []
+            s.context.on("requestfinished", s._on_request_finished)
         return s
 
     def _on_new_page(self, page: Page) -> None:
@@ -283,10 +343,81 @@ class BrowserSession:
         self.page = page
 
     async def close(self) -> None:
+        if self._pw is None:
+            await self.context.close()
+            return
         try:
             await self._browser.close()
         finally:
             await self._pw.stop()
+
+    async def scratch_page(self) -> Page:
+        """A blank page in a separate context of the same browser, for work that must
+        not touch the page under test (image comparison)."""
+        return await self._browser.new_page()
+
+    # ---------- what the page reports ----------
+
+    def mask(self, text: str) -> str:
+        pw = self.credentials.get("password")
+        return text.replace(pw, "***") if pw and text else text
+
+    def _event(self, kind: str, text: str, **extra) -> None:
+        if len(self.events) < MAX_EVENTS:
+            self.events.append({"type": kind, "text": self.mask(text)[:500], "step": self.step_index,
+                                "at": time.time()}
+                               | {k: self.mask(v) if isinstance(v, str) else v for k, v in extra.items()})
+
+    def _on_console(self, msg) -> None:
+        if msg.type == "error":
+            self._event("console", msg.text, url=(msg.location or {}).get("url", ""))
+
+    def _on_page_error(self, error) -> None:
+        self._event("pageerror", str(error.error))
+
+    def _on_response(self, response) -> None:
+        if response.status >= 400:
+            self._event("http", f"{response.status} {response.request.method} {response.url}",
+                        status=response.status, url=response.url[:300])
+
+    def _on_request_failed(self, request) -> None:
+        self._event("network", f"{request.method} {request.url[:300]}: {request.failure or 'failed'}",
+                    url=request.url[:300])
+
+    async def _on_request_finished(self, request) -> None:
+        if request.resource_type not in ("xhr", "fetch") or len(self.traffic) >= MAX_TRAFFIC:
+            return
+        from .traffic import capture
+        step = self.step_index
+        try:
+            entry = await capture(request, self.credentials)
+        except Exception:
+            return
+        if entry:
+            self.traffic.append(entry | {"step": step})
+
+    def console_errors(self) -> list[dict]:
+        """Console errors and uncaught exceptions since the previous check. "Failed to load
+        resource" messages are left out: failed requests are reported as http events."""
+        new = self.events[self._errors_checked:]
+        self._errors_checked = len(self.events)
+        return [e for e in new if e["type"] == "pageerror"
+                or (e["type"] == "console" and not e["text"].startswith("Failed to load resource"))]
+
+    async def mock(self, spec: dict) -> None:
+        """mock_route: answer requests matching spec["url"] (a glob) with a recorded response."""
+        method = (spec.get("method") or "").upper()
+
+        async def handler(route):
+            if method and route.request.method != method:
+                await route.fallback()
+                return
+            await route.fulfill(status=int(spec.get("status") or 200), body=spec.get("body") or "",
+                                content_type=spec.get("content_type") or "application/json")
+
+        await self.context.route(spec["url"], handler)
+
+    # ---------- the page ----------
 
     async def settle(self) -> None:
         try:
@@ -295,10 +426,20 @@ class BrowserSession:
         except Exception:
             pass
 
-    async def snapshot(self, max_items: int = 150, point: tuple[float, float] | None = None) -> dict:
-        await self.settle()
-        snap = await self.page.evaluate(SNAPSHOT_JS, {"maxItems": max_items,
-                                                      "point": list(point) if point else None})
+    async def snapshot(self, max_items: int = 150, point: tuple[float, float] | None = None,
+                       content_items: int = 40) -> dict:
+        for attempt in range(4):
+            await self.settle()
+            try:
+                snap = await self.page.evaluate(SNAPSHOT_JS, {"maxItems": max_items, "contentItems": content_items,
+                                                              "point": list(point) if point else None})
+                break
+            except PlaywrightError as e:
+                # A navigation started by the page itself (a redirect after a request) replaced
+                # the document under us: wait for the new one and look again.
+                if attempt == 3 or "context was destroyed" not in str(e) and "navigat" not in str(e):
+                    raise
+                await asyncio.sleep(0.3)
         self.elements = {e["ref"]: e for e in snap["elements"]}
         return snap
 
@@ -307,32 +448,58 @@ class BrowserSession:
         return base64.b64encode(png).decode()
 
     def expand(self, value: str) -> str:
-        return expand(self.credentials, value)
+        return expand(self.credentials, value, self.testdata)
 
     @property
     def url(self) -> str:
         return self.page.url if self.page else ""
 
     async def describe(self) -> str:
-        """The current page for the model: URL, interactive elements with refs, visible text."""
+        """The current page for the model: URL, elements with refs, visible text."""
         snap = await self.snapshot()
         lines = "\n".join(describe_element(e) for e in snap["elements"])
         return (f"URL: {snap['url']}\nTitle: {snap['title']}\n\n"
-                f"Interactive elements:\n{lines or '(none)'}\n\n"
+                f"Elements (interactive ones first, then content for assertions):\n{lines or '(none)'}\n\n"
                 f"Visible page text (truncated):\n{snap['text'][:2500]}")
 
     async def execute(self, step: dict) -> None:
         """Run a step on the live page; element steps carry a `ref` from the latest snapshot,
-        which is turned into stable locators BEFORE acting (a click may navigate away)."""
-        from .steps import ELEMENT_ACTIONS, perform
+        which is turned into stable locators BEFORE acting (a click may navigate away).
+
+        An assertion recorded without an expected value (Element Picker) takes the
+        element's current state: its value, text, checked / enabled state, or the
+        number of elements in its group."""
+        from .steps import ELEMENT_ACTIONS, OPTIONAL_ELEMENT, perform
         loc = None
         ref = step.pop("ref", "")
-        if step["action"] in ELEMENT_ACTIONS:
+        a = step["action"]
+        if a in ELEMENT_ACTIONS or (a in OPTIONAL_ELEMENT and ref):
             if not ref:
                 raise ValueError("This action needs an element ref")
             loc = self.by_ref(ref)
-            step["locator"] = await self.unique_candidates(self.elements[ref])
+            e = self.elements[ref]
+            if a == "assert_count":
+                step["locator"] = [c for c in group_candidates(e) if await resolve(self.page, c).count() > 0]
+                if not step["locator"]:
+                    raise ValueError("This element is not part of a list or group of similar elements")
+            else:
+                step["locator"] = await self.unique_candidates(e)
+            if not step.get("value"):
+                step["value"] = await self._current_state(a, loc, e, step)
         await perform(self, step, loc)
+
+    async def _current_state(self, action: str, loc, e: dict, step: dict) -> str:
+        if action == "assert_value":
+            return await loc.input_value(timeout=5000)
+        if action == "assert_checked":
+            return str(await loc.is_checked(timeout=5000)).lower()
+        if action == "assert_enabled":
+            return str(await loc.is_enabled(timeout=5000)).lower()
+        if action == "assert_element_text":
+            return e.get("name") or (await loc.inner_text(timeout=5000)).strip()[:100]
+        if action == "assert_count":
+            return str(await resolve(self.page, step["locator"][0]).count())
+        return ""
 
     def by_ref(self, ref: str):
         if ref not in self.elements:
@@ -355,14 +522,34 @@ class BrowserSession:
         snap = await self.snapshot(point=(x, y))
         return self.elements.get(snap.get("picked") or "")
 
-    async def find(self, locator: list[dict]):
-        """Resolve a saved locator: first candidate that matches -> Locator, else None."""
+    async def find(self, locator: list[dict], wait: float = 0):
+        """Resolve a saved locator: first candidate that matches -> Locator, else None.
+        With `wait` (seconds) keep looking while the page is still changing, e.g. right
+        after a click that navigates: healing is only for elements that really are gone."""
+        deadline = time.monotonic() + wait
+        while True:
+            for cand in locator or []:
+                try:
+                    loc = resolve(self.page, cand)
+                    n = await loc.count()
+                    if n >= 1:
+                        return loc.first, cand
+                except Exception:
+                    continue
+            if time.monotonic() >= deadline:
+                return None, None
+            await asyncio.sleep(0.25)
+
+    async def find_all(self, locator: list[dict]):
+        """A group locator (assert_count): the first candidate that matches anything,
+        else the first candidate, so that "0 elements" can still be asserted."""
         for cand in locator or []:
             try:
                 loc = resolve(self.page, cand)
-                n = await loc.count()
-                if n >= 1:
-                    return loc.first, cand
+                if await loc.count() >= 1:
+                    return loc
             except Exception:
                 continue
-        return None, None
+        if not locator:
+            raise ValueError("No locator for this step")
+        return resolve(self.page, locator[0])

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Страница с ошибкой</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <h1>Страница с ошибкой</h1>
+  <img src="banner.png">
+  <input type="text" name="q">
+  <button id="boom" onclick="undefinedFunction()">Сломать</button>
+  <div id="status"></div>
+</main>
+<script>
+console.error('Ошибка загрузки виджета');
+fetch('/api/flaky').then(r => r.ok ? r.json() : Promise.reject(r.status))
+  .then(() => document.getElementById('status').textContent = 'Сервис доступен')
+  .catch(s => document.getElementById('status').textContent = 'Сервис недоступен: ' + s);
+</script>
+</body>
+</html>

@@ -4,10 +4,22 @@
     {
       "name": "studio",
       "runtimeExecutable": "C:\\Users\\Andrey\\AppData\\Local\\aitestgen\\venv\\Scripts\\python.exe",
-      "runtimeArgs": ["server.py"],
-      "env": {"TESTGEN_AUTH": "off"},
+      "runtimeArgs": [
+        "server.py"
+      ],
+      "env": {
+        "TESTGEN_AUTH": "off"
+      },
       "port": 8766,
       "autoPort": true
+    },
+    {
+      "name": "stand",
+      "runtimeExecutable": "C:\\Users\\Andrey\\AppData\\Local\\aitestgen\\venv\\Scripts\\python.exe",
+      "runtimeArgs": [
+        "tests/stand.py"
+      ],
+      "port": 8780
     }
   ]
 }

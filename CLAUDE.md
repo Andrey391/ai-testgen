@@ -21,12 +21,15 @@ AI Test Generator — открытая реализация подхода из 
 | Редактирование и добавление шагов | Редактируемые описания, ▲▼✕, «+ шаг» |
 | Element Picker / Record & Play | Клик по Live View в режиме Picker/Record |
 | Live View | Скриншот страницы в реальном времени (или реальное окно браузера) |
-| Сохранение и повторный запуск | Вкладка «Тесты»: прогон в новом браузере |
-| AgentRx (self-healing) | Несколько локаторов на шаг; если все сломались, Claude находит элемент заново |
-| Требования/user stories → сценарии, Gherkin | Вкладка «Требования»; число сценариев не ограничено |
-| Экспорт в Selenium/Playwright и Gherkin | `.py` (pytest-playwright) и `.feature` |
+| Сохранение и повторный запуск | Вкладка «Тесты»: прогон в новом браузере, история прогонов, trace, события браузера |
+| AgentRx (self-healing) | Несколько локаторов на шаг; если все сломались, Claude находит элемент заново — новый локатор идёт на ревью человеку |
+| Требования/user stories → сценарии, Gherkin | Вкладка «Требования»; число сценариев не ограничено; без ТЗ — «Исследовать сайт» (Planner) |
+| Экспорт в Selenium/Playwright и Gherkin | `.py` (pytest-playwright, локаторы с `.or_()`), `.feature`, проект целиком `.zip`, API-тесты по трафику |
 | Интеграции (Jira, test management) | Проект → Подключения (MCP): Jira/Confluence, Zephyr Scale, Playwright MCP, любой MCP |
 | Сквозной процесс генерации | Вкладка «Конвейер»; этапы настраиваются в «Проект → Процесс генерации» и «Скиллы» |
+| Регрессия, CI | «Запустить набор» по тегам, `python -m testgen.run` (JUnit/Allure), нестабильные тесты и карантин, шаблоны `ci/` |
+| Качество тестов | Мутационное тестирование проверок; слабые проверки усиливает агент |
+| Работа из IDE | Студия — MCP-сервер (`/mcp`, `testgen.mcp_server`), см. `docs/mcp.md` |
 
 ## Команды (Windows, PowerShell)
 
@@ -51,13 +54,31 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth adduser ivan   # создать или сменить пароль
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth deluser ivan
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth list
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth token ivan "Claude Code"   # API-токен для MCP
 ```
 
-Экспортированный тест: `pip install pytest pytest-playwright`, затем `pytest test_xxx.py`
-(логин/пароль берутся из `TESTGEN_USERNAME` / `TESTGEN_PASSWORD`).
+Прогон тестов проекта без студии (CI): код выхода 0 — всё прошло (нестабильные и упавшие в карантине
+не считаются), 1 — падения, 2 — ошибка аргументов. Шаблоны для GitHub Actions и GitLab — `ci/`.
 
-Автотестов у самого проекта нет — проверяй изменения запуском студии (для локальной отладки удобно
-`TESTGEN_AUTH=off`).
+```powershell
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.run --project Shop --tag smoke --junit report.xml
+```
+
+Экспортированный тест: `pip install pytest pytest-playwright faker`, затем `pytest test_xxx.py`
+(логин/пароль — `TESTGEN_USERNAME` / `TESTGEN_PASSWORD`, адрес стенда — `TESTGEN_BASE_URL`).
+
+Тесты самой студии — pytest на локальном стенде `tests/site/` (`tests/stand.py`, вариант `v2` —
+изменённая вёрстка) с заглушкой LLM (`tests/fakes.py`), без ключа API и затрат. Данные и секреты
+тестов уходят во временную папку (`TESTGEN_DATA_DIR`/`TESTGEN_SECRETS_DIR` в `tests/conftest.py`).
+Запускай после правок; CI — `.github/workflows/tests.yml`.
+
+```powershell
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements-dev.txt
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q
+```
+
+Ручная проверка — запуском студии (для локальной отладки удобно `TESTGEN_AUTH=off`); стенд для
+экспериментов поднимает конфигурация `stand` из `.claude/launch.json`.
 
 ## Переменные окружения
 
@@ -70,19 +91,28 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 - `TESTGEN_ATLASSIAN_MCP` — своя команда запуска MCP-сервера Atlassian
   (по умолчанию `mcp-atlassian` из venv, иначе `uvx mcp-atlassian`).
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` — учётные данные по умолчанию для прогонов.
+- `TESTGEN_DATA_DIR` / `TESTGEN_SECRETS_DIR` — другие папки данных и секретов (CI, тесты студии).
+- `TESTGEN_PROMPT_CACHE=off` — без кэширования промптов (сравнить стоимость; расход виден в Studio,
+  прогонах и конвейере).
+- `TESTGEN_AXE_JS` — путь к `axe.min.js` для проверки доступности без доступа к CDN.
+- `TESTGEN_FAKER_LOCALE` — локаль тестовых данных `{{faker.*}}` (по умолчанию `en_US`).
+- `TESTGEN_TOKEN`, `TESTGEN_STUDIO_URL` — для `python -m testgen.mcp_server` (stdio).
 - `PORT` (по умолчанию 8765).
 
 ## Архитектура
 
 - `server.py` — FastAPI: REST API (`/api/projects` с подресурсами `connections`, `skills`, `jobs`,
-  `credentials`; `/api/mcp/presets`, `/api/sessions`, `/api/tests`, `/api/runs`, `/api/jobs`,
-  `/api/scenarios`, `/api/requirements/fetch`, `/api/auth/*`) и отдача `static/index.html`.
-  Middleware `require_login` пускает без входа только пути из `PUBLIC`; `require_admin` — для
-  действий, которые запускают код на сервере.
+  `credentials`, `runs` (прогон набора), `suites`, `export` (.zip), `tags`, `explore`, `coverage`;
+  `/api/mcp/presets`, `/api/sessions`, `/api/tests` (+ `meta`, `runs`, `proposals`, `verify`,
+  `strengthen`, `traffic`, `mock`, `baselines`), `/api/runs` (+ `files`, `baseline`), `/api/suites`,
+  `/api/jobs`, `/api/scenarios`, `/api/requirements/fetch`, `/api/auth/*` (+ `tokens`)), MCP-сервер
+  на `/mcp` (смонтирован последним) и отдача `static/index.html`. Middleware `require_login` пускает
+  без входа только пути из `PUBLIC`, `/mcp` — по API-токену; `require_admin` — для действий, которые
+  запускают код на сервере.
 - **Один event loop для браузера.** Объекты Playwright привязаны к циклу, в котором созданы, поэтому
   вся работа с браузером идёт на отдельном фоновом цикле `WORKER`. Из обработчиков используй
   `submit(coro)` (fire-and-forget) или `await call(coro)`; не трогай Playwright напрямую из цикла uvicorn.
-  MCP-сессии и задачи конвейера тоже живут на `WORKER`.
+  MCP-сессии, задачи конвейера, прогоны, наборы, мутации и Planner тоже живут на `WORKER`.
 - `testgen/projects.py` — проекты: `data/projects/<id>/project.json` (название, базовый URL,
   подключения без секретов, настройки процесса `pipeline`). `DEFAULT_PIPELINE` — этапы процесса и их
   параметры; `normalize_pipeline()` сливает сохранённое с умолчаниями и отбрасывает лишнее — новые
@@ -90,11 +120,26 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
   `data/<проект>/`; пустой проект не создаётся — без проектов студия открывает мастер нового проекта.
 - `testgen/steps.py` — шаг теста (`new_step`) — общая единица для агента, рекордера и прогона;
   `perform()` выполняет шаг. Новые действия добавляй в `ELEMENT_ACTIONS`/`ALL_ACTIONS` и в `perform`,
-  затем в инструменты агента и экспортеры.
+  затем в инструменты агента (`agent.TOOLS`, `tool_to_step`), `McpBrowser.execute`, экспортеры и
+  варианты Element Picker / «+ шаг» в `index.html`. Проверки: `assert_visible`, `assert_text_present`,
+  `assert_url_contains`, `assert_value`, `assert_checked`, `assert_enabled`, `assert_count` (группа
+  однотипных элементов, `browser.group_candidates`), `assert_element_text`, `assert_no_console_errors`,
+  `assert_accessible`, `assert_screenshot` (последние три — `AUXILIARY_ASSERTIONS`, не проверка
+  результата); `mock_route` — подмена ответа запроса.
+- `testgen/checks.py` — `assert_accessible` (axe-core из CDN в `data/cache/` или `TESTGEN_AXE_JS`,
+  порог `run.a11y_impact`) и `assert_screenshot` (эталон при первом прогоне в
+  `data/projects/<id>/baselines/`, сравнение на canvas в отдельной странице, маски `step["masks"]`,
+  допуск `run.visual_threshold`). Провал — `CheckFailed` с `details` для отчёта.
 - `testgen/browser.py` — `BrowserSession`: снимок страницы, каждому видимому интерактивному элементу
-  присваивается ref (`e12`) и список устойчивых локаторов (`data-testid`/`data-test`, `#id`,
-  role+name, label, placeholder, text, CSS-путь). `expand()` подставляет `{{username}}`/`{{password}}`.
+  (и до 40 элементам содержимого: строки списков, заголовки, сообщения, `data-testid`) присваивается ref
+  (`e12`) и список устойчивых локаторов (`data-testid`/`data-test`, `#id`, role+name, label, placeholder,
+  text, CSS-путь). `expand()` подставляет `{{username}}`/`{{password}}` и тестовые данные.
+  Сессия собирает `events` (ошибки консоли, исключения страницы, 4xx/5xx, упавшие запросы) и при
+  `record_traffic` — `traffic` (XHR/fetch). `launch(browser=...)` открывает контекст в общем браузере
+  (наборы). `find(locator, wait=...)` ждёт появления элемента, прежде чем прогон уйдёт в самолечение.
   Интерфейс движка для агента: `describe()`, `screenshot_b64()`, `execute(step)`, `url`, `close()`.
+- `testgen/testdata.py` — плейсхолдеры `{{unique}}`, `{{today}}`, `{{faker.email}}`, … : новое значение
+  на каждый прогон, одно и то же внутри прогона (`DataValues`); экспорт встраивает тот же генератор.
 - `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`@playwright/mcp`).
   Агент и шаги не меняются; снимок — ARIA-снапшот MCP. Локаторы шага: код, сгенерированный MCP
   (`--codegen python`), плюс `ELEMENT_INFO_JS` через `browser_evaluate` (те же поля, что у встроенного
@@ -113,17 +158,40 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
   `prompt()` добавляет выбранные скиллы этапа в конец системного промпта — после правил, которые они
   не могут отменить.
 - `testgen/agent.py` — `StudioSession`, цикл агента: Claude получает скриншот и список элементов и
-  вызывает по одному инструменту за ход (`click`, `fill`, `assert_visible`, …, `finish`); каждый вызов
+  вызывает по одному инструменту за ход (`click`, `fill`, `assert_*`, …, `finish`); каждый вызов
   становится шагом. Старые скриншоты вычищаются через context editing (`clear_tool_uses_20250919`).
   Настройки этапа `authoring` проекта: движок, скиллы, модель, лимит шагов, read-only инструменты
-  подключений (их вызовы выполняются сразу и не становятся шагами).
-- `testgen/runner.py` — прогон с самолечением: если все локаторы шага сломались, `heal()` просит Claude
-  выбрать элемент по описанию шага; новый локатор сохраняется в тест. `analyze()` классифицирует
-  падение (дефект продукта / проблема теста / окружение) по шагу, ошибке и скриншоту.
-- `testgen/pipeline.py` — конвейер `Job`: требования → сценарии (ручной или автоматический отбор) →
-  по каждому сценарию генерация (`StudioSession` в Auto-Pilot, видна в Studio) → сохранение → прогон
-  (`run_and_record`, он же для кнопки «Запустить») → публикация. Состояние в
+  подключений (их вызовы выполняются сразу и не становятся шагами). `save()` сохраняет тест (сохраняя
+  теги, карантин, ключ Zephyr) и трафик; `usage` — расход токенов сессии. С `base_steps` сессия сначала
+  воспроизводит сохранённый тест и получает `task` — так агент усиливает слабые проверки.
+- `testgen/runner.py` — одна попытка прогона (`run_test`): trace (`run.trace`, пароль маскируется
+  `mask_trace`), события браузера, скриншоты шагов в папку прогона, хуки для мутаций. Самолечение:
+  если все локаторы шага сломались, `heal()` просит Claude выбрать элемент; в режиме `run.heal_mode =
+  review` локатор становится предложением (`report["proposals"]`, в тесте — `heal_proposals`) и
+  попадает в тест только после «Принять»; отклонённый (`heal_rejected`) больше не используется.
+  `analyze()` классифицирует падение (дефект продукта / проблема теста / окружение / нестабильный)
+  по шагу, ошибке, скриншоту, событиям и истории; `judge_visual()` — визуальное расхождение.
+- `testgen/runs.py` — история прогонов: `data/projects/<id>/runs/<test>/<run>.json`, файлы прогона
+  рядом, `index.json` со сводками; ротация `run.keep_runs`; `flip_rate()` — доля смен результата.
+- `testgen/pipeline.py` — `run_and_record` (кнопка «Запустить», наборы, конвейер, CLI, MCP): попытка,
+  перезапуск упавшего (`run.retry_failed`: упал → прошёл = flaky), анализ, запись в историю и в тест
+  (последний прогон, предложения самолечения, авто-карантин). Конвейер `Job`: требования (ссылки,
+  текст, карта сайта Planner) → сценарии (ручной или автоматический отбор) → по каждому сценарию
+  генерация (`StudioSession` в Auto-Pilot, видна в Studio) → сохранение → прогон → проверка
+  мутациями (этап `verify`, при слабых проверках агент их усиливает) → публикация. Состояние в
   `data/projects/<id>/jobs/<job>.json`.
+- `testgen/suite.py` — прогон набора (все тесты / по тегам / список) в одном браузере, `run.parallel`
+  контекстов; карантин не валит набор. `testgen/reports.py` — JUnit XML и Allure.
+  `testgen/run.py` — CLI `python -m testgen.run`.
+- `testgen/mutations.py` — мутационное тестирование проверок: мутанты `noop_action`, `assertion`,
+  `api_500` применяются хуками раннера; результат в `test["verify"]`; `improvement_task()` — задача агенту.
+- `testgen/explorer.py` — Planner: обход сайта по ссылкам (только GET, без форм; `SKIP` — выход,
+  удаление, файлы), карта в `data/projects/<id>/explore/`, `to_requirements()` для сценариев,
+  `coverage()` — страницы без тестов.
+- `testgen/traffic.py` — XHR/fetch сессии автора: маскирование, HAR в `data/projects/<id>/traffic/`,
+  `mock_spec()` для шага `mock_route`.
+- `testgen/mcp_server.py` — студия как MCP-сервер для IDE (FastMCP): `generate_test`, `run_test`,
+  `run_suite`, `list_failures`, `export_test`, `get_trace` и др.; HTTP на `/mcp` в студии или stdio.
 - `testgen/publisher.py` — публикация в Zephyr Scale через MCP: Claude получает инструменты
   подключения (кроме удаления) и скиллы публикации и заканчивает инструментом `done`; ключ кейса
   хранится в `test["external"]["zephyr"]`, повторная публикация обновляет тот же кейс.
@@ -131,16 +199,23 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
   агента, ожидаемый результат, Gherkin). Лимита на количество нет: сначала компактный план всех
   сценариев, затем детализация параллельными пакетами (`BATCH`, `PARALLEL`) — так число сценариев не
   упирается в `max_tokens` одного ответа. Не возвращай ограничение количеством.
-- `testgen/exporters.py` — экспорт в pytest-playwright и Gherkin.
+- `testgen/exporters.py` — экспорт: pytest-playwright (до `MAX_ALTERNATIVES` локаторов шага через
+  `.or_()`, фикстуры `app_url`/`credentials`/`testdata`/…), Gherkin, проект целиком (`bundle()`:
+  `conftest.py`, `tests/`, `features/`) и API-тесты pytest + httpx по записанному трафику
+  (`to_api_tests()`, без DELETE и чужих сайтов).
 - `testgen/sources.py` — загрузка ТЗ из Jira/Confluence через Atlassian-подключение проекта
   ([mcp-atlassian](https://github.com/sooperset/mcp-atlassian), stdio-процесс на каждый запрос,
   `READ_ONLY_MODE`).
 - `testgen/llm.py` — общий клиент Anthropic и `common_params(stage)` (модель, effort,
   `fallbacks: "default"`; `stage` — настройки этапа проекта, переопределяют модель и effort).
-  Все запросы к Claude должны использовать `common_params()`.
-- `testgen/auth.py` — вход в студию; `testgen/vault.py` — хранилище секретов; `testgen/storage.py` —
-  тесты в `data/projects/<id>/tests/<test>.json` и выбор логина для прогона (свой у теста → проекта →
-  `TESTGEN_*`).
+  Все запросы к Claude должны использовать `common_params()`, системный промпт — через `llm.system()`
+  (точка кэша на tools + system; переживает context editing), ответ — через `llm.track()` (расход
+  токенов: `Usage`, `usage_scope()`).
+- `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256);
+  `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
+  `data/projects/<id>/tests/<test>.json` (теги, карантин, `heal_proposals`, `verify`), `update()` —
+  частичное изменение под блокировкой (тест пишут и сервер, и прогоны), выбор логина для прогона
+  (свой у теста → проекта → `TESTGEN_*`).
 
 ## Секреты и авторизация
 
@@ -159,11 +234,18 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 - **Пароль не попадает к Claude и в артефакты.** Агент видит только плейсхолдеры `{{username}}` и
   `{{password}}` (плюс сам логин); реальное значение подставляется в момент выполнения шага
   (`BrowserSession.expand`). В шагах, экспорте и истории чата пароля быть не должно
-  (`StudioSession._mask`). Экспорт читает значения из `os.environ["TESTGEN_*"]`.
+  (`StudioSession._mask`, в том числе после проверки, взявшей значение со страницы). Экспорт читает
+  значения из `os.environ["TESTGEN_*"]`. В trace пароль заменяется на `***` (`runner.mask_trace`), в
+  записанном трафике — на `{{password}}`, секретные заголовки и поля — на `***` (`traffic.mask_entry`).
+  Проверяется тестом `tests/test_agent_invariants.py`.
+- **Самолечение не меняет тест без человека** в режиме `review` (по умолчанию): ИИ не должен «вылечить»
+  тест под баг.
 - **Никаких необратимых действий.** Системный промпт агента запрещает реальную оплату, заказы,
   отправку сообщений и удаление данных: агент доходит до этой точки, ставит проверку и завершает сценарий.
   Инструменты MCP с удалением (`mcp_hub.access() == "destructive"`) не передаются Claude ни на одном этапе;
   Atlassian работает только на чтение. Скиллы добавляются после правил и не могут их отменить.
+  Planner ходит только по ссылкам (GET) и пропускает выход/удаление; мутации меняют только DOM и
+  ответы запросов в браузере теста; MCP-сервер студии не даёт удалять данные.
 - В режиме Playwright MCP пароль подставляется прямо перед вызовом инструмента и маскируется во всём,
   что вернул сервер (`McpBrowser._mask`).
 - Запросы идут с `fallbacks: "default"`: если классификатор безопасности отклонит запрос, API повторит

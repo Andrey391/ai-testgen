@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Регистрация</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <h1>Регистрация</h1>
+  <form id="reg">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required>
+    <label for="name">Имя</label>
+    <input id="name" name="name" required>
+    <label for="country">Страна</label>
+    <select id="country" name="country">
+      <option value="">—</option>
+      <option value="ru">Россия</option>
+      <option value="kz">Казахстан</option>
+    </select>
+    <label><input type="checkbox" id="agree"> Согласен с правилами</label>
+    <div><button type="submit" id="submit" disabled>Зарегистрироваться</button></div>
+  </form>
+  <div id="result" role="status"></div>
+</main>
+<script>
+const agree = document.getElementById('agree');
+agree.addEventListener('change', () => document.getElementById('submit').disabled = !agree.checked);
+document.getElementById('reg').addEventListener('submit', e => {
+  e.preventDefault();
+  const name = document.getElementById('name').value, email = document.getElementById('email').value;
+  document.getElementById('result').textContent = `Спасибо, ${name}! Письмо отправлено на ${email}`;
+});
+</script>
+</body>
+</html>

@@ -5,3 +5,5 @@ uvicorn[standard]
 pydantic>=2
 mcp>=1.20
 mcp-atlassian>=0.23
+httpx
+Faker
