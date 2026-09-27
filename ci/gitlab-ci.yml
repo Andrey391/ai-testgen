@@ -1,0 +1,36 @@
+# Regression run of AI Test Generator tests in GitLab CI of the APPLICATION under test.
+#
+# Include or copy into .gitlab-ci.yml. Expects the studio's data folder committed under
+# qa/testgen-data (TESTGEN_DATA_DIR) and CI/CD variables TESTGEN_USERNAME, TESTGEN_PASSWORD
+# (masked) and, optionally, ANTHROPIC_API_KEY for self-healing and failure analysis.
+# The job fails when a test outside quarantine fails; the JUnit report is shown in merge requests.
+
+ui-regression:
+  image: mcr.microsoft.com/playwright/python:v1.55.0-noble   # any recent tag: chromium is installed below
+  stage: test
+  variables:
+    TESTGEN_DATA_DIR: "$CI_PROJECT_DIR/qa/testgen-data"
+    TESTGEN_REPO: "https://gitlab.example.com/qa/ai-testgen.git"   # the studio
+    PROJECT: "My project"                                          # studio project name or id
+    TAG: "smoke"                                                   # empty = all tests
+  script:
+    - git clone --depth 1 "$TESTGEN_REPO" .testgen
+    - python -m pip install -r .testgen/requirements.txt
+    - python -m playwright install chromium
+    - cd .testgen
+    - python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"}
+        --junit "$CI_PROJECT_DIR/reports/junit.xml" --allure "$CI_PROJECT_DIR/reports/allure"
+  artifacts:
+    when: always
+    reports:
+      junit: reports/junit.xml
+    paths:
+      - reports/
+      - qa/testgen-data/projects/*/runs/
+    expire_in: 2 weeks
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      variables:
+        TAG: ""

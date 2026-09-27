@@ -7,9 +7,14 @@ HMAC-signed, HttpOnly session cookie. On first start with no users an
 Manage users:  python -m testgen.auth adduser <name>
                python -m testgen.auth deluser <name>
                python -m testgen.auth list
+               python -m testgen.auth token <name> [token name]
 Set TESTGEN_AUTH=off to disable login (single-user local use).
 Anyone who can open the studio may register via the login screen; set
 TESTGEN_SIGNUP=off to allow only accounts created from the CLI.
+
+API tokens let IDE agents use the studio as an MCP server (mcp_server.py) on
+behalf of a user: "tg_<id>_<secret>", only a SHA-256 of the secret is kept in
+secrets/tokens.json. A token carries its user's rights, nothing more.
 """
 from __future__ import annotations
 
@@ -38,6 +43,7 @@ ANONYMOUS = "local"
 
 _USERS = SECRETS / "users.json"
 _KEY = SECRETS / "session.key"
+_TOKENS = SECRETS / "tokens.json"
 _ITERATIONS = 200_000
 # Usernames key per-user files in secrets/ (vault._path), so keep them to the
 # characters it leaves as is: otherwise "a b" and "a_b" would share a file.
@@ -133,6 +139,57 @@ def read_token(token: str | None) -> str | None:
     return username if username in _users() else None
 
 
+# ---------- API tokens (MCP access from IDEs) ----------
+
+def _tokens() -> dict:
+    return json.loads(_TOKENS.read_text("utf-8")) if _TOKENS.exists() else {}
+
+
+def _write_tokens(tokens: dict) -> None:
+    SECRETS.mkdir(parents=True, exist_ok=True)
+    _TOKENS.write_text(json.dumps(tokens, indent=2), "utf-8")
+
+
+def create_api_token(username: str, name: str = "") -> tuple[str, dict]:
+    """-> (the token, shown once; its public record)."""
+    tid, secret = secrets.token_hex(4), secrets.token_urlsafe(24)
+    rec = {"id": tid, "user": username, "name": (name or "IDE").strip()[:60], "created": time.time(),
+           "hash": hashlib.sha256(secret.encode()).hexdigest(), "last_used": None}
+    tokens = _tokens()
+    tokens[tid] = rec
+    _write_tokens(tokens)
+    return f"tg_{tid}_{secret}", {k: v for k, v in rec.items() if k != "hash"}
+
+
+def list_api_tokens(username: str) -> list[dict]:
+    return [{k: v for k, v in r.items() if k != "hash"} for r in _tokens().values() if r["user"] == username]
+
+
+def delete_api_token(username: str, tid: str) -> bool:
+    tokens = _tokens()
+    if tokens.get(tid, {}).get("user") != username:
+        return False
+    del tokens[tid]
+    _write_tokens(tokens)
+    return True
+
+
+def user_for_api_token(token: str | None) -> str | None:
+    m = re.fullmatch(r"tg_([0-9a-f]{8})_([\w-]{20,})", (token or "").strip())
+    if not m:
+        return None
+    tokens = _tokens()
+    rec = tokens.get(m.group(1))
+    if not rec or not hmac.compare_digest(rec["hash"], hashlib.sha256(m.group(2).encode()).hexdigest()):
+        return None
+    if ENABLED and rec["user"] not in _users():
+        return None
+    if not rec.get("last_used") or time.time() - rec["last_used"] > 60:
+        rec["last_used"] = time.time()
+        _write_tokens(tokens)
+    return rec["user"]
+
+
 def _cli(argv: list[str]) -> None:
     cmd, *rest = argv or ["help"]
     if cmd == "adduser" and rest:
@@ -145,6 +202,11 @@ def _cli(argv: list[str]) -> None:
         print("Deleted" if delete_user(rest[0]) else "No such user")
     elif cmd == "list":
         print("\n".join(_users()) or "(no users)")
+    elif cmd == "token" and rest:
+        if ENABLED and rest[0] not in _users():
+            sys.exit(f"No such user: {rest[0]}")
+        token, _ = create_api_token(rest[0], " ".join(rest[1:]) or "CLI")
+        print(f"API token for {rest[0]} (shown once): {token}")
     else:
         print(__doc__)
 

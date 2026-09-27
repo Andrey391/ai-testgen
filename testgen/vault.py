@@ -8,10 +8,12 @@ file-system permissions; do not commit it.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
-SECRETS = Path(__file__).resolve().parent.parent / "secrets"
+# TESTGEN_SECRETS_DIR moves the folder (CI, the studio's own tests).
+SECRETS = Path(os.environ.get("TESTGEN_SECRETS_DIR") or Path(__file__).resolve().parent.parent / "secrets")
 
 
 def _path(kind: str, key: str) -> Path:

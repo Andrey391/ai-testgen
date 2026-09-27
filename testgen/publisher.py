@@ -149,6 +149,7 @@ async def report_run(project: dict, test: dict, report: dict, log=None) -> dict:
     results = [{"n": i + 1, "description": r["description"], "status": r["status"], "error": r["error"],
                 "self_healed": r.get("healed", False)} for i, r in enumerate(report["results"])]
     run = {"test_case_key": key, "passed": report["passed"], "steps_total": len(test["steps"]),
+           "status": report.get("status", ""), "flaky": report.get("flaky", False),
            "results": results, "healed": report.get("healed", 0), "analysis": report.get("analysis"),
            "started": time.strftime("%Y-%m-%d %H:%M", time.localtime(report.get("started", time.time())))}
     task = ("Record this automated run of the test case as a test execution.\n"

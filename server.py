@@ -6,10 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import io
+import json
 import os
+import shutil
 import threading
 import time
-import uuid
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,16 +22,17 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from testgen import (auth, exporters, llm, mcp_hub, pipeline, projects, publisher, scenarios, skills,
-                     sources, storage)
-from testgen.agent import StudioSession, has_assertion
+from testgen import (auth, checks, explorer, exporters, llm, mcp_hub, mcp_server, mutations, pipeline, projects,
+                     publisher, reports, runs, scenarios, skills, sources, storage, suite, traffic)
+from testgen.agent import StudioSession
 from testgen.steps import ALL_ACTIONS, new_step
 
 ROOT = Path(__file__).resolve().parent
+PORT = int(os.environ.get("PORT", "8765"))
 
 # Playwright objects are bound to the event loop that created them, so all
 # browser work runs on one dedicated background loop; the web server just
-# submits coroutines to it. MCP sessions and pipeline jobs live there too.
+# submits coroutines to it. MCP sessions, pipeline jobs and suite runs live there too.
 WORKER = asyncio.new_event_loop()
 threading.Thread(target=WORKER.run_forever, daemon=True, name="browser-worker").start()
 
@@ -43,16 +48,36 @@ async def call(coro):
 
 
 SESSIONS: dict[str, StudioSession] = {}
-RUNS: dict[str, dict] = {}
 
 projects.ensure_default()
-app = FastAPI(title="AI Test Generator")
+
+# The studio as an MCP server for IDE agents, at /mcp (token auth in require_login).
+MCP = mcp_server.build(mcp_server.Backend(submit=submit, sessions=SESSIONS, studio_url=f"http://127.0.0.1:{PORT}"))
+MCP_APP = MCP.streamable_http_app()
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    async with MCP.session_manager.run():
+        yield
+
+
+app = FastAPI(title="AI Test Generator", lifespan=lifespan)
 
 PUBLIC = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout"}
 
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+    if request.url.path.rstrip("/") == "/mcp":
+        # IDE agents authenticate with an API token instead of the session cookie.
+        header = request.headers.get("authorization", "")
+        user = (auth.user_for_api_token(header.removeprefix("Bearer ").strip()) if auth.ENABLED
+                else auth.ANONYMOUS)
+        if not user:
+            return JSONResponse({"detail": "Нужен API-токен студии: Authorization: Bearer <token>"}, status_code=401)
+        mcp_server.CURRENT_USER.set(user)
+        return await call_next(request)
     user = auth.read_token(request.cookies.get(auth.COOKIE)) if auth.ENABLED else auth.ANONYMOUS
     request.state.user = user
     if not user and request.url.path not in PUBLIC:
@@ -63,6 +88,12 @@ async def require_login(request: Request, call_next):
 def require_admin(request: Request) -> None:
     if not auth.is_admin(request.state.user):
         raise HTTPException(403, "Это может сделать только администратор студии")
+
+
+def _attachment(name: str, ext: str, inline: bool = False) -> dict:
+    # Names are often non-ASCII (e.g. Cyrillic): HTTP headers need RFC 5987 encoding.
+    kind = "inline" if inline else "attachment"
+    return {"Content-Disposition": f"{kind}; filename=\"file.{ext}\"; filename*=UTF-8''{quote(name)}"}
 
 
 # ---------- Studio login ----------
@@ -111,7 +142,28 @@ async def logout():
 async def me(request: Request):
     return {"user": request.state.user, "auth_enabled": auth.ENABLED, "signup": auth.SIGNUP,
             "is_admin": bool(request.state.user) and auth.is_admin(request.state.user),
-            "model": llm.MODEL, "effort": llm.EFFORT}
+            "model": llm.MODEL, "effort": llm.EFFORT, "prompt_cache": llm.PROMPT_CACHE,
+            "mcp_url": f"{request.base_url}".rstrip("/") + "/mcp"}
+
+
+class TokenBody(BaseModel):
+    name: str = ""
+
+
+@app.get("/api/auth/tokens")
+async def list_tokens(request: Request):
+    return auth.list_api_tokens(request.state.user)
+
+
+@app.post("/api/auth/tokens")
+async def create_token(body: TokenBody, request: Request):
+    token, rec = auth.create_api_token(request.state.user, body.name)
+    return rec | {"token": token}
+
+
+@app.delete("/api/auth/tokens/{tid}")
+async def delete_token(tid: str, request: Request):
+    return {"ok": auth.delete_api_token(request.state.user, tid)}
 
 
 # ---------- Projects ----------
@@ -188,6 +240,27 @@ async def set_project_credentials(pid: str, body: Credentials):
     project(pid)
     projects.set_app_credentials(pid, body.username, body.password)
     return {"ok": True}
+
+
+@app.get("/api/projects/{pid}/tags")
+async def project_tags(pid: str):
+    project(pid)
+    return sorted({tag for t in storage.all_tests(pid) for tag in t.get("tags") or []})
+
+
+@app.get("/api/projects/{pid}/export")
+async def export_project(pid: str, tag: str = ""):
+    """All (or tagged) tests as a pytest project in a zip: conftest.py, tests/, features/."""
+    p = project(pid)
+    tests = storage.select(pid, tags=[tag] if tag else None)
+    if not tests:
+        raise HTTPException(404, "Нет тестов для экспорта")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for path, text in exporters.bundle(p, tests, p["pipeline"]["run"]["a11y_impact"]).items():
+            z.writestr(path, text)
+    name = "".join(c if c.isalnum() else "_" for c in p["name"]).lower() or "tests"
+    return Response(buf.getvalue(), media_type="application/zip", headers=_attachment(f"{name}_tests.zip", "zip"))
 
 
 # ---------- Project MCP connections ----------
@@ -374,7 +447,7 @@ async def _guard(s: StudioSession, coro) -> None:
     except Exception as e:
         s.status = "error"
         s.autopilot = False
-        text = str(e) if isinstance(e, mcp_hub.McpError) else llm.api_error_text(e)
+        text = str(e) if isinstance(e, (mcp_hub.McpError, ValueError)) else llm.api_error_text(e)
         s.chat.append({"role": "system", "text": text})
 
 
@@ -390,6 +463,17 @@ class NewSession(BaseModel):
     password: str = ""
 
 
+def _start_session(s: StudioSession, autopilot: bool) -> None:
+    SESSIONS[s.id] = s
+
+    async def boot():
+        await _guard(s, s.start())
+        if autopilot and s.status != "error":
+            s.set_autopilot(True)
+
+    submit(boot())
+
+
 @app.post("/api/sessions")
 async def create_session(body: NewSession):
     p = project(body.project_id)
@@ -400,14 +484,7 @@ async def create_session(body: NewSession):
     engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
                       engine=engine)
-    SESSIONS[s.id] = s
-
-    async def boot():
-        await _guard(s, s.start())
-        if body.autopilot and s.status != "error":
-            s.set_autopilot(True)
-
-    submit(boot())
+    _start_session(s, body.autopilot)
     return {"id": s.id}
 
 
@@ -517,23 +594,7 @@ async def set_steps(sid: str, body: StepsBody):
 
 @app.post("/api/sessions/{sid}/save")
 async def save_session(sid: str):
-    s = sess(sid)
-    t = s.to_test()
-    old = storage.load(t["id"])
-    for key in ("external", "last_run", "priority", "scenario_type", "source"):
-        if old and key in old:
-            t[key] = old[key]
-    storage.save(t)
-    s.test_id = t["id"]
-    # A login typed for this session (not the project's) stays with the test.
-    if s.credentials and s.credentials != projects.app_credentials(s.project_id):
-        storage.set_own_credentials(t, s.credentials)
-    warnings = []
-    dropped = len(s.steps) - len(t["steps"])
-    if dropped:
-        warnings.append(f"Упавшие шаги не сохранены в тест: {dropped}")
-    if not has_assertion(t["steps"]):
-        warnings.append("В тесте нет ни одной проверки: прогон будет успешным, что бы ни показало приложение")
+    t, warnings = sess(sid).save()
     return t | {"warnings": warnings}
 
 
@@ -555,9 +616,9 @@ def test_or_404(tid: str) -> dict:
 
 
 @app.get("/api/tests")
-async def tests(project_id: str):
+async def tests(project_id: str, tag: str = ""):
     project(project_id)
-    return storage.list_tests(project_id)
+    return storage.list_tests(project_id, tag)
 
 
 @app.get("/api/tests/{tid}")
@@ -568,8 +629,28 @@ async def get_test(tid: str):
 @app.put("/api/tests/{tid}")
 async def update_test(tid: str, body: dict):
     old = test_or_404(tid)
-    body["id"], body["project_id"] = tid, old["project_id"]
-    return storage.save(body)
+    body.pop("id", None)
+    body.pop("project_id", None)
+    return storage.update(tid, lambda t: t.update(body)) or old
+
+
+class MetaBody(BaseModel):
+    tags: list[str] | None = None
+    quarantine: bool | None = None
+    reason: str = ""
+
+
+@app.patch("/api/tests/{tid}/meta")
+async def test_meta(tid: str, body: MetaBody, request: Request):
+    test_or_404(tid)
+
+    def change(t: dict) -> None:
+        if body.tags is not None:
+            t["tags"] = storage.normalize_tags(body.tags)
+        if body.quarantine is not None:
+            t["quarantine"] = {"on": True, "by": request.state.user, "at": time.time(),
+                               "reason": body.reason.strip() or "Вручную"} if body.quarantine else {"on": False}
+    return storage.update(tid, change)
 
 
 @app.delete("/api/tests/{tid}")
@@ -597,16 +678,57 @@ async def set_credentials(tid: str, body: Credentials):
 @app.get("/api/tests/{tid}/export")
 async def export(tid: str, format: str = "playwright"):
     t = test_or_404(tid)
-    p = projects.get(t["project_id"]) or {}
-    if format == "gherkin":
-        text, ext = exporters.to_gherkin(t | {"project": p.get("name", "")}), "feature"
-    else:
-        text, ext = exporters.to_playwright(t), "py"
+    p = projects.get(t["project_id"]) or {"pipeline": projects.normalize_pipeline(None)}
     name = "".join(c if c.isalnum() else "_" for c in t["name"]).lower()
-    fname = f"test_{name}.{ext}" if ext == "py" else f"{name}.{ext}"
-    # Test names are often non-ASCII (e.g. Cyrillic): HTTP headers need RFC 5987 encoding.
-    disposition = f"inline; filename=\"test.{ext}\"; filename*=UTF-8''{quote(fname)}"
-    return PlainTextResponse(text, headers={"Content-Disposition": disposition})
+    if format == "gherkin":
+        text, fname = exporters.to_gherkin(t | {"project": p.get("name", "")}), f"{name}.feature"
+    elif format == "api":
+        text, fname = exporters.to_api_tests(t, traffic.load(t["project_id"], tid)), f"test_{name}_api.py"
+    elif format == "har":
+        har = traffic.load_har(t["project_id"], tid)
+        if not har:
+            raise HTTPException(404, "Трафик этого теста не записан")
+        return JSONResponse(har, headers=_attachment(f"{name}.har", "har"))
+    else:
+        text, fname = exporters.to_playwright(t, p["pipeline"]["run"]["a11y_impact"]), f"test_{name}.py"
+    return PlainTextResponse(text, headers=_attachment(fname, fname.rsplit(".", 1)[1], inline=True))
+
+
+@app.get("/api/tests/{tid}/traffic")
+async def test_traffic(tid: str):
+    t = test_or_404(tid)
+    return [{"index": i, "method": e["method"], "url": e["url"], "status": e["status"], "mime": e["mime"],
+             "step": e.get("step", -1), "third_party": e.get("third_party", False), "size": len(e["body"] or "")}
+            for i, e in enumerate(traffic.load(t["project_id"], tid))]
+
+
+class MockBody(BaseModel):
+    index: int
+
+
+@app.post("/api/tests/{tid}/mock")
+async def add_mock(tid: str, body: MockBody):
+    """Answer a recorded request with its recorded response in every run (mock_route step)."""
+    t = test_or_404(tid)
+    entries = traffic.load(t["project_id"], tid)
+    if not 0 <= body.index < len(entries):
+        raise HTTPException(404, "Запрос не найден")
+    e = entries[body.index]
+    spec = traffic.mock_spec(e)
+    step = new_step("mock_route", f"Подменить ответ {e['method']} {spec['url']} записанным ({e['status']})",
+                    json.dumps(spec, ensure_ascii=False), source="manual")
+
+    def change(t: dict) -> None:
+        n = sum(1 for s in t["steps"] if s["action"] == "mock_route")   # mocks go first, in order
+        t["steps"].insert(n, step)
+    return storage.update(tid, change)
+
+
+def _run_request(t: dict, headless: bool | None, request: Request) -> dict:
+    p = project(t["project_id"])
+    run = runs.new(t, "manual", user=request.state.user)
+    submit(pipeline.run_and_record(p, t, headless=headless, trigger="manual", user=request.state.user, run=run))
+    return run
 
 
 class RunBody(BaseModel):
@@ -614,37 +736,114 @@ class RunBody(BaseModel):
 
 
 @app.post("/api/tests/{tid}/run")
-async def run(tid: str, body: RunBody):
+async def run(tid: str, body: RunBody, request: Request):
+    return {"id": _run_request(test_or_404(tid), body.headless, request)["id"]}
+
+
+@app.get("/api/tests/{tid}/runs")
+async def test_runs(tid: str):
     t = test_or_404(tid)
-    p = project(t["project_id"])
-    rid = uuid.uuid4().hex[:10]
-    RUNS[rid] = {"id": rid, "test_id": tid, "status": "running", "report": None}
+    return runs.list_for_test(t["project_id"], tid)
 
-    async def progress(report):
-        RUNS[rid]["report"] = report
 
-    async def go():
-        try:
-            report = await pipeline.run_and_record(p, t, headless=body.headless, on_progress=progress)
-            RUNS[rid].update(report=report, status="passed" if report["passed"] else "failed")
-        except Exception as e:
-            RUNS[rid].update(status="error", error=llm.api_error_text(e))
-
-    submit(go())
-    return {"id": rid}
+def run_or_404(rid: str) -> dict:
+    r = runs.get(rid)
+    if not r:
+        raise HTTPException(404, "Прогон не найден")
+    return r
 
 
 @app.get("/api/runs/{rid}")
 async def get_run(rid: str):
-    r = RUNS.get(rid)
-    if not r:
-        raise HTTPException(404)
-    if not r.get("report"):
-        return r
-    # Screenshots stay on the server: the UI polls this every second.
-    report = r["report"] | {"results": [{k: v for k, v in x.items() if k != "screenshot"}
-                                        for x in r["report"]["results"]]}
-    return r | {"report": report}
+    # Screenshots stay on the server as files: the UI polls this every second.
+    return runs.public(run_or_404(rid))
+
+
+@app.get("/api/runs/{rid}/files/{name}")
+async def run_file(rid: str, name: str):
+    f = runs.file(run_or_404(rid), name)
+    if not f:
+        raise HTTPException(404, "Файл не найден")
+    if f.suffix == ".zip":
+        return FileResponse(f, media_type="application/zip", headers=_attachment(f"{rid}-{name}", "zip"))
+    return FileResponse(f, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.post("/api/runs/{rid}/baseline/{step_id}")
+async def accept_baseline(rid: str, step_id: str):
+    """The run's screenshot of a visual check becomes its new baseline."""
+    r = run_or_404(rid)
+    results = [x for a in r.get("attempts") or [] for x in a["results"]] + (r.get("results") or [])
+    v = next((((x.get("details") or {}).get("visual") or {}) for x in results
+              if x["id"] == step_id and ((x.get("details") or {}).get("visual") or {}).get("actual")), None)
+    f = runs.file(r, v["actual"]) if v else None
+    if not f:
+        raise HTTPException(404, "У этого шага нет снимка для эталона")
+    dest = checks.baseline_file(r["project_id"], r["test_id"], step_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(f, dest)
+    return {"ok": True}
+
+
+@app.get("/api/tests/{tid}/baselines/{step_id}")
+async def baseline_image(tid: str, step_id: str):
+    t = test_or_404(tid)
+    f = checks.baseline_file(t["project_id"], tid, step_id)
+    if not f.exists():
+        raise HTTPException(404, "Эталона нет: он создаётся при первом прогоне")
+    return FileResponse(f, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/tests/{tid}/proposals/{prop_id}/{decision}")
+async def heal_decision(tid: str, prop_id: str, decision: str, request: Request):
+    """Review of self-healing: accept the new locator, or reject it (never proposed again)."""
+    if decision not in ("accept", "reject"):
+        raise HTTPException(400, "accept или reject")
+    t = test_or_404(tid)
+    if not any(p["id"] == prop_id for p in t.get("heal_proposals") or []):
+        raise HTTPException(404, "Предложение не найдено")
+
+    def change(t: dict) -> None:
+        p = next(p for p in t["heal_proposals"] if p["id"] == prop_id)
+        t["heal_proposals"] = [x for x in t["heal_proposals"] if x["id"] != prop_id]
+        step = next((s for s in t["steps"] if s["id"] == p["step_id"]), None)
+        if not step:
+            return
+        if decision == "accept":
+            step["locator"], step["healed"] = p["new"], True
+        else:
+            step["heal_rejected"] = ((step.get("heal_rejected") or []) + [p["new"]])[-5:]
+        t.setdefault("heal_log", []).append({"at": time.time(), "by": request.state.user, "decision": decision,
+                                             "step_id": p["step_id"], "old": p["old"], "new": p["new"]})
+        t["heal_log"] = t["heal_log"][-50:]
+    return storage.update(tid, change)
+
+
+@app.post("/api/tests/{tid}/verify")
+async def verify_test(tid: str):
+    """Mutation testing of the test's assertions (runs in the background)."""
+    t = test_or_404(tid)
+    if (t.get("verify") or {}).get("status") == "running" and time.time() - t["verify"].get("at", 0) < 1800:
+        raise HTTPException(409, "Проверка уже идёт")
+    p = project(t["project_id"])
+    storage.update(tid, lambda x: x.update(verify={"status": "running", "at": time.time()}))
+    submit(mutations.verify(p, t))
+    return {"ok": True}
+
+
+@app.post("/api/tests/{tid}/strengthen")
+async def strengthen(tid: str, request: Request):
+    """Open a Studio session that replays the test and asks the agent to add the missing checks."""
+    t = test_or_404(tid)
+    v = t.get("verify") or {}
+    if not v.get("weak"):
+        raise HTTPException(400, "Сначала проверьте тест мутациями: усиливать нечего")
+    p = project(t["project_id"])
+    s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=True,
+                      credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v))
+    s.test_id = tid
+    _start_session(s, autopilot=False)
+    return {"id": s.id}
 
 
 @app.post("/api/tests/{tid}/publish")
@@ -657,8 +856,93 @@ async def publish(tid: str):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
-    storage.save(t)
+    storage.update(tid, lambda x: x.update(external=t.get("external")))
     return res
+
+
+# ---------- Suite runs (regression) ----------
+
+class SuiteBody(BaseModel):
+    tags: list[str] = []
+    test_ids: list[str] = []
+    headless: bool | None = None
+    parallel: int | None = None
+
+
+@app.post("/api/projects/{pid}/runs")
+async def run_suite(pid: str, body: SuiteBody, request: Request):
+    p = project(pid)
+    tags = storage.normalize_tags(body.tags)
+    tests = storage.select(pid, tags=tags, test_ids=body.test_ids)
+    if not tests:
+        raise HTTPException(400, "Нет тестов для прогона" + (f" с тегами {', '.join(tags)}" if tags else ""))
+    s = suite.new(p, tests, tags=tags, trigger="manual", user=request.state.user)
+    submit(suite.run(p, s, tests, headless=body.headless, parallel=body.parallel))
+    return {"id": s["id"]}
+
+
+@app.get("/api/projects/{pid}/suites")
+async def list_suites(pid: str):
+    project(pid)
+    return suite.list_suites(pid)
+
+
+def suite_or_404(sid: str) -> dict:
+    s = suite.get(sid)
+    if not s:
+        raise HTTPException(404, "Прогон набора не найден")
+    return s
+
+
+@app.get("/api/suites/{sid}")
+async def get_suite(sid: str):
+    return suite_or_404(sid)
+
+
+@app.get("/api/suites/{sid}/junit")
+async def suite_junit(sid: str):
+    s = suite_or_404(sid)
+    return Response(reports.junit(s), media_type="application/xml", headers=_attachment(f"junit-{sid}.xml", "xml"))
+
+
+# ---------- Planner: site exploration and coverage ----------
+
+class ExploreBody(BaseModel):
+    url: str = ""
+
+
+@app.post("/api/projects/{pid}/explore")
+async def explore(pid: str, body: ExploreBody):
+    p = project(pid)
+    state = {"id": os.urandom(5).hex(), "project_id": pid, "status": "running", "pages": [], "log": []}
+    explorer.LIVE[state["id"]] = state
+
+    async def go():
+        try:
+            await explorer.explore(p, body.url, log=lambda text: state["log"].append(text), state=state)
+        finally:
+            explorer.LIVE.pop(state["id"], None)
+
+    submit(go())
+    return {"id": state["id"]}
+
+
+@app.get("/api/projects/{pid}/explore/{eid}")
+async def get_explore(pid: str, eid: str):
+    project(pid)
+    r = explorer.get(pid, eid)
+    if not r:
+        raise HTTPException(404, "Исследование не найдено")
+    out = r | {"pages": [{k: pg.get(k) for k in ("url", "title", "depth", "error")} for pg in r["pages"]]}
+    if r["status"] == "done":
+        out["requirements"] = explorer.to_requirements(r)
+    return out
+
+
+@app.get("/api/projects/{pid}/coverage")
+async def coverage(pid: str):
+    project(pid)
+    return explorer.coverage(pid) or {"pages": [], "total": 0, "covered": 0, "at": None}
 
 
 # ---------- Requirements -> scenarios ----------
@@ -699,14 +983,15 @@ class JobBody(BaseModel):
     links: list[str] = []
     text: str = ""
     url: str = ""
+    explore: bool = False
 
 
 @app.post("/api/projects/{pid}/jobs")
 async def start_job(pid: str, body: JobBody, request: Request):
     p = project(pid)
-    if not [l for l in body.links if l.strip()] and not body.text.strip():
-        raise HTTPException(400, "Укажите ссылки на требования или текст")
-    job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user)
+    if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore:
+        raise HTTPException(400, "Укажите ссылки на требования, текст или включите исследование сайта")
+    job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore)
     pipeline.JOBS[job.id] = job
     job.save()
     submit(job.run())
@@ -754,8 +1039,11 @@ async def index():
     return FileResponse(ROOT / "static" / "index.html")
 
 
+# Last: the MCP app's own route is /mcp; everything else was matched above.
+app.mount("/", MCP_APP)
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8765"))
     auth.ensure_admin()
-    print(f"AI Test Generator: http://127.0.0.1:{port}  (model {llm.MODEL}, effort {llm.EFFORT})")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    print(f"AI Test Generator: http://127.0.0.1:{PORT}  (model {llm.MODEL}, effort {llm.EFFORT})")
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

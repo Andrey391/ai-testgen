@@ -1,0 +1,9 @@
+body { font: 16px/1.5 Arial, sans-serif; margin: 0; background: #fff; color: #111; }
+main { max-width: 640px; margin: 30px auto; padding: 0 16px; }
+nav a { display: inline-block; margin-right: 12px; }
+label { display: block; margin-top: 10px; }
+input, select { font: inherit; padding: 4px 6px; }
+button { font: inherit; padding: 6px 14px; margin-top: 12px; background: #2b5bd7; color: #fff; border: 0; border-radius: 4px; }
+button:disabled { background: #999; }
+#msg, #result { margin-top: 12px; font-weight: bold; }
+.banner { height: 60px; background: #2b5bd7; color: #fff; padding: 10px; }
