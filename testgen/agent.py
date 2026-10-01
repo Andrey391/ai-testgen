@@ -1,4 +1,4 @@
-"""The test-authoring agent (CoTester-style "Auto-Pilot").
+"""The test-authoring agent (guarded mode and Auto-Pilot).
 
 Claude sees the live page (screenshot + list of interactive elements), and
 proposes ONE browser action at a time as a tool call. Each executed action is
