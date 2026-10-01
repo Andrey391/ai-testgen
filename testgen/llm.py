@@ -33,8 +33,12 @@ import anthropic
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PROMPT_CACHE = os.environ.get("TESTGEN_PROMPT_CACHE", "on").lower() not in ("off", "0", "false", "no")
 
+# API protocol versions. The API only accepts these features under a dated
+# identifier; they are kept together here and nowhere else.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CONTEXT_BETA = "context-management-2025-06-27"
+CLEAR_TOOL_USES = "clear_tool_uses_20250919"
+
 
 # Capabilities the studio relies on: structured output (scenarios, healing, analysis),
 # screenshots, context editing (the authoring agent).
@@ -99,8 +103,8 @@ class Model:
     def params(self) -> dict:
         """Parameters shared by every request.
 
-        fallbacks="default": if Claude's safety classifiers decline a request, the
-        API re-runs it on Anthropic's recommended fallback model instead of failing.
+        fallbacks="default": if the safety classifiers decline a request, the
+        API re-runs it on the provider's fallback model instead of failing.
         """
         p = {"model": self.name, "fallbacks": "default"}
         if self.effort:
@@ -226,11 +230,11 @@ def api_error_text(e: Exception) -> str:
     if isinstance(e, anthropic.AuthenticationError):
         return NO_KEY
     if isinstance(e, anthropic.RateLimitError):
-        return "Claude API: rate limited, try again in a moment."
+        return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
-        return f"Claude API error {e.status_code}: {e.message}"
+        return f"Ошибка API ИИ {e.status_code}: {e.message}"
     if isinstance(e, anthropic.APIConnectionError):
-        return "Claude API: network error."
+        return "API ИИ: ошибка сети."
     if isinstance(e, TypeError) and "authentication" in str(e):
         # The SDK raises this before sending anything when no credentials are set.
         return NO_KEY

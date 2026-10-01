@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     c = s["summary"]
     print(f"\npassed {c['passed']}, flaky {c['flaky']}, failed {c['failed']}, errors {c['error']}"
           + (f" (in quarantine: {c['quarantined_failed']})" if c["quarantined_failed"] else "")
-          + (f"; Claude API ≈ ${s['usage']['cost_usd']}" if s["usage"].get("requests") and s["usage"].get("cost_usd") else ""))
+          + (f"; LLM ≈ ${s['usage']['cost_usd']}" if s["usage"].get("requests") and s["usage"].get("cost_usd") else ""))
     if args.junit:
         Path(args.junit).parent.mkdir(parents=True, exist_ok=True)
         Path(args.junit).write_text(reports.junit(s), "utf-8")

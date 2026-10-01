@@ -288,7 +288,7 @@ img.shot{max-width:420px}
   <div id="startForm" class="card start">
     <h2>Новый тест-кейс</h2>
     <div class="muted">Опишите сценарий обычным языком — AI-агент пройдёт его в браузере и запишет шаги. Тест сохранится в проект <b class="projName"></b>.</div>
-    <label>URL приложения</label><input id="fUrl" placeholder="https://www.saucedemo.com">
+    <label>URL приложения</label><input id="fUrl" placeholder="https://staging.example.com">
     <label>Название теста</label><input id="fName" placeholder="Покупка товара">
     <label>Сценарий</label>
     <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
@@ -649,7 +649,7 @@ img.shot{max-width:420px}
               </select></div>
             <div><label>Визуальная проверка: допуск, % пикселей</label><input type="number" min="0" max="100" step="0.1" data-p="run.visual_threshold"></div>
           </div>
-          <div class="hint">На ревью: прогон продолжается с найденным Claude элементом, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
+          <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
           <label>Скиллы</label>
           <div class="checks" data-list="run.skills" data-kind="skills" data-stage="run"></div>
           <div class="grid2">
@@ -730,9 +730,9 @@ img.shot{max-width:420px}
       <div data-subpanel="ide" class="hidden">
         <div class="card">
           <h3>Студия как MCP-сервер</h3>
-          <div class="muted">Агенты в IDE — Claude Code, GitHub Copilot, Cursor — могут генерировать и запускать тесты, читать падения и забирать код тестов и trace, не открывая студию. Инструменты: <code>generate_test</code>, <code>run_test</code>, <code>run_suite</code>, <code>list_failures</code>, <code>export_test</code>, <code>get_trace</code> и другие. Токен действует с вашими правами; удалять данные через MCP нельзя.</div>
+          <div class="muted">Агенты в IDE могут генерировать и запускать тесты, читать падения и забирать код тестов и trace, не открывая студию. Инструменты: <code>generate_test</code>, <code>run_test</code>, <code>run_suite</code>, <code>list_failures</code>, <code>export_test</code>, <code>get_trace</code> и другие. Токен действует с вашими правами; удалять данные через MCP нельзя.</div>
           <div class="row" style="margin-top:10px">
-            <input id="tokName" placeholder="Название токена, например «Claude Code на ноутбуке»" class="grow">
+            <input id="tokName" placeholder="Название токена, например «IDE на ноутбуке»" class="grow">
             <button class="btn primary" id="tokCreate">Создать токен</button>
           </div>
           <div id="tokNew" class="hidden" style="margin-top:10px"></div>
@@ -910,7 +910,7 @@ function render() {
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
   $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` + usageText(s.usage);
-  $('#stText').title = s.usage?.requests ? `Запросов к Claude: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '';
+  $('#stText').title = s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '';
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
@@ -1203,7 +1203,7 @@ function detailsHtml(r, x, t) {
   if (vis?.baseline_created) html += '<div class="hint">Визуальная проверка: эталон сохранён при этом прогоне.</div>';
   else if (vis && (vis.diff || vis.actual)) {
     html += `<div class="hint">Визуальная проверка: отличается ${(vis.ratio * 100).toFixed(2)}% пикселей (допуск ${vis.threshold}%)` +
-      (vis.verdict?.verdict ? ` · Claude: <b>${esc(VISUAL_VERDICT[vis.verdict.verdict] || vis.verdict.verdict)}</b> — ${esc(vis.verdict.summary)}` : '') + '</div>' +
+      (vis.verdict?.verdict ? ` · ИИ: <b>${esc(VISUAL_VERDICT[vis.verdict.verdict] || vis.verdict.verdict)}</b> — ${esc(vis.verdict.summary)}` : '') + '</div>' +
       `<div class="imgs"><figure><img src="/api/tests/${r.test_id}/baselines/${x.id}?t=${Date.now()}" alt=""><figcaption>эталон</figcaption></figure>` +
       `<figure><img src="/api/runs/${r.id}/files/${vis.actual}" alt=""><figcaption>сейчас</figcaption></figure>` +
       (vis.diff ? `<figure><img src="/api/runs/${r.id}/files/${vis.diff}" alt=""><figcaption>различия</figcaption></figure>` : '') + '</div>' +
@@ -1237,7 +1237,7 @@ function renderRun(r, t) {
   if (r.analysis) html += `<div class="card" style="margin-top:10px"><b>Анализ падения: ${esc(VERDICT[r.analysis.verdict] || r.analysis.verdict)}</b>
       <div>${esc(r.analysis.summary)}</div>${r.analysis.suggestion ? `<div class="muted" style="margin-top:4px">${esc(r.analysis.suggestion)}</div>` : ''}</div>`;
   const traces = attempts.filter(a => a.trace).map(a => a.trace);
-  if (traces.length) html += `<div class="hint">Playwright trace: ${traces.map(n => `<a href="/api/runs/${r.id}/files/${n}">${esc(n)}</a>`).join(', ')} — откройте на <a href="https://trace.playwright.dev" target="_blank" rel="noopener">trace.playwright.dev</a> или <code>npx playwright show-trace &lt;файл&gt;</code>. Пароль в trace замаскирован.</div>`;
+  if (traces.length) html += `<div class="hint">Playwright trace: ${traces.map(n => `<a href="/api/runs/${r.id}/files/${n}">${esc(n)}</a>`).join(', ')} — откройте командой <code>playwright show-trace &lt;файл&gt;</code>. Пароль в trace замаскирован.</div>`;
   const events = r.events || [];
   if (events.length) html += `<details class="opt"><summary>События браузера: ${events.length} (ошибки консоли, запросы 4xx/5xx)</summary><div class="events">` +
     events.map(e => `<div><span class="badge ${e.type === 'http' ? 'warn' : 'bad'}">${esc(e.type)}</span> шаг ${e.step + 1}: ${esc(e.text)}</div>`).join('') + '</div></details>';
@@ -1270,14 +1270,14 @@ async function openTest(id, quiet) {
   html += `<div class="sub"><b>Ревью самолечения</b>`;
   html += props.length ? props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
       <div><b>Шаг ${stepN(p.step_id)}:</b> ${esc(p.description)}</div>
-      <div class="hint">Claude: ${esc(p.reason)}</div>
+      <div class="hint">ИИ: ${esc(p.reason)}</div>
       <div class="grid2"><div><label>Было</label><div class="loc">${p.old.map(c => esc(candText(c))).join('<br>') || '—'}</div></div>
         <div><label>Станет</label><div class="loc">${p.new.map(c => esc(candText(c))).join('<br>')}</div></div></div>
       ${p.screenshot ? `<img class="shot" style="margin-top:6px" src="/api/runs/${p.run_id}/files/${p.screenshot}" alt="Найденный элемент обведён">` : ''}
       <div class="row" style="margin-top:8px"><span class="muted grow" style="font-size:12px">прогон ${fmtTime(p.at)}</span>
         <button class="btn" onclick="healDecision('${t.id}', '${p.id}', 'reject')">Отклонить</button>
         <button class="btn primary" onclick="healDecision('${t.id}', '${p.id}', 'accept')">Принять</button></div></div>`).join('')
-    : '<div class="hint">Нет предложений. Когда сломанный локатор чинит Claude, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
+    : '<div class="hint">Нет предложений. Когда сломанный локатор чинит ИИ, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
   html += '</div>';
 
   const v = t.verify;
@@ -1513,7 +1513,7 @@ function renderJob() {
   box.classList.remove('hidden');
   const live = ['running', 'awaiting_selection'].includes(j.status);
   let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
-    ${j.usage?.requests ? `<span class="muted" style="font-size:12px">Claude${usageText(j.usage)}</span>` : ''}
+    ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}</div>
     <div class="flow">${flowHtml(live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '')}</div>`;
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
@@ -1924,7 +1924,7 @@ function connCard(c, wizard) {
       : `<input data-f="${f.key}" ${f.secret ? 'type="password" autocomplete="new-password"' : ''} value="${esc(val)}" placeholder="${esc(ph)}" ${locked ? 'disabled' : ''}>`;
     return `<div><label>${esc(f.label)}${f.required ? ' *' : ''}${f.secret && set ? ` · <a href="#" onclick="clearSecret('${c.id}','${f.key}');return false">очистить</a>` : ''}</label>${input}</div>`;
   }).join('');
-  const cmd = c.command || [pr.command, ...(pr.args || [])].filter(Boolean).join(' ') || (c.preset === 'atlassian' ? 'mcp-atlassian' : '');
+  const cmd = c.command || [pr.command, ...(pr.args || [])].filter(Boolean).join(' ') || (pr.command_env ? `не задана, укажите ${pr.command_env}` : '');
   const admin = ME.is_admin ? `<details class="opt"><summary>Запуск сервера (администратор)</summary>
       <div class="grid2">
         <div><label>Транспорт</label><select data-a="transport"><option value="stdio">stdio (команда)</option><option value="http" ${c.transport === 'http' ? 'selected' : ''}>HTTP (streamable)</option></select></div>
@@ -1992,7 +1992,7 @@ async function delConn(cid) {
 }
 async function testConn(cid, btn) {
   const card = btn.closest('[data-conn-id]');
-  btn.disabled = true; card.querySelector('[data-msg]').textContent = 'Запуск MCP-сервера… (первый запуск через npx может занять минуту)';
+  btn.disabled = true; card.querySelector('[data-msg]').textContent = 'Запуск MCP-сервера… (первый запуск может занять минуту)';
   try {
     const r = await api('POST', `/api/projects/${PID}/connections/${cid}/test`);
     card.querySelector('[data-msg]').innerHTML = `<span class="ok">Работает</span> · инструментов: ${r.tools.length}`;

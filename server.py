@@ -323,8 +323,9 @@ async def export_project(pid: str, tag: str = ""):
 # ---------- Project MCP connections ----------
 
 @app.get("/api/mcp/presets")
-async def mcp_presets():
-    return mcp_hub.presets_public()
+async def mcp_presets(request: Request):
+    # Launch commands come from the server's environment: only admins see them.
+    return mcp_hub.presets_public(with_commands=bool(request.state.user) and auth.is_admin(request.state.user))
 
 
 class NewConnection(BaseModel):

@@ -1,6 +1,6 @@
-"""The test-authoring agent (CoTester-style "Auto-Pilot").
+"""The test-authoring agent ("Auto-Pilot").
 
-Claude sees the live page (screenshot + list of interactive elements), and
+The LLM sees the live page (screenshot + list of interactive elements), and
 proposes ONE browser action at a time as a tool call. Each executed action is
 recorded as a test step. In guarded mode every proposed step waits for the
 human to press Continue / Reject; in autopilot mode steps run back to back.
@@ -151,7 +151,7 @@ def has_assertion(steps: list[dict]) -> bool:
 
 
 class StudioSession:
-    """One authoring session: a browser, a conversation with Claude, the steps.
+    """One authoring session: a browser, a conversation with the LLM, the steps.
 
     `project` is the project dict: its pipeline "authoring" stage sets the browser
     engine (built-in Playwright or Playwright MCP), skills, extra MCP tools,
@@ -173,16 +173,16 @@ class StudioSession:
         self.headless = headless
         self.system = SYSTEM_PROMPT + skills.prompt(self.project_id, self.cfg["skills"])
         self.tools = [t for t in TOOLS if self.engine == "builtin" or t["name"] not in BUILTIN_ONLY]
-        # {"username", "password"} for the app under test; the password never goes to Claude.
+        # {"username", "password"} for the app under test; the password never goes to the LLM.
         self.credentials = {k: v for k, v in (credentials or {}).items() if v}
         self.autopilot = False
         self.status = "starting"   # starting|thinking|awaiting_approval|executing|idle|done|error
         self.steps: list[dict] = []
         self.chat: list[dict] = []          # what the UI shows
-        self.messages: list[dict] = []      # Claude API history
+        self.messages: list[dict] = []      # LLM conversation history
         self.pending: dict | None = None    # proposed tool call awaiting approval
         self.unanswered: list[dict] = []    # tool_results not yet sent back
-        self.notes: list[str] = []          # manual actions to tell Claude about
+        self.notes: list[str] = []          # manual actions to tell the LLM about
         self.summary = ""
         self.finish_status = ""             # passed|failed|blocked from the agent's finish
         self.screenshot = ""
@@ -533,7 +533,7 @@ class StudioSession:
                     betas=[llm.FALLBACK_BETA, llm.CONTEXT_BETA],
                     # Old screenshots/snapshots are useless once the page moved on.
                     context_management={"edits": [{
-                        "type": "clear_tool_uses_20250919",
+                        "type": llm.CLEAR_TOOL_USES,
                         "trigger": {"type": "input_tokens", "value": 40000},
                         "keep": {"type": "tool_uses", "value": 4},
                         "clear_at_least": {"type": "input_tokens", "value": 8000},
@@ -551,7 +551,7 @@ class StudioSession:
             self.messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason == "refusal":
                 self.status = "error"
-                self._say("system", "The model declined this request.")
+                self._say("system", "ИИ отклонил этот запрос.")
                 return
 
             for block in resp.content:

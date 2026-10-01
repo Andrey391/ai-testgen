@@ -3,8 +3,10 @@
   "configurations": [
     {
       "name": "studio",
-      "runtimeExecutable": "C:\\Users\\Andrey\\AppData\\Local\\aitestgen\\venv\\Scripts\\python.exe",
+      "runtimeExecutable": "cmd",
       "runtimeArgs": [
+        "/c",
+        "%LOCALAPPDATA%\\aitestgen\\venv\\Scripts\\python.exe",
         "server.py"
       ],
       "env": {
@@ -15,8 +17,10 @@
     },
     {
       "name": "stand",
-      "runtimeExecutable": "C:\\Users\\Andrey\\AppData\\Local\\aitestgen\\venv\\Scripts\\python.exe",
+      "runtimeExecutable": "cmd",
       "runtimeArgs": [
+        "/c",
+        "%LOCALAPPDATA%\\aitestgen\\venv\\Scripts\\python.exe",
         "tests/stand.py"
       ],
       "port": 8780

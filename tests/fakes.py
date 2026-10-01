@@ -1,4 +1,4 @@
-"""A scripted stand-in for the Claude API: tests run without API calls or costs.
+"""A scripted stand-in for the LLM API: tests run without API calls or costs.
 
 `FakeClient(script)`: every `beta.messages.create/parse` call is recorded in
 `calls` and answered by `script(kind, kwargs)` with a `Resp`; `models.list()` returns

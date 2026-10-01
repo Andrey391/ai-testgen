@@ -1,7 +1,7 @@
 """Publishing to a test management system (Zephyr Scale) through its MCP server.
 
 Community Zephyr MCP servers differ in tool names and arguments, so instead of
-hard-coding one API Claude gets the connection's tools (everything except
+hard-coding one API the LLM gets the connection's tools (everything except
 delete/remove tools) plus the "publish" skills, and drives them itself. It ends
 with the `done` tool, which reports the key of the created/updated object.
 

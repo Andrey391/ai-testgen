@@ -1,5 +1,5 @@
-"""The authoring agent with a scripted Claude, and the invariants of CLAUDE.md:
-the password never reaches Claude or artifacts; destructive MCP tools are never offered."""
+"""The authoring agent with a scripted LLM, and the invariants of CLAUDE.md:
+the password never reaches the LLM or artifacts; destructive MCP tools are never offered."""
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +16,7 @@ from testgen.steps import new_step
 
 
 def _agent(plan):
-    """A fake Claude that walks through `plan`: (tool name, {input}, element name for the ref or None)."""
+    """A fake LLM that walks through `plan`: (tool name, {input}, element name for the ref or None)."""
     state = {"i": 0}
 
     def script(kind, kw):
@@ -83,7 +83,7 @@ def test_password_never_reaches_claude_or_artifacts(stand, project, fake_llm):
     assert test["steps"][2]["value"] == "{{password}}" and test["steps"][1]["value"] == "{{username}}"
     sent = dump([kw for _, kw in fake_llm.calls])
     everywhere = {
-        "requests to Claude": sent,
+        "requests to the LLM": sent,
         "steps": json.dumps(test, ensure_ascii=False),
         "chat": json.dumps(s.chat, ensure_ascii=False),
         "history": dump(s.messages),
@@ -95,13 +95,13 @@ def test_password_never_reaches_claude_or_artifacts(stand, project, fake_llm):
     for where, blob in everywhere.items():
         assert PASSWORD not in blob, f"password leaked into {where}"
     assert "{{password}}" in everywhere["traffic"]         # the login request was recorded, masked
-    assert USERNAME in sent                                 # the login itself may be shown to Claude
+    assert USERNAME in sent                                 # the login itself may be shown to the LLM
 
     # Caching: tools + system behind an explicit breakpoint, plus automatic caching of the conversation.
     kw = fake_llm.calls[0][1]
     assert kw["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert kw["cache_control"] == {"type": "ephemeral"}
-    assert kw["context_management"]["edits"][0]["type"] == "clear_tool_uses_20250919"
+    assert kw["context_management"]["edits"][0]["type"] == llm.CLEAR_TOOL_USES
     assert test["authoring_usage"]["requests"] == len(fake_llm.calls)
     assert test["authoring_usage"]["cache_read_input_tokens"] > 0 and test["authoring_usage"]["cost_usd"] > 0
 

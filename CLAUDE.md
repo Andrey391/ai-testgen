@@ -44,8 +44,9 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python server.py   # http://127.0.0.1:8765
 ```
 
-Для подключений Zephyr Scale (`mcp-zephyr-scale`) и Playwright MCP (`@playwright/mcp`) нужен Node.js:
-они запускаются через `npx` при первом использовании. Для локального запуска из Claude Code есть
+Команды запуска MCP-серверов Zephyr Scale и Playwright MCP задаются в `TESTGEN_ZEPHYR_MCP` и
+`TESTGEN_PLAYWRIGHT_MCP` (или администратором в настройках подключения): студия не скачивает пакеты
+сама. Для локального запуска из Claude Code есть
 `.claude/launch.json` (конфигурация `studio`, `TESTGEN_AUTH=off`, свободный порт).
 
 Управление пользователями студии:
@@ -89,13 +90,15 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 - `TESTGEN_ADMINS` — администраторы студии через запятую (по умолчанию `admin`): только они задают
   команды, аргументы и переменные окружения MCP-подключений, создают подключения «Другой MCP-сервер»
   и удаляют проекты. При `TESTGEN_AUTH=off` администратор — любой.
-- `TESTGEN_ATLASSIAN_MCP` — своя команда запуска MCP-сервера Atlassian
-  (по умолчанию `mcp-atlassian` из venv, иначе `uvx mcp-atlassian`).
+- `TESTGEN_ATLASSIAN_MCP`, `TESTGEN_ZEPHYR_MCP`, `TESTGEN_PLAYWRIGHT_MCP` — команды запуска
+  MCP-серверов пресетов (Atlassian без неё ищется в venv из `requirements.txt`). Не задана и не
+  задана в подключении — подключение сообщает, что команды нет; студия ничего не скачивает сама.
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` — учётные данные по умолчанию для прогонов.
 - `TESTGEN_DATA_DIR` / `TESTGEN_SECRETS_DIR` — другие папки данных и секретов (CI, тесты студии).
 - `TESTGEN_PROMPT_CACHE=off` — без кэширования промптов (сравнить стоимость; расход виден в Studio,
   прогонах и конвейере).
-- `TESTGEN_AXE_JS` — путь к `axe.min.js` для проверки доступности без доступа к CDN.
+- `TESTGEN_AXE_JS` — путь к `axe.min.js` или `TESTGEN_AXE_URL` — адрес, откуда его скачать (кэш в
+  `data/cache/`). Без них `assert_accessible` падает с подсказкой; адресов CDN в коде нет.
 - `TESTGEN_FAKER_LOCALE` — локаль тестовых данных `{{faker.*}}` (по умолчанию `en_US`).
 - `TESTGEN_TOKEN`, `TESTGEN_STUDIO_URL` — для `python -m testgen.mcp_server` (stdio).
 - `PORT` (по умолчанию 8765).
@@ -127,7 +130,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
   однотипных элементов, `browser.group_candidates`), `assert_element_text`, `assert_no_console_errors`,
   `assert_accessible`, `assert_screenshot` (последние три — `AUXILIARY_ASSERTIONS`, не проверка
   результата); `mock_route` — подмена ответа запроса.
-- `testgen/checks.py` — `assert_accessible` (axe-core из CDN в `data/cache/` или `TESTGEN_AXE_JS`,
+- `testgen/checks.py` — `assert_accessible` (axe-core из `TESTGEN_AXE_JS` или `TESTGEN_AXE_URL`,
   порог `run.a11y_impact`) и `assert_screenshot` (эталон при первом прогоне в
   `data/projects/<id>/baselines/`, сравнение на canvas в отдельной странице, маски `step["masks"]`,
   допуск `run.visual_threshold`). Провал — `CheckFailed` с `details` для отчёта.
@@ -141,7 +144,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
   Интерфейс движка для агента: `describe()`, `screenshot_b64()`, `execute(step)`, `url`, `close()`.
 - `testgen/testdata.py` — плейсхолдеры `{{unique}}`, `{{today}}`, `{{faker.email}}`, … : новое значение
   на каждый прогон, одно и то же внутри прогона (`DataValues`); экспорт встраивает тот же генератор.
-- `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`@playwright/mcp`).
+- `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`TESTGEN_PLAYWRIGHT_MCP`).
   Агент и шаги не меняются; снимок — ARIA-снапшот MCP. Локаторы шага: код, сгенерированный MCP
   (`--codegen python`), плюс `ELEMENT_INFO_JS` через `browser_evaluate` (те же поля, что у встроенного
   снимка). По умолчанию берёт Chromium из `playwright install` (`--executable-path`). Picker/Record
