@@ -1,12 +1,34 @@
 # The studio's own tests: a local stand site and a scripted LLM, no API key needed.
+# Fast unit tests and browser tests run as separate jobs; browser tests in parallel (pytest-xdist).
+# "stability" (run by hand) repeats the whole suite 10 times: the stage 0 criterion.
 name: tests
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      stability:
+        description: "Run the full suite 10 times in a row"
+        type: boolean
+        default: false
 
 jobs:
-  pytest:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Unit tests
+        run: python -m pytest -q -m "not browser"
+
+  browser:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -18,6 +40,74 @@ jobs:
       - name: Install
         run: |
           python -m pip install -r requirements.txt -r requirements-dev.txt
-          python -m playwright install --with-deps chromium
-      - name: Test
-        run: python -m pytest -q
+          python -m playwright install --with-deps chromium firefox webkit
+      - name: Browser tests
+        run: python -m pytest -q -m browser -n 4 --durations=10
+
+  # Stage 5.5: the whole suite on the shared storage - PostgreSQL (a database per xdist worker,
+  # tests/conftest.py) and S3 (moto) - and the Helm chart.
+  shared-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: testgen
+          POSTGRES_PASSWORD: testgen
+          POSTGRES_DB: testgen
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U testgen" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TESTGEN_TEST_DB: postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen
+      TESTGEN_TEST_S3: moto
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m playwright install --with-deps chromium firefox webkit
+      - name: All tests on PostgreSQL + S3
+        run: python -m pytest -q -n 4 --durations=10
+
+  helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint and render the chart
+        run: |
+          helm lint helm/ai-testgen --set secrets.databaseUrl=postgresql+psycopg://u:p@db/testgen --set secrets.secretKey=x
+          helm template t helm/ai-testgen --set secrets.databaseUrl=postgresql+psycopg://u:p@db/testgen \
+            --set secrets.secretKey=x --set oidc.issuer=https://sso/realms/qa --set oidc.clientId=testgen \
+            --set worker.autoscaling.enabled=true --set metrics.serviceMonitor.enabled=true > /tmp/all.yaml
+          python -c "import yaml, sys; docs = [d for d in yaml.safe_load_all(open('/tmp/all.yaml')) if d]; \
+            print(len(docs), 'objects:', ', '.join(sorted(d['kind'] for d in docs)))"
+
+  stability:
+    if: github.event_name == 'workflow_dispatch' && inputs.stability
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m playwright install --with-deps chromium firefox webkit
+      - name: Ten full runs, no retries
+        run: |
+          for i in $(seq 1 10); do
+            echo "::group::run $i"
+            python -m pytest -q -n 4 -p no:randomly || exit 1
+            echo "::endgroup::"
+          done

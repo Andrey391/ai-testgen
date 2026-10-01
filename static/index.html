@@ -34,7 +34,7 @@ textarea{resize:vertical}
 textarea.code{font:12px/1.5 ui-monospace,Consolas,monospace}
 button.btn,a.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:6px 12px;cursor:pointer;text-decoration:none;display:inline-block}
 button.btn:hover,a.btn:hover{border-color:var(--accent)}
-button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.primary,a.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 button.danger{color:var(--bad)}
 button.small,a.small{padding:3px 8px;font-size:12px}
 button:disabled{opacity:.5;cursor:default}
@@ -153,6 +153,20 @@ img.shot{max-width:420px}
 .events div{padding:2px 0;border-bottom:1px dashed var(--line)}
 .bar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--line);margin:8px 0}
 .bar span{display:block}
+tr.done td{opacity:.6}
+tr.done td b{text-decoration:line-through}
+.overdue{color:var(--bad);font-weight:600}
+select.inline{width:auto;padding:3px 6px;font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin:12px 0}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.tile .v{font-size:28px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.tile .l{font-size:12px;color:var(--muted)}
+.tile .s{font-size:12px;color:var(--muted);margin-top:4px}
+.bars{display:flex;align-items:flex-end;gap:2px;height:140px;border-bottom:1px solid var(--line);margin-top:8px}
+.bars div{flex:1;background:var(--accent);border-radius:4px 4px 0 0;min-height:2px;position:relative}
+.bars div.fail::after{content:"✘";position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--bad)}
+.bars div:hover{opacity:.75}
+.axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
 @media (max-width:1100px){.studio{grid-template-columns:1fr;height:auto}.chat,.steps{max-height:360px}
   .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
   .grid2,.grid3{grid-template-columns:1fr}}
@@ -169,6 +183,8 @@ img.shot{max-width:420px}
     <button data-tab="home" class="on">Проекты</button>
     <button data-tab="studio" data-needs-project>Studio</button>
     <button data-tab="tests" data-needs-project>Тесты</button>
+    <button data-tab="dash" data-needs-project>Дашборд</button>
+    <button data-tab="tasks" data-needs-project>Задачи</button>
     <button data-tab="req" data-needs-project>Требования</button>
     <button data-tab="pipe" data-needs-project>Конвейер</button>
     <button data-tab="proj" data-needs-project>Проект</button>
@@ -183,11 +199,18 @@ img.shot{max-width:420px}
 <section id="loginBox" class="hidden">
   <form class="card login" id="loginForm">
     <h2>Вход</h2>
+    <div id="ssoBox" class="hidden" style="margin-bottom:10px">
+      <a class="btn primary" id="ssoBtn" href="/api/auth/oidc/login" style="display:block;text-align:center"></a>
+      <div class="hint" id="ssoOr" style="text-align:center">или логин и пароль</div>
+    </div>
+    <div class="err hidden" id="ssoErr" style="margin-bottom:8px"></div>
+    <div id="pwBox">
     <label>Логин</label><input id="lUser" autocomplete="username" required>
     <label>Пароль</label><input id="lPass" type="password" autocomplete="current-password" required>
     <div class="err" id="lErr" style="margin-top:8px"></div>
     <div class="row" style="margin-top:10px"><span class="grow"></span>
       <button class="btn primary" type="submit">Войти</button></div>
+    </div>
     <div class="hint hidden" id="toSignup" style="margin-top:10px">Нет аккаунта? <a href="#" data-auth="signup">Зарегистрироваться</a></div>
   </form>
   <form class="card login hidden" id="signupForm">
@@ -209,7 +232,7 @@ img.shot{max-width:420px}
     <div class="card">
       <div class="row">
         <div class="grow"><h2>Проекты</h2>
-          <div class="muted">Проект — это тестируемое приложение и ресурсы, на которых строится вся работа: источник требований (Jira/Confluence), система управления тестами (Zephyr Scale), движок браузера (Playwright MCP) и инструменты агента. Создайте проект и подключите ресурсы — сценарии, генерация, прогоны и публикация дальше используют их автоматически.</div></div>
+          <div class="muted">Проект — это тестируемое приложение и ресурсы, на которых строится вся работа: источник требований (Jira/Confluence, YouTrack, Яндекс Трекер, Kaiten), система управления тестами (Test IT, Allure TestOps, Zephyr Scale), движок браузера (Playwright MCP) и инструменты агента. Создайте проект и подключите ресурсы — сценарии, генерация, прогоны и публикация дальше используют их автоматически.</div></div>
         <button class="btn primary" id="homeNew">+ Новый проект</button>
       </div>
     </div>
@@ -290,6 +313,7 @@ img.shot{max-width:420px}
     <div class="muted">Опишите сценарий обычным языком — AI-агент пройдёт его в браузере и запишет шаги. Тест сохранится в проект <b class="projName"></b>.</div>
     <label>URL приложения</label><input id="fUrl" placeholder="https://staging.example.com">
     <label>Название теста</label><input id="fName" placeholder="Покупка товара">
+    <div class="hint hidden" id="fTask"></div>
     <label>Сценарий</label>
     <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
     <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div>
@@ -312,6 +336,7 @@ img.shot{max-width:420px}
     <div class="row" style="margin-top:10px">
       <label class="inline"><input type="checkbox" id="fAuto"> Auto-Pilot</label>
       <label class="inline"><input type="checkbox" id="fHeaded"> Показать реальное окно браузера</label>
+      <label class="inline hidden" id="fFreshBox" title="В проекте есть тест входа: обычно сессия начинается уже с выполненным входом. Отметьте, чтобы записать тест с экрана входа."><input type="checkbox" id="fFresh"> Без сохранённого входа</label>
       <span class="grow"></span>
       <button class="btn primary" id="startBtn">Начать генерацию</button>
     </div>
@@ -349,9 +374,12 @@ img.shot{max-width:420px}
         </select>
         <select id="pickAction" style="width:auto">
           <option value="click">клик</option>
+          <option value="double_click">двойной клик</option>
           <option value="fill">ввод текста</option>
           <option value="hover">наведение</option>
           <option value="select_option">выбор в списке</option>
+          <option value="upload_file">загрузка файла</option>
+          <option value="drag_to">перетащить (два клика: что и куда)</option>
           <option value="assert_visible">проверка: элемент виден</option>
           <option value="assert_text_present">проверка: текст на странице</option>
           <option value="assert_element_text">проверка: текст элемента</option>
@@ -380,14 +408,21 @@ img.shot{max-width:420px}
             <option value="press_key">нажать клавишу</option>
             <option value="scroll">прокрутить (up/down)</option>
             <option value="wait">ждать (сек)</option>
+            <option value="switch_tab">перейти на вкладку</option>
+            <option value="handle_dialog">ответ на следующий диалог</option>
+            <option value="read_email">код из письма</option>
+            <option value="use_module">модуль проекта</option>
             <option value="assert_text_present">проверка: текст</option>
             <option value="assert_url_contains">проверка: URL содержит</option>
+            <option value="assert_download">проверка: файл скачался</option>
             <option value="assert_no_console_errors">проверка: нет ошибок в консоли</option>
             <option value="assert_accessible">проверка доступности (WCAG)</option>
             <option value="assert_screenshot">визуальная проверка страницы</option>
           </select>
+          <select id="asModule" style="width:auto" class="hidden"></select>
           <input id="asValue" placeholder="значение" class="grow">
         </div>
+        <div class="hint" id="asHint"></div>
         <div class="row" style="margin-top:6px">
           <input id="asDesc" placeholder="описание шага (необязательно)" class="grow">
           <button class="btn" id="asGo">Выполнить</button>
@@ -395,7 +430,8 @@ img.shot{max-width:420px}
       </div>
       <div class="steps" id="steps"></div>
       <div id="savedBar" class="row hidden" style="margin-top:8px">
-        <span class="muted grow">Сохранено</span>
+        <span class="muted grow" id="savedText">Сохранено</span>
+        <button class="btn" id="readyBtn" title="Вы проверили тест: он войдёт в регрессионный набор">В набор</button>
         <button class="btn" id="runSavedBtn">Запустить</button>
         <a class="btn small" id="expPy" target="_blank">.py</a>
         <a class="btn small" id="expFeat" target="_blank">.feature</a>
@@ -416,11 +452,13 @@ img.shot{max-width:420px}
       <b class="grow">Тесты проекта</b>
       <select id="tagFilter" style="width:auto" title="Фильтр по тегу"><option value="">Все тесты</option></select>
       <label class="inline"><input type="checkbox" id="runHeaded"> в видимом окне</label>
+      <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="runDrafts"> с черновиками</label>
       <button class="btn primary" id="suiteBtn">Запустить набор</button>
       <a class="btn" id="zipBtn" title="Все тесты (или тесты выбранного тега) как проект pytest: conftest.py, tests/, features/">Экспорт .zip</a>
+      <a class="btn hidden" id="zipTestit" title="С декораторами testit-adapter-pytest: результаты прогонов в CI уходят в Test IT">.zip для Test IT</a>
     </div>
     <div class="hint">Набор — все тесты или тесты выбранного тега: параллельно, в одном браузере, как в CI (<code>python -m testgen.run --project … --tag … --junit report.xml</code>). Упавший тест перезапускается один раз: прошёл со второй попытки — «нестабилен». Тесты в карантине запускаются, но не валят набор.</div>
-    <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Последние запуски</th><th>Качество проверок</th><th>Zephyr</th><th></th></tr></thead>
+    <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Последние запуски</th><th>Качество проверок</th><th id="tmsHead">Система тестов</th><th></th></tr></thead>
     <tbody id="testsBody"></tbody></table>
   </div>
   <div class="card hidden" id="suiteBox"></div>
@@ -434,17 +472,83 @@ img.shot{max-width:420px}
   <div class="card" id="covBox"></div>
 </section>
 
+<!-- ============ DASHBOARD ============ -->
+<section id="tab-dash" class="hidden">
+  <div class="card">
+    <div class="row"><div class="grow"><h2>Ценность автоматизации</h2>
+      <div class="muted">Для QA-лида и руководителя: сколько кейсов автоматизировано, насколько стабильна регрессия, ловят ли тесты поломки, сколько времени сэкономлено.</div></div>
+      <select id="dashDays" style="width:auto"><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option></select></div>
+  </div>
+  <div class="tiles" id="dashTiles"></div>
+  <div class="grid2">
+    <div class="card"><h3>Время регрессии</h3><div class="hint" style="margin-top:0">Длительность последних запусков набора, минут</div><div id="dashSuites"></div></div>
+    <div class="card"><h3>Автоматические прогоны</h3><div class="hint" style="margin-top:0">Прогонов тестов в день</div><div id="dashRuns"></div></div>
+  </div>
+</section>
+
+<!-- ============ TASKS ============ -->
+<section id="tab-tasks" class="hidden">
+  <div class="card">
+    <div class="row">
+      <div class="grow"><b>Задачи проекта</b>
+        <div class="muted" style="font-size:12px" id="taskCounts"></div></div>
+      <select id="taskStatus" style="width:auto" title="Статус">
+        <option value="open">Открытые</option>
+        <option value="">Все задачи</option>
+        <option value="todo">К выполнению</option>
+        <option value="in_progress">В работе</option>
+        <option value="review">На проверке</option>
+        <option value="done">Готово</option>
+      </select>
+      <select id="taskWho" style="width:auto" title="Исполнитель">
+        <option value="">Все исполнители</option>
+        <option value="me">Мои</option>
+      </select>
+      <button class="btn primary" id="taskNew">+ Задача</button>
+    </div>
+    <div class="hint">Что команде нужно сделать в проекте: покрыть тестами фичу, разобрать падение, проверить ревью локаторов. Из задачи можно начать тест в Studio — сохранённый тест привяжется к ней.</div>
+  </div>
+
+  <div class="card hidden" id="taskBox">
+    <h3 id="taskHead">Новая задача</h3>
+    <label>Название</label><input id="taskTitle" maxlength="200" placeholder="Покрыть тестами оформление заказа">
+    <label>Описание</label>
+    <textarea id="taskDesc" rows="4" placeholder="Что сделать, ссылки на требования, критерии готовности"></textarea>
+    <div class="grid3">
+      <div><label>Статус</label><select id="taskSt"></select></div>
+      <div><label>Приоритет</label><select id="taskPr"></select></div>
+      <div><label>Срок</label><input id="taskDue" type="date"></div>
+    </div>
+    <label>Исполнитель</label><input id="taskAs" list="taskPeople" maxlength="64" placeholder="логин в студии">
+    <datalist id="taskPeople"></datalist>
+    <label>Тесты задачи</label>
+    <div class="checks" id="taskTests"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn danger hidden" id="taskDel">Удалить</button>
+      <button class="btn hidden" id="taskStudio" title="Открыть Studio с описанием задачи как сценарием">Создать тест в Studio</button>
+      <span class="err grow" id="taskErr"></span>
+      <button class="btn" id="taskCancel">Отмена</button>
+      <button class="btn primary" id="taskSave">Сохранить</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <table><thead><tr><th>Задача</th><th>Статус</th><th>Приоритет</th><th>Исполнитель</th><th>Срок</th><th></th></tr></thead>
+    <tbody id="tasksBody"></tbody></table>
+  </div>
+</section>
+
 <!-- ============ REQUIREMENTS -> SCENARIOS ============ -->
 <section id="tab-req" class="hidden">
   <div class="card">
-    <div class="muted">Загрузите требования из Jira или Confluence (через MCP-подключение проекта), из файла .md или вставьте текст — AI предложит тест-сценарии по правилам этапа «Сценарии» из настроек проекта. Любой сценарий можно отправить в Studio, а все требования целиком — в конвейер.</div>
-    <label>Ссылка на задачу Jira или страницу Confluence</label>
+    <div class="muted">Загрузите требования из Jira, Confluence, YouTrack, Яндекс Трекера или Kaiten (через подключения проекта), из файла ТЗ (.docx, .pdf, .md) или вставьте текст — AI предложит тест-сценарии по правилам этапа «Сценарии» из настроек проекта. Любой сценарий можно отправить в Studio, а все требования целиком — в конвейер.</div>
+    <label>Ссылка на задачу (Jira, YouTrack, Яндекс Трекер, Kaiten) или страницу Confluence</label>
     <div class="row">
       <input id="srcLink" class="grow" placeholder="https://company.atlassian.net/browse/PROJ-123  ·  …/wiki/spaces/TEAM/pages/123456/…  ·  PROJ-123">
       <button class="btn" id="srcFetch">Загрузить</button>
       <span class="muted">или</span>
-      <button class="btn" id="srcFileBtn">Файл .md</button>
-      <input type="file" id="srcFile" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple class="hidden">
+      <button class="btn" id="srcFileBtn" title="Техническое задание: Word, PDF, Markdown или текст">Файл ТЗ</button>
+      <input type="file" id="srcFile" accept=".md,.markdown,.txt,.docx,.pdf,text/markdown,text/plain" multiple class="hidden">
       <span class="muted">или</span>
       <button class="btn" id="exploreBtn" title="Planner: обойти сайт по ссылкам и составить карту страниц и форм — вместо ТЗ">Исследовать сайт</button>
     </div>
@@ -469,9 +573,17 @@ img.shot{max-width:420px}
     <label>Ссылки на требования (Jira / Confluence, по одной в строке)</label>
     <textarea id="pipeLinks" rows="2" placeholder="https://company.atlassian.net/browse/PROJ-123"></textarea>
     <div class="row"><label class="grow">Текст требований (необязательно)</label>
-      <button class="btn small" id="pipeFileBtn">Файл .md</button>
-      <input type="file" id="pipeFile" accept=".md,.markdown,.txt" multiple class="hidden"></div>
+      <button class="btn small" id="pipeFileBtn">Файл ТЗ</button>
+      <input type="file" id="pipeFile" accept=".md,.markdown,.txt,.docx,.pdf" multiple class="hidden"></div>
     <textarea id="pipeText" rows="4"></textarea>
+    <details class="opt" id="pipeCasesBox">
+      <summary>Автоматизировать ручные кейсы из системы управления тестами</summary>
+      <div class="hint">Кейсы становятся сценариями без проектирования: агент проходит их шаги в браузере, автотест привязывается к исходному кейсу, результаты прогонов уходят туда же. «У нас 2000 ручных кейсов — автоматизируйте».</div>
+      <div class="grid2">
+        <div><label>Откуда</label><select id="pipeCaseConn"></select></div>
+        <div><label>Номера кейсов (через запятую; пусто — все кейсы проекта, только Test IT)</label><input id="pipeCaseIds" placeholder="101, 102, 115"></div>
+      </div>
+    </details>
     <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
     <label class="inline" style="margin-top:10px"><input type="checkbox" id="pipeExplore"> Исследовать сайт (Planner): карта страниц и форм — источник сценариев, когда ТЗ нет</label>
     <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
@@ -493,6 +605,7 @@ img.shot{max-width:420px}
     <div class="subnav">
       <button data-sub="general" class="on">Общие</button>
       <button data-sub="model">Модель</button>
+      <button data-sub="access">Участники и доступ</button>
       <button data-sub="conns">Подключения (MCP)</button>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
@@ -506,6 +619,8 @@ img.shot{max-width:420px}
           <label>Название</label><input id="pName">
           <label>Описание</label><textarea id="pDesc" rows="2"></textarea>
           <label>URL приложения по умолчанию</label><input id="pUrl" placeholder="https://staging.example.com">
+          <label>Язык шагов, сценариев и Gherkin</label>
+          <select id="pLang"><option value="">как написан сценарий / требования</option><option value="ru">русский (Gherkin: Дано / Когда / Тогда)</option><option value="en">английский</option></select>
           <div class="row" style="margin-top:10px"><span class="muted grow" id="pMsg"></span>
             <button class="btn primary" id="pSave">Сохранить</button></div>
         </div>
@@ -515,9 +630,53 @@ img.shot{max-width:420px}
           <div class="row">
             <div class="grow"><label>Логин</label><input id="pLogin" autocomplete="off"></div>
             <div class="grow"><label>Пароль</label><input id="pPass" type="password" autocomplete="new-password"></div>
+            <div class="grow"><label>Секрет 2FA (TOTP, base32)</label><input id="pTotp" type="password" autocomplete="off"></div>
           </div>
+          <div class="hint">Секрет из QR-кода приложения-аутентификатора. Агент вводит одноразовый код как <code>{{totp}}</code>: код вычисляется в момент шага, секрет не попадает в модель, шаги, trace и экспорт (в экспорте — <code>TESTGEN_TOTP_SECRET</code>).</div>
           <div class="row" style="margin-top:10px"><span class="muted grow" id="pcMsg"></span>
+            <button class="btn" id="pcTotpClear">Удалить секрет 2FA</button>
             <button class="btn primary" id="pcSave">Сохранить</button></div>
+        </div>
+        <div class="card">
+          <h3>Тестовый почтовый ящик</h3>
+          <div class="muted">Для кодов подтверждения из писем: шаг «код из письма» ждёт письмо и сохраняет код в <code>{{vars.code}}</code>. Mailpit ловит всю почту тестового стенда; или любой ящик по IMAP. Только чтение. CAPTCHA студия не обходит — отключите её на тестовом стенде или используйте тестовые ключи провайдера.</div>
+          <div class="grid3">
+            <div><label>Тип</label><select id="mbKind"><option value="">не используется</option><option value="mailpit">Mailpit (HTTP API)</option><option value="imap">IMAP</option></select></div>
+            <div><label>Адрес Mailpit</label><input id="mbUrl" placeholder="http://mailpit:8025"></div>
+            <div><label>IMAP-сервер</label><input id="mbHost" placeholder="imap.example.com"></div>
+            <div><label>Порт</label><input id="mbPort" type="number" value="993"></div>
+            <div><label>Пользователь</label><input id="mbUser" autocomplete="off"></div>
+            <div><label>Пароль</label><input id="mbPass" type="password" autocomplete="new-password"></div>
+          </div>
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="mbMsg"></span>
+            <button class="btn primary" id="mbSave">Сохранить</button></div>
+        </div>
+        <div class="card">
+          <h3>Файлы для тестов</h3>
+          <div class="muted">Файлы, которые тесты загружают в формы (шаг «загрузка файла»). При экспорте проекта они кладутся в <code>tests/fixtures/</code>.</div>
+          <div id="filesList" style="margin-top:8px"></div>
+          <div class="row" style="margin-top:8px"><input type="file" id="fileUp" multiple style="width:auto"><span class="muted grow" id="filesMsg"></span></div>
+        </div>
+        <div class="card">
+          <h3>Уведомления</h3>
+          <div class="muted">Итоги наборов, самолечение на ревью, повторяющиеся падения, расход на модели — в Telegram, Mattermost или на почту. Токены и пароли хранятся на сервере.</div>
+          <div class="grid3">
+            <div><label>Итог набора</label><select id="ntSuite"><option value="failed">только при падениях</option><option value="always">всегда</option><option value="off">не присылать</option></select></div>
+            <div><label>Набор падает N раз подряд (0 — нет)</label><input id="ntStreak" type="number" min="0" max="50"></div>
+            <div><label>&nbsp;</label><label class="inline"><input type="checkbox" id="ntProposals"> Самолечение ждёт ревью</label>
+              <label class="inline"><input type="checkbox" id="ntBudget"> 80% месячного лимита</label></div>
+          </div>
+          <div class="sub"><label class="inline"><input type="checkbox" id="ntTg"> Telegram</label>
+            <div class="grid2"><div><label>Токен бота</label><input id="ntTgToken" type="password" autocomplete="off"></div>
+              <div><label>ID чата</label><input id="ntTgChat" placeholder="-1001234567890"></div></div></div>
+          <div class="sub"><label class="inline"><input type="checkbox" id="ntMm"> Mattermost</label>
+            <label>Входящий вебхук</label><input id="ntMmHook" type="password" autocomplete="off" placeholder="https://mattermost.company.ru/hooks/…"></div>
+          <div class="sub"><label class="inline"><input type="checkbox" id="ntMail"> Почта (SMTP)</label>
+            <div class="grid3"><div><label>SMTP-сервер</label><input id="ntHost"></div><div><label>Порт</label><input id="ntPort" type="number"></div>
+              <div><label>Пользователь</label><input id="ntUser" autocomplete="off"></div><div><label>Пароль</label><input id="ntPass" type="password" autocomplete="new-password"></div>
+              <div><label>От кого</label><input id="ntFrom"></div><div><label>Кому (через запятую)</label><input id="ntTo"></div></div></div>
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="ntMsg"></span>
+            <button class="btn" id="ntTest">Проверить</button><button class="btn primary" id="ntSave">Сохранить</button></div>
         </div>
         <div class="card" id="dangerBox">
           <h3>Удаление проекта</h3>
@@ -529,12 +688,54 @@ img.shot{max-width:420px}
 
       <!-- Model -->
       <div data-subpanel="model" class="hidden"><div id="modelBox"></div></div>
+      <!-- Members and access -->
+      <div data-subpanel="access" class="hidden">
+        <div class="card">
+          <h3>Участники проекта</h3>
+          <div class="muted">Наблюдатель читает всё и запускает тесты и наборы; редактор ещё пишет тесты, принимает самолечение и ведёт задачи; владелец настраивает проект, учётные данные, подключения и участников. Администраторы студии — владельцы всех проектов. Пользователь без доступа не видит проект вовсе.</div>
+          <label>Кто видит проект</label>
+          <select id="acVis"><option value="members">Только участники (и группы каталога)</option><option value="open">Все пользователи студии — как редакторы</option></select>
+          <table style="margin-top:10px"><thead><tr><th>Пользователь</th><th>Роль</th><th></th></tr></thead><tbody id="acList"></tbody></table>
+          <div class="row ownerOnly" style="margin-top:8px">
+            <input id="acUser" list="acUsers" placeholder="логин пользователя" class="grow"><datalist id="acUsers"></datalist>
+            <select id="acRole" style="width:auto"></select>
+            <button class="btn" id="acAdd">Добавить</button>
+          </div>
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="acMsg"></span>
+            <button class="btn primary ownerOnly" id="acSave">Сохранить</button></div>
+        </div>
+        <div class="card">
+          <h3>Группы каталога</h3>
+          <div class="muted">При входе через корпоративный каталог (OIDC, LDAP) группы пользователя дают роли в проектах. Правила задаёт администратор студии.</div>
+          <div id="acGroups" style="margin-top:8px"></div>
+        </div>
+        <div class="card ownerOnly">
+          <h3>Журнал действий</h3>
+          <div class="muted">Кто и когда менял тесты, принимал самолечение, запускал прогоны, менял подключения и права. Записи только дописываются и связаны цепочкой хэшей; администратор выгружает журнал в SIEM.</div>
+          <div class="row" style="margin-top:8px">
+            <input id="auUser" placeholder="пользователь" style="width:auto">
+            <select id="auAction" style="width:auto"><option value="">все действия</option><option value="test.">тесты</option><option value="heal.">самолечение</option><option value="run.">прогоны</option><option value="suite.">наборы</option><option value="connection.">подключения</option><option value="project.">проект и права</option></select>
+            <button class="btn" id="auLoad">Показать</button><span class="grow"></span>
+            <span class="adminOnly"><input id="auMonth" type="month" style="width:auto"> <button class="btn" id="auExport">Выгрузить месяц</button> <button class="btn" id="auVerify">Проверить целостность</button></span>
+          </div>
+          <div id="auMsg" class="muted" style="margin-top:6px"></div>
+          <div style="max-height:420px;overflow:auto;margin-top:8px"><table><thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Итог</th></tr></thead><tbody id="auList"></tbody></table></div>
+        </div>
+        <div class="card adminOnly">
+          <h3>Группы → роли (вся студия, администратор)</h3>
+          <div class="muted">Одно правило в строке: <code>группа; проект; роль</code>. Проект — id или <code>*</code> (все проекты), роль — viewer, editor или owner. Например: <code>QA-Leads; *; owner</code>.</div>
+          <textarea id="ssoRules" rows="5" style="margin-top:8px;font-family:monospace"></textarea>
+          <label>Группы администраторов студии (через запятую)</label><input id="ssoAdmins" placeholder="testgen-admins">
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="ssoMsg"></span>
+            <button class="btn primary" id="ssoSave">Сохранить</button></div>
+        </div>
+      </div>
 
       <!-- Connections -->
       <div data-subpanel="conns" class="hidden">
         <div class="card">
           <h3>Подключения MCP</h3>
-          <div class="muted">Внешние системы проекта: Jira/Confluence — источник требований, Zephyr Scale — публикация тест-кейсов и результатов, Playwright MCP — движок браузера, любой другой MCP-сервер — дополнительные инструменты агента. Токены хранятся на сервере и не показываются в интерфейсе.</div>
+          <div class="muted">Внешние системы проекта: Jira/Confluence, YouTrack, Яндекс Трекер, Kaiten — требования и дефекты; Test IT, Allure TestOps, Zephyr Scale — публикация тест-кейсов, результатов и импорт ручных кейсов; Playwright MCP — движок браузера; любой другой MCP-сервер — дополнительные инструменты агента. Токены хранятся на сервере и не показываются в интерфейсе.</div>
           <div class="row" style="margin-top:10px">
             <select id="connPreset" style="width:auto"></select>
             <button class="btn primary" id="connAdd">Добавить подключение</button>
@@ -599,6 +800,7 @@ img.shot{max-width:420px}
               </select></div>
             <div><label>Подключение Playwright MCP</label><select data-p="authoring.browser_connection" data-conn="playwright"></select></div>
             <div><label>Лимит шагов Auto-Pilot</label><input type="number" min="1" max="200" data-p="authoring.max_steps"></div>
+            <div><label>Устройство при записи</label><input data-p="authoring.device" placeholder="пусто — десктоп; iPhone 13"></div>
           </div>
           <div class="checks" style="margin-top:10px">
             <label class="inline"><input type="checkbox" data-p="authoring.autopilot"> Auto-Pilot в конвейере (иначе шаги ждут подтверждения в Studio)</label>
@@ -607,6 +809,20 @@ img.shot{max-width:420px}
           <label>Инструменты подключений для агента (только чтение)</label>
           <div class="checks" data-list="authoring.tool_connections" data-kind="toolconns"></div>
           <div class="hint">Например, агент сможет сам прочитать задачу Jira или существующие тест-кейсы Zephyr во время генерации.</div>
+          <div class="grid2">
+            <div><label>Промпт агента</label>
+              <select data-p="authoring.prompt">
+                <option value="full">Полный</option>
+                <option value="compact">Компактный с примерами (модели слабее)</option>
+              </select></div>
+            <div><label>Скриншоты страницы</label>
+              <select data-p="authoring.screenshots">
+                <option value="always">На каждом шаге</option>
+                <option value="on_request">По запросу агента (текстовый режим)</option>
+                <option value="never">Никогда (только список элементов)</option>
+              </select></div>
+          </div>
+          <div class="hint">Ошибки ответа модели (неверный ref, несуществующий инструмент, битый JSON) возвращаются ей на исправление — не больше двух раз на шаг.</div>
           <label>Скиллы</label>
           <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
           <div class="grid2">
@@ -648,6 +864,17 @@ img.shot{max-width:420px}
                 <option value="minor">minor</option>
               </select></div>
             <div><label>Визуальная проверка: допуск, % пикселей</label><input type="number" min="0" max="100" step="0.1" data-p="run.visual_threshold"></div>
+            <div><label>Язык браузера</label><input data-p="run.locale" placeholder="ru-RU (пусто — en-US)"></div>
+            <div><label>Часовой пояс</label><input data-p="run.timezone" placeholder="Europe/Moscow"></div>
+            <div><label>Ручной прогон кейса, минут</label><input type="number" min="1" max="200" data-p="run.manual_minutes" title="Для оценки сэкономленного времени на дашборде"></div>
+          </div>
+          <label>Браузеры наборов</label>
+          <div class="checks" data-list="run.browsers" data-kind="browsers"></div>
+          <label>Устройства (через запятую; desktop — обычный экран)</label>
+          <input data-csv="run.devices" placeholder="desktop, iPhone 13, Pixel 7">
+          <div class="hint">Набор прогоняет каждый тест во всех выбранных браузерах и на всех устройствах. Firefox и WebKit нужно установить: <code>playwright install firefox webkit</code>.</div>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
           </div>
           <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
           <label>Скиллы</label>
@@ -672,7 +899,7 @@ img.shot{max-width:420px}
         </div>
 
         <div class="card stage" data-stage="publish">
-          <div class="stage-head"><span class="num">6</span><h3 class="grow" style="margin:0">Публикация в Zephyr</h3>
+          <div class="stage-head"><span class="num">6</span><h3 class="grow" style="margin:0">Публикация в систему управления тестами</h3>
             <label class="inline"><input type="checkbox" data-p="publish.enabled"> включена</label></div>
           <div class="grid2">
             <div><label>Подключение</label><select data-p="publish.connection" data-conn="publish"></select></div>
@@ -689,6 +916,18 @@ img.shot{max-width:420px}
             <div><label>Модель</label><input data-p="publish.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="publish.effort" class="effortSel"></select></div>
           </div>
+        </div>
+
+        <div class="card stage">
+          <div class="stage-head"><span class="num">₽</span><h3 class="grow" style="margin:0">Лимиты расхода на модели</h3></div>
+          <div class="hint">0 — без лимита. Запрос сверх лимита не отправляется; на 80% приходит предупреждение (в чат сессии, журнал конвейера, уведомления проекта).</div>
+          <div class="grid3">
+            <div><label>На сессию Studio</label><input type="number" min="0" step="0.01" data-p="budget.session"></div>
+            <div><label>На запуск конвейера</label><input type="number" min="0" step="0.01" data-p="budget.job"></div>
+            <div><label>На проект в месяц</label><input type="number" min="0" step="0.01" data-p="budget.month"></div>
+            <div><label>Валюта</label><select data-p="budget.currency"><option value="USD">$</option><option value="RUB">₽</option></select></div>
+          </div>
+          <div class="sub" id="usageBox"></div>
         </div>
 
         <div class="card row" style="position:sticky;bottom:10px">
@@ -774,7 +1013,18 @@ function showLogin() {
   $('#whoami').classList.add('hidden'); $('#logoutBtn').classList.add('hidden');
   $('#loginBox').classList.remove('hidden');
   showAuthForm('login');
-  api('GET', '/api/auth/me').then(me => $('#toSignup').classList.toggle('hidden', !me.signup)).catch(() => {});
+  api('GET', '/api/auth/me').then(me => {
+    $('#toSignup').classList.toggle('hidden', !me.signup);
+    const oidc = me.sso?.oidc, passwords = me.local_login || me.sso?.ldap;
+    $('#ssoBox').classList.toggle('hidden', !oidc);
+    $('#ssoBtn').textContent = `Войти: ${oidc || ''}`;
+    $('#ssoOr').classList.toggle('hidden', !passwords);
+    $('#pwBox').classList.toggle('hidden', !passwords);
+    $('#lUser').required = $('#lPass').required = !!passwords;
+    const err = new URLSearchParams(location.search).get('login_error');
+    $('#ssoErr').textContent = err || ''; $('#ssoErr').classList.toggle('hidden', !err);
+    if (err) history.replaceState(null, '', '/');
+  }).catch(() => {});
 }
 function showAuthForm(which) {
   $('#loginForm').classList.toggle('hidden', which !== 'login');
@@ -791,6 +1041,7 @@ async function loggedIn(me) {
   $('#whoami').classList.toggle('hidden', !me.auth_enabled);
   $('#logoutBtn').classList.toggle('hidden', !me.auth_enabled);
   try { PRESETS = await api('GET', '/api/mcp/presets'); } catch {}
+  $$('.adminOnly').forEach(x => x.classList.toggle('hidden', !me.is_admin));
   $('#connPreset').innerHTML = PRESETS.filter(p => !p.admin_only || ME.is_admin)
     .map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
   await loadProjects(store.get('tg_project'));
@@ -833,16 +1084,22 @@ async function switchProject(pid) {
   PROJ = await api('GET', `/api/projects/${pid}`);
   SKILLS = await api('GET', `/api/projects/${pid}/skills`);
   $$('.projName').forEach(x => x.textContent = PROJ.name);
+  $('#whoami').textContent = ME.user + (ME.is_admin && ME.auth_enabled ? ' (админ)' : ` · ${roleTitle(PROJ.role)}`);
   if (!$('#fUrl').value || $('#fUrl').dataset.auto) { $('#fUrl').value = PROJ.base_url; $('#fUrl').dataset.auto = '1'; }
   $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
   $('#fLogin').placeholder = PROJ.app_username || '';
+  api('GET', `/api/tests?project_id=${pid}`).then(ts => $('#fFreshBox').classList.toggle('hidden',
+    !(PROJ.pipeline.run.login_once && ts.some(t => t.role === 'login')))).catch(() => {});
   $('#pipeUrl').placeholder = PROJ.base_url || 'https://…';
   const tab = $('nav button.on').dataset.tab;
   if (tab === 'home' && WIZ && WIZ.pid !== pid) showHomeList();
   else if (tab === 'home' && !WIZ) renderHome();
   if (tab === 'tests') loadTests();
+  if (tab === 'dash') loadDash();
+  if (tab === 'tasks') { closeTask(); loadTasks(); }
   if (tab === 'pipe') loadPipe();
   if (tab === 'proj') loadSettings();
+  setStudioTask(null);
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
 $('#projSel').onchange = () => switchProject($('#projSel').value);
@@ -853,9 +1110,11 @@ async function refreshProject() { PROJ = await api('GET', `/api/projects/${PID}`
 $$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
 function showTab(t) {
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  ['home', 'studio', 'tests', 'req', 'pipe', 'proj'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
+  ['home', 'studio', 'tests', 'dash', 'tasks', 'req', 'pipe', 'proj'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
   if (t === 'home') showHomeList();
   if (t === 'tests') loadTests();
+  if (t === 'dash') loadDash();
+  if (t === 'tasks') loadTasks();
   if (t === 'pipe') loadPipe();
   if (t === 'proj') loadSettings();
 }
@@ -873,7 +1132,9 @@ $('#startBtn').onclick = async () => {
   try {
     const r = await api('POST', '/api/sessions', {project_id: PID, url, scenario,
       name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
-      engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value});
+      engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value,
+      task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked});
+    setStudioTask(null);
     openSession(r.id);
   } catch (e) { alert(e.message) } finally { $('#startBtn').disabled = false; }
 };
@@ -909,7 +1170,8 @@ function render() {
   $('#wsTitle').textContent = s.name;
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
-  $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` + usageText(s.usage);
+  $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
+    (s.model ? ` · ${s.model.name}${s.model.screenshots !== 'always' ? ' (текстовый режим)' : ''}` : '') + usageText(s.usage);
   $('#stText').title = s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '';
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
@@ -941,7 +1203,9 @@ const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3)
 function usageText(u) {
   if (!u?.requests) return '';
   const all = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
-  return ` · токены ${fmtTok(all)}+${fmtTok(u.output_tokens)} (кэш ${Math.round(u.cache_hit * 100)}%)` + (u.cost_usd != null ? ` ≈ $${u.cost_usd.toFixed(2)}` : '');
+  const rub = u.costs && u.costs.RUB != null && u.costs.USD == null;
+  return ` · токены ${fmtTok(all)}+${fmtTok(u.output_tokens)} (кэш ${Math.round(u.cache_hit * 100)}%)` +
+    (rub && u.cost_rub != null ? ` ≈ ${u.cost_rub.toFixed(2)} ₽` : u.cost_usd != null ? ` ≈ $${u.cost_usd.toFixed(2)}` : '');
 }
 
 function renderSteps(steps) {
@@ -1006,27 +1270,67 @@ $('#mode').onchange = () => {
     : m === 'picker' ? 'Кликните по элементу — выбранное действие выполнится и запишется как шаг.'
     : 'Запись: каждый клик по экрану выполняется в браузере и записывается. Для ввода текста выберите «ввод текста».';
 };
+let DRAG_FROM = null;   // drag_to in the picker: the first click chooses the element, the second the target
 $('#shot').onclick = async e => {
   const mode = $('#mode').value; if (mode === 'off' || !SID) return;
   const img = e.target, r = img.getBoundingClientRect();
   const x = (e.clientX - r.left) * img.naturalWidth / r.width;
   const y = (e.clientY - r.top) * img.naturalHeight / r.height;
   const action = $('#pickAction').value;
-  let value = '';
+  let value = '', extra = {};
+  if (action === 'drag_to') {
+    if (!DRAG_FROM) { DRAG_FROM = {x, y}; $('#modeHint').textContent = 'Теперь кликните туда, куда перетащить элемент.'; return; }
+    extra = {x: DRAG_FROM.x, y: DRAG_FROM.y, target_x: x, target_y: y};
+    DRAG_FROM = null; $('#modeHint').textContent = 'Перетаскивание: первый клик — что, второй — куда.';
+  }
   if (action === 'fill' || action === 'select_option') {
     value = prompt(action === 'fill' ? 'Текст для ввода:' : 'Пункт списка:');
     if (value === null) return;
   }
-  try { await api('POST', `/api/sessions/${SID}/pick`, {x, y, action, value, source: mode}); }
+  if (action === 'upload_file') {
+    if (!PROJ.files?.length) return alert('Загрузите файлы для тестов: Проект → Общие → Файлы для тестов');
+    value = prompt('Имя файла проекта (' + PROJ.files.join(', ') + '):', PROJ.files[0]);
+    if (value === null) return;
+  }
+  try { await api('POST', `/api/sessions/${SID}/pick`, {x, y, action, value, source: mode, ...extra}); }
   catch (err) { alert(err.message); }
   poll();
 };
+$('#pickAction').onchange = () => { DRAG_FROM = null; if ($('#pickAction').value === 'drag_to') $('#modeHint').textContent = 'Перетаскивание: первый клик — что, второй — куда.'; };
 
-$('#addStepBtn').onclick = () => $('#addStep').classList.toggle('hidden');
+const AS_HINT = {
+  switch_tab: 'last — новая вкладка, first — первая, номер вкладки или часть её адреса.',
+  handle_dialog: 'accept или dismiss; через «|» — текст для prompt и текст, который должен быть в диалоге: accept|Новое имя|Удалить черновик?. Ставится ПЕРЕД шагом, который открывает диалог.',
+  read_email: 'кому|тема|переменная — например {{faker.email}}||code. Код сохранится в {{vars.code}} для следующих шагов. Почтовый ящик — в Проект → Общие.',
+  use_module: 'Параметры модуля в JSON, например {"item": "Молоко"}.',
+  assert_download: 'Шаблон имени файла, скачанного предыдущим шагом: report*.csv',
+};
+async function syncAddStep() {
+  const a = $('#asAction').value;
+  $('#asHint').textContent = AS_HINT[a] || '';
+  $('#asModule').classList.toggle('hidden', a !== 'use_module');
+  if (a === 'use_module') {
+    const tests = await api('GET', `/api/tests?project_id=${PID}`).catch(() => []);
+    $('#asModule').innerHTML = tests.filter(t => t.role === 'module').map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')
+      || '<option value="">нет модулей — Тесты → «Сделать модулем»</option>';
+  }
+}
+$('#asAction').onchange = syncAddStep;
+function manualValue(a, raw) {
+  const parts = raw.split('|').map(s => s.trim());
+  if (a === 'handle_dialog') return JSON.stringify({action: parts[0] === 'dismiss' ? 'dismiss' : 'accept', prompt_text: parts[1] || '', expect: parts[2] || ''});
+  if (a === 'read_email') return JSON.stringify({to: parts[0] || '', subject: parts[1] || '', save: parts[2] || 'code'});
+  if (a === 'assert_download') return JSON.stringify({name: raw.trim() || '*', min_bytes: 1});
+  if (a === 'use_module') { let params = {}; try { params = raw.trim() ? JSON.parse(raw) : {}; } catch { throw new Error('Параметры модуля — JSON-объект'); }
+    return JSON.stringify({module: $('#asModule').value, params}); }
+  return raw;
+}
+$('#addStepBtn').onclick = () => { $('#addStep').classList.toggle('hidden'); syncAddStep(); };
 $('#asGo').onclick = async () => {
   try {
-    await api('POST', `/api/sessions/${SID}/manual`, {action: $('#asAction').value,
-      value: $('#asValue').value, description: $('#asDesc').value});
+    const a = $('#asAction').value;
+    await api('POST', `/api/sessions/${SID}/manual`, {action: a,
+      value: manualValue(a, $('#asValue').value), description: $('#asDesc').value});
     $('#asValue').value = $('#asDesc').value = '';
   } catch (e) { alert(e.message); }
   poll();
@@ -1041,12 +1345,18 @@ function showSaved(id) {
 }
 $('#saveBtn').onclick = async () => {
   try {
-    const t = await api('POST', `/api/sessions/${SID}/save`);
+    const t = await api('POST', `/api/sessions/${SID}/save`, {});
     showSaved(t.id);
+    $('#savedText').textContent = t.status === 'ready' ? 'Сохранено, в наборе' : 'Сохранено как черновик';
+    $('#readyBtn').classList.toggle('hidden', t.status === 'ready');
     if (t.warnings?.length) alert('Тест сохранён.\n\n' + t.warnings.join('\n'));
   } catch (e) { alert(e.message); }
 };
 $('#runSavedBtn').onclick = () => { showTab('tests'); runTest(TEST_ID); };
+$('#readyBtn').onclick = async () => {
+  try { await api('PATCH', `/api/tests/${TEST_ID}/meta`, {status: 'ready'}); $('#savedText').textContent = 'Сохранено, в наборе'; $('#readyBtn').classList.add('hidden'); }
+  catch (e) { alert(e.message); }
+};
 function closeWorkspace() {
   SID = null; clearTimeout(pollTimer);
   $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
@@ -1063,10 +1373,7 @@ const RUN_STATUS = {passed: ['passed', 'ok'], flaky: ['нестабилен', 'w
 const VISUAL_VERDICT = {bug: 'похоже на дефект', expected_change: 'ожидаемое изменение — обновите эталон', noise: 'шум рендеринга'};
 let TESTS = [], OPEN_TEST = null, runTimer = null, suiteTimer = null;
 const runBadge = st => { const [t, c] = RUN_STATUS[st] || [st, 'off']; return `<span class="badge ${c}">${esc(t)}</span>`; };
-function hasPublish() {
-  return PROJ.connections.some(c => c.enabled && (c.id === PROJ.pipeline.publish.connection ||
-    (!PROJ.pipeline.publish.connection && c.preset === 'zephyr')));
-}
+function hasPublish() { return !!publishConn(); }
 function strip(recent) {
   return `<span class="strip">${recent.map(r => `<i class="${r.status}${r.healed ? ' healed' : ''}" title="${esc(fmtTime(r.started))} — ${esc((RUN_STATUS[r.status] || [r.status])[0])}${r.healed ? ', самолечение' : ''}" onclick="openRun('${r.id}')"></i>`).join('')}</span>`;
 }
@@ -1087,10 +1394,18 @@ async function loadTests() {
   TESTS = await api('GET', `/api/tests?project_id=${PID}&tag=${encodeURIComponent(tag)}`);
   $('#zipBtn').href = `/api/projects/${PID}/export${tag ? '?tag=' + encodeURIComponent(tag) : ''}`;
   $('#suiteBtn').textContent = tag ? `Запустить #${tag}` : 'Запустить все';
-  const pub = hasPublish();
+  const pub = hasPublish(), pc = publishConn(), pubTitle = pc ? pc.title : '';
+  const testitConn = PROJ.connections.some(c => c.preset === 'testit');
+  $('#tmsHead').textContent = pubTitle || 'Система тестов';
+  $('#zipTestit').classList.toggle('hidden', !testitConn);
+  $('#zipTestit').href = `/api/projects/${PID}/export?testit=1${tag ? '&tag=' + encodeURIComponent(tag) : ''}`;
   $('#testsBody').innerHTML = TESTS.map(t => {
-    const lr = t.last_run, z = t.external?.zephyr, q = t.quarantine?.on;
+    const lr = t.last_run, z = t.external?.[tmsKey(pc)], q = t.quarantine?.on;
     return `<tr><td><a href="#" onclick="openTest('${t.id}');return false"><b>${esc(t.name)}</b></a>${t.engine === 'playwright-mcp' ? ' <span class="badge off">MCP</span>' : ''}
+        ${t.role === 'login' ? '<span class="badge ok" title="Выполняется один раз перед остальными тестами, они начинаются с сохранённым входом">тест входа</span>' : t.role === 'module' ? '<span class="badge" title="Используется другими тестами как один шаг">модуль</span>' : ''}
+        ${t.data_steps ? `<span class="badge off" title="Запросы подготовки и очистки данных">данные: ${t.data_steps}</span>` : ''}
+        ${t.status === 'draft' ? '<span class="badge warn" title="Записан агентом, ещё не проверен человеком: в регрессионный набор не входит">черновик</span>' : t.status === 'review' ? '<span class="badge warn" title="Ждёт ревью: в регрессионный набор не входит">на ревью</span>' : ''}
+        ${t.comments ? `<span class="badge off">💬 ${t.comments}</span>` : ''}
         ${q ? `<span class="badge warn" title="${esc(t.quarantine.reason || '')}">карантин</span>` : ''}
         ${t.proposals ? `<span class="badge warn" title="Самолечение ждёт ревью">ревью локаторов: ${t.proposals}</span>` : ''}
         <div class="muted" style="font-size:12px">${esc(t.url)}</div>
@@ -1101,16 +1416,24 @@ async function loadTests() {
         ${lr?.analysis ? `<div><span class="badge warn" title="${esc(lr.analysis.summary)}">${esc(VERDICT[lr.analysis.verdict] || lr.analysis.verdict)}</span></div>` : ''}
         ${lr ? `<div class="muted" style="font-size:12px">${fmtTime(lr.at)}</div>` : ''}</td>
       <td>${verifyCell(t)}</td>
-      <td>${z ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : '—'}</td>
+      <td>${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
         <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
+          ${t.status !== 'ready' ? `<button onclick="setStatus('${t.id}', 'ready')" title="Тест проверен человеком и входит в регрессионный набор">В набор (проверен)</button>` : ''}
+          ${t.status === 'draft' ? `<button onclick="setStatus('${t.id}', 'review')">Отправить на ревью</button>` : ''}
+          ${t.status !== 'draft' ? `<button onclick="setStatus('${t.id}', 'draft')">В черновики</button>` : ''}
           <a target="_blank" href="/api/tests/${t.id}/export?format=playwright">Экспорт: pytest-playwright (.py)</a>
           <a target="_blank" href="/api/tests/${t.id}/export?format=gherkin">Экспорт: Gherkin (.feature)</a>
           ${t.has_traffic ? `<a target="_blank" href="/api/tests/${t.id}/export?format=api">Экспорт: API-тесты (httpx)</a>
           <a href="/api/tests/${t.id}/export?format=har">Трафик сценария (.har)</a>` : ''}
-          ${pub ? `<button onclick="publishTest('${t.id}', this)">${z ? 'Обновить в Zephyr' : 'Опубликовать в Zephyr'}</button>` : ''}
+          ${pub ? `<button onclick="publishTest('${t.id}', this)">${z?.key ? 'Обновить в ' : 'Опубликовать в '}${esc(pubTitle)}</button>` : ''}
+          ${testitConn ? `<a target="_blank" href="/api/tests/${t.id}/export?format=playwright&testit=1">Экспорт: pytest + Test IT (testit-adapter)</a>` : ''}
           <button onclick="toggleQuarantine('${t.id}', ${!q})">${q ? 'Вернуть из карантина' : 'В карантин'}</button>
+          ${t.role !== 'login' ? `<button onclick="setRole('${t.id}', 'login')" title="Остальные тесты начнутся с выполненным входом: он делается один раз на набор">Сделать тестом входа</button>` : ''}
+          ${t.role !== 'module' ? `<button onclick="setRole('${t.id}', 'module')" title="Другие тесты смогут вызывать его одним шагом; самолечение чинит модуль один раз">Сделать модулем</button>` : ''}
+          ${t.role ? `<button onclick="setRole('${t.id}', '')">Сделать обычным тестом</button>` : ''}
+          ${(PROJ.pipeline.run.browsers || []).concat(PROJ.pipeline.run.devices || []).length > 1 ? (PROJ.pipeline.run.browsers || []).map(b => `<button onclick="runTest('${t.id}', '${b}')">Запустить в ${esc(b)}</button>`).join('') : ''}
           <button onclick="editCreds('${t.id}')">Свой логин и пароль для теста</button>
           <button onclick="delTest('${t.id}')" style="color:var(--bad)">Удалить</button>
         </div></details></td></tr>`;
@@ -1125,6 +1448,14 @@ async function editTags(id) {
   const v = prompt('Теги через пробел или запятую (например: smoke regression):', (t?.tags || []).join(' '));
   if (v === null) return;
   await api('PATCH', `/api/tests/${id}/meta`, {tags: v.split(/[\s,]+/).filter(Boolean)});
+  loadTests();
+}
+async function setStatus(id, status) {
+  try { await api('PATCH', `/api/tests/${id}/meta`, {status}); } catch (e) { alert(e.message); }
+  loadTests();
+}
+async function setRole(id, role) {
+  try { await api('PATCH', `/api/tests/${id}/meta`, {role}); } catch (e) { alert(e.message); }
   loadTests();
 }
 async function toggleQuarantine(id, on) {
@@ -1175,9 +1506,9 @@ async function strengthen(id) {
 }
 
 // run of one test
-async function runTest(id) {
+async function runTest(id, browser) {
   try {
-    const {id: rid} = await api('POST', `/api/tests/${id}/run`, {headless: $('#runHeaded').checked ? false : null});
+    const {id: rid} = await api('POST', `/api/tests/${id}/run`, {headless: $('#runHeaded').checked ? false : null, browser: browser || ''});
     openRun(rid);
     setTimeout(loadTests, 500);
   } catch (e) { alert(e.message); }
@@ -1216,10 +1547,15 @@ function stepsHtml(r, results, t) {
   return steps.map((s, i) => {
     const x = results.find(y => y.id === s.id);
     const icon = !x ? '<span class="muted">…</span>' : x.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>';
+    const sub = x?.sub?.length ? `<div style="margin-left:14px">${x.sub.map(y => `<div class="hint" style="margin:1px 0">${y.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>'} ${esc(y.description)}${y.healed ? ' <span class="badge warn">self-healed</span>' : ''}</div>`).join('')}</div>` : '';
     return `<div class="r">${icon}<div class="grow">${i + 1}. ${esc(s.description)}${x?.healed ? ' <span class="badge warn">self-healed</span>' : ''}
       ${x?.shot ? ` <a class="linkbtn" target="_blank" href="/api/runs/${r.id}/files/${x.shot}">снимок</a>` : ''}
-      ${x?.error ? `<div class="err">${esc(x.error)}</div>` : ''}${x ? detailsHtml(r, x, t) : ''}</div></div>`;
+      ${x?.error ? `<div class="err">${esc(x.error)}</div>` : ''}${sub}${x ? detailsHtml(r, x, t) : ''}</div></div>`;
   }).join('');
+}
+function dataResultsHtml(title, list) {
+  if (!list?.length) return '';
+  return `<div class="hint" style="margin-top:6px"><b>${title}:</b> ` + list.map(d => `${d.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>'} ${esc(d.description)}${d.details?.api ? ` <span class="muted">(${d.details.api.status}${d.details.api.saved?.length ? ', сохранено: ' + d.details.api.saved.join(', ') : ''})</span>` : ''}${d.error ? ` <span class="err">${esc(d.error)}</span>` : ''}`).join(' · ') + '</div>';
 }
 function renderRun(r, t) {
   const box = $('#runBox'); box.classList.remove('hidden');
@@ -1231,18 +1567,45 @@ function renderRun(r, t) {
   if (r.flaky) html += '<div class="hint">Упал в первой попытке и прошёл при перезапуске — нестабильный тест.</div>';
   else if (attempts.length > 1) html += '<div class="hint">Упал и при повторном запуске.</div>';
   if (r.status === 'running' && r.attempt > 1) html += '<div class="hint">Повторный запуск…</div>';
+  if (r.browser && (r.browser !== 'chromium' || r.device)) html += `<div class="hint">Браузер: ${esc(r.browser)}${r.device ? ' · устройство: ' + esc(r.device) : ''}</div>`;
+  if (r.relogin) html += '<div class="hint">Сохранённый вход устарел — тест входа выполнен заново.</div>';
+  html += dataResultsHtml('До теста', r.before);
   html += stepsHtml(r, r.results || [], t);
+  html += dataResultsHtml('После теста', r.after);
   if (attempts.length > 1) html += `<details class="opt"><summary>Первая попытка</summary>${stepsHtml(r, attempts[0].results, t)}</details>`;
   if (r.proposals) html += `<div class="hint">Самолечение предложило новых локаторов: ${r.proposals} — <a href="#" onclick="openTest('${r.test_id}');return false">на ревью</a>.</div>`;
   if (r.analysis) html += `<div class="card" style="margin-top:10px"><b>Анализ падения: ${esc(VERDICT[r.analysis.verdict] || r.analysis.verdict)}</b>
       <div>${esc(r.analysis.summary)}</div>${r.analysis.suggestion ? `<div class="muted" style="margin-top:4px">${esc(r.analysis.suggestion)}</div>` : ''}</div>`;
+  if (r.defect) html += `<div class="hint">Дефект: ${r.defect.url ? `<a href="${esc(r.defect.url)}" target="_blank" rel="noopener">${esc(r.defect.key)}</a>` : esc(r.defect.key)} (${esc(r.defect.tracker)}, ${esc(r.defect.by || '')})</div>`;
+  else if (['failed', 'flaky'].includes(r.status) && PROJ.connections.some(c => c.enabled && [...TRACKERS, 'atlassian'].includes(c.preset)))
+    html += `<div id="defectBox" style="margin-top:8px"><button class="btn small" onclick="defectDraft('${r.id}')">Черновик дефекта${r.analysis?.verdict === 'product_bug' ? ' (похоже на дефект продукта)' : ''}</button></div>`;
   const traces = attempts.filter(a => a.trace).map(a => a.trace);
   if (traces.length) html += `<div class="hint">Playwright trace: ${traces.map(n => `<a href="/api/runs/${r.id}/files/${n}">${esc(n)}</a>`).join(', ')} — откройте командой <code>playwright show-trace &lt;файл&gt;</code>. Пароль в trace замаскирован.</div>`;
   const events = r.events || [];
   if (events.length) html += `<details class="opt"><summary>События браузера: ${events.length} (ошибки консоли, запросы 4xx/5xx)</summary><div class="events">` +
     events.map(e => `<div><span class="badge ${e.type === 'http' ? 'warn' : 'bad'}">${esc(e.type)}</span> шаг ${e.step + 1}: ${esc(e.text)}</div>`).join('') + '</div></details>';
-  if (r.zephyr) html += `<div class="hint">Zephyr: ${esc(r.zephyr.key || '')} ${esc(r.zephyr.summary || '')}</div>`;
+  const tms = r.tms || r.zephyr;
+  if (tms) html += `<div class="hint">${esc(tms.system || 'Zephyr')}: ${esc(tms.key || '')} ${esc(tms.summary || '')}</div>`;
   box.innerHTML = html;
+}
+// a defect from a failed run: a draft a person edits and sends to the tracker
+async function defectDraft(rid) {
+  clearTimeout(runTimer);
+  let d;
+  try { d = await api('GET', `/api/runs/${rid}/defect`); } catch (e) { alert(e.message); return; }
+  $('#defectBox').innerHTML = `<div class="card" style="background:var(--bg)"><b>Дефект</b>
+    <label>Заголовок</label><input id="dfTitle" value="${esc(d.title)}">
+    <label>Описание</label><textarea id="dfText" rows="12" class="code">${esc(d.text)}</textarea>
+    <div class="row" style="margin-top:8px"><select id="dfTracker" style="width:auto">${d.trackers.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+      <span class="grow muted" id="dfMsg">В трекер дефект уйдёт только после нажатия «Создать».</span>
+      <button class="btn primary" id="dfCreate">Создать</button></div></div>`;
+  $('#dfCreate').onclick = async () => {
+    $('#dfCreate').disabled = true;
+    try {
+      const r = await api('POST', `/api/runs/${rid}/defect`, {connection: $('#dfTracker').value, title: $('#dfTitle').value, text: $('#dfText').value});
+      $('#defectBox').innerHTML = `<div class="ok">Дефект создан: ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.key)}</a>` : esc(r.key)}</div>`;
+    } catch (e) { $('#dfMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; $('#dfCreate').disabled = false; }
+  };
 }
 async function acceptBaseline(rid, stepId, btn) {
   if (!confirm('Сделать этот снимок эталоном для визуальной проверки?')) return;
@@ -1280,6 +1643,31 @@ async function openTest(id, quiet) {
     : '<div class="hint">Нет предложений. Когда сломанный локатор чинит ИИ, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
   html += '</div>';
 
+  const st = t.status || 'ready', comments = t.comments || [];
+  html += `<div class="sub"><div class="row"><b class="grow">Ревью теста: ${{draft: 'черновик', review: 'на ревью', ready: 'в наборе'}[st]}</b>
+      ${st !== 'ready' ? `<button class="btn primary small" onclick="setStatus('${t.id}', 'ready');openTest('${t.id}', true)">Проверен — в набор</button>` : ''}
+      ${st === 'draft' ? `<button class="btn small" onclick="setStatus('${t.id}', 'review');openTest('${t.id}', true)">На ревью</button>` : ''}</div>
+    ${t.review ? `<div class="hint">${esc(t.review.by)} · ${fmtTime(t.review.at)}</div>` : ''}
+    <div class="hint">Тест, записанный агентом, входит в регрессию только после проверки человеком. Комментарии — к шагам или ко всему тесту.</div>
+    ${[{id: '', description: 'Весь тест'}, ...t.steps].map((s, i) => {
+      const cs = comments.filter(c => c.step_id === s.id);
+      return (i === 0 || cs.length) ? `<div style="margin-top:4px"><b style="font-size:12px">${i ? `Шаг ${i}. ` : ''}${esc(s.description)}</b>` +
+        cs.map(c => `<div class="hint" style="margin:2px 0 2px 12px">💬 <b>${esc(c.user)}</b>: ${esc(c.text)} <span class="muted">${fmtTime(c.at)}</span>
+          ${c.user === ME.user || ME.is_admin ? `<button class="linkbtn" onclick="delComment('${t.id}', '${c.id}')">удалить</button>` : ''}</div>`).join('') + '</div>' : '';
+    }).join('')}
+    <div class="row" style="margin-top:6px"><select id="cmStep" style="width:auto"><option value="">весь тест</option>${t.steps.map((s, i) => `<option value="${s.id}">шаг ${i + 1}: ${esc(s.description.slice(0, 50))}</option>`).join('')}</select>
+      <input id="cmText" class="grow" placeholder="Комментарий"><button class="btn small" onclick="addComment('${t.id}')">Добавить</button></div></div>`;
+
+  html += `<div class="sub"><div class="row"><b class="grow">Версии</b></div><div id="versions" class="hint">…</div></div>`;
+
+  html += `<div class="sub"><div class="row"><b class="grow">Подготовка и очистка данных</b>
+      <button class="btn small" onclick="dataRow('before')">+ запрос до теста</button>
+      <button class="btn small" onclick="dataRow('after')">+ запрос после теста</button>
+      <button class="btn primary small" onclick="saveData('${t.id}', this)">Сохранить</button></div>
+    <div class="hint">Запросы к API тестируемого приложения (с куками браузера теста). «До теста» создаёт данные и сохраняет поля ответа в переменные — в шагах они доступны как <code>{{vars.имя}}</code>; «после теста» выполняется всегда, даже при падении. Удалять (DELETE) можно только после теста и только созданное в этом прогоне. Эти запросы пишет человек — агент их не генерирует.</div>
+    <div id="dataEditor">${['before', 'after'].map(ph => `<div data-phase="${ph}"><b style="font-size:12px">${ph === 'before' ? 'До теста' : 'После теста'}</b>${(t[ph] || []).map(s => dataRowHtml(s)).join('')}</div>`).join('')}</div>
+    <span class="muted" id="dataMsg"></span></div>`;
+
   const v = t.verify;
   html += `<div class="sub"><div class="row"><b class="grow">Качество проверок (мутационное тестирование)</b>
       <button class="btn small" onclick="verifyTest('${t.id}', this)" ${v?.status === 'running' ? 'disabled' : ''}>${v ? 'Проверить снова' : 'Проверить мутациями'}</button>
@@ -1304,10 +1692,75 @@ async function openTest(id, quiet) {
       <table><thead><tr><th>Запрос</th><th>Ответ</th><th>Шаг</th><th></th></tr></thead><tbody>` +
       traffic.map(e => `<tr><td class="loc">${esc(e.method)} ${esc(e.url.length > 110 ? e.url.slice(0, 110) + '…' : e.url)}${e.third_party ? ' <span class="badge warn">внешний сервис</span>' : ''}</td>
         <td>${e.status} <span class="muted">${esc(e.mime || '')}</span></td><td>${e.step >= 0 ? e.step + 1 : '—'}</td>
-        <td><button class="btn small" onclick="mockRequest('${t.id}', ${e.index})">Замокать</button></td></tr>`).join('') + '</tbody></table></div>';
+        <td class="row"><button class="btn small" onclick="mockRequest('${t.id}', ${e.index})">Замокать</button>
+          ${e.method !== 'DELETE' && !e.third_party ? `<button class="btn small" onclick="toBefore('${t.id}', ${e.index})" title="Выполнять этот запрос перед тестом для подготовки данных">В подготовку</button>` : ''}</td></tr>`).join('') + '</tbody></table></div>';
   }
   box.innerHTML = html;
   if (!quiet) box.scrollIntoView({behavior: 'smooth', block: 'start'});
+  loadVersions(t.id);
+}
+async function loadVersions(tid) {
+  const list = await api('GET', `/api/tests/${tid}/versions`).catch(() => []);
+  $('#versions').innerHTML = list.length ? list.map(v => `<div class="row" style="margin:2px 0"><span class="grow">Версия ${v.version} · ${fmtTime(v.at)}${v.by ? ' · ' + esc(v.by) : ''} · шагов: ${v.steps}</span>
+      <button class="btn small" onclick="showDiff('${tid}', ${v.version})">Сравнить с текущей</button>
+      <button class="btn small" onclick="restoreVersion('${tid}', ${v.version})">Откатить</button></div><div id="diff-${v.version}"></div>`).join('')
+    : 'Изменений ещё не было: версия сохраняется, когда меняются шаги, данные, название или адрес.';
+}
+async function showDiff(tid, n) {
+  const v = await api('GET', `/api/tests/${tid}/versions/${n}`);
+  const label = {added: ['добавлен', 'ok'], removed: ['удалён', 'bad'], changed: ['изменён', 'warn'], field: ['изменено', 'warn']};
+  $(`#diff-${n}`).innerHTML = v.diff.length ? v.diff.map(d => `<div class="hint" style="margin:1px 0 1px 12px"><span class="badge ${label[d.change][1]}">${label[d.change][0]}</span>
+      ${d.change === 'field' ? esc({name: 'название', url: 'адрес', scenario: 'сценарий', data: 'подготовка данных'}[d.field]) + (d.was != null && d.field !== 'data' ? `: «${esc(d.was)}» → «${esc(d.now)}»` : '')
+        : esc(d.step.description) + (d.change === 'changed' ? ` <span class="muted">(${d.fields.map(f => ({action: 'действие', description: 'описание', value: 'значение', locator: 'локатор'})[f]).join(', ')}${d.fields.includes('description') ? `; было: «${esc(d.was.description)}»` : ''})</span>` : '')}</div>`).join('')
+    : '<div class="hint" style="margin-left:12px">Совпадает с текущей.</div>';
+}
+async function restoreVersion(tid, n) {
+  if (!confirm(`Вернуть тест к версии ${n}? Текущее состояние сохранится как новая версия.`)) return;
+  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); openTest(tid, true); loadTests(); } catch (e) { alert(e.message); }
+}
+async function addComment(tid) {
+  const text = $('#cmText').value.trim(); if (!text) return;
+  try { await api('POST', `/api/tests/${tid}/comments`, {step_id: $('#cmStep').value, text}); openTest(tid, true); } catch (e) { alert(e.message); }
+}
+async function delComment(tid, cid) {
+  try { await api('DELETE', `/api/tests/${tid}/comments/${cid}`); openTest(tid, true); } catch (e) { alert(e.message); }
+}
+// before / after data preparation (api_request steps written by a person)
+function dataRowHtml(s) {
+  let v = {};
+  try { v = JSON.parse(s?.value || '{}'); } catch {}
+  const save = Object.entries(v.save || {}).map(([k, p]) => `${k}=${p}`).join('; ');
+  const body = v.body == null ? '' : typeof v.body === 'string' ? v.body : JSON.stringify(v.body, null, 1);
+  return `<div class="card" style="margin-top:6px;background:var(--bg)" data-row data-id="${esc(s?.id || '')}">
+    <div class="row"><input data-k="description" value="${esc(s?.description || '')}" placeholder="Что делает запрос" class="grow">
+      <button class="btn small danger" onclick="this.closest('[data-row]').remove()">✕</button></div>
+    <div class="row" style="margin-top:4px"><select data-k="method" style="width:auto">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => `<option ${m === (v.method || 'POST') ? 'selected' : ''}>${m}</option>`).join('')}</select>
+      <input data-k="url" value="${esc(v.url || '')}" placeholder="/api/orders или /api/orders/{{vars.order_id}}" class="grow">
+      <input data-k="expect_status" value="${esc(v.expect_status || '')}" placeholder="код ответа" style="width:110px"></div>
+    <textarea data-k="body" class="code" rows="2" placeholder='Тело запроса (JSON), например {"title": "Заказ {{unique}}"}' style="margin-top:4px">${esc(body)}</textarea>
+    <input data-k="save" value="${esc(save)}" placeholder="Сохранить из ответа: order_id=$.id; token=$.data.token" style="margin-top:4px"></div>`;
+}
+function dataRow(phase) { $(`#dataEditor [data-phase="${phase}"]`).insertAdjacentHTML('beforeend', dataRowHtml(null)); }
+async function saveData(tid, btn) {
+  const block = ph => [...$$(`#dataEditor [data-phase="${ph}"] [data-row]`)].map(row => {
+    const g = k => row.querySelector(`[data-k="${k}"]`).value.trim();
+    let body = g('body');
+    if (body) { try { body = JSON.parse(body); } catch {} }
+    const save = Object.fromEntries(g('save').split(/[;\n]/).map(x => x.split('=').map(y => y.trim())).filter(x => x[0] && x[1]));
+    const v = {method: g('method'), url: g('url')};
+    if (body !== '') v.body = body;
+    if (Object.keys(save).length) v.save = save;
+    if (g('expect_status')) v.expect_status = +g('expect_status');
+    return {id: row.dataset.id || undefined, description: g('description') || `${v.method} ${v.url}`, value: v};
+  });
+  btn.disabled = true;
+  try { await api('PUT', `/api/tests/${tid}/data`, {before: block('before'), after: block('after')}); $('#dataMsg').textContent = 'Сохранено'; loadTests(); }
+  catch (e) { $('#dataMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+}
+async function toBefore(tid, index) {
+  try { await api('POST', `/api/tests/${tid}/traffic/${index}/before`); openTest(tid, true); }
+  catch (e) { alert(e.message); }
 }
 async function healDecision(tid, pid, decision) {
   try { await api('POST', `/api/tests/${tid}/proposals/${pid}/${decision}`); } catch (e) { alert(e.message); }
@@ -1325,7 +1778,8 @@ $('#suiteBtn').onclick = async () => {
   const tag = $('#tagFilter').value;
   $('#suiteBtn').disabled = true;
   try {
-    const r = await api('POST', `/api/projects/${PID}/runs`, {tags: tag ? [tag] : [], headless: $('#runHeaded').checked ? false : null});
+    const r = await api('POST', `/api/projects/${PID}/runs`, {tags: tag ? [tag] : [], headless: $('#runHeaded').checked ? false : null,
+      include_drafts: $('#runDrafts').checked});
     openSuite(r.id);
   } catch (e) { alert(e.message); }
   finally { $('#suiteBtn').disabled = false; }
@@ -1359,6 +1813,34 @@ async function openSuite(sid) {
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
 }
 
+// the QA lead's dashboard
+const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
+function tile(value, label, sub) { return `<div class="tile"><div class="l">${label}</div><div class="v">${value}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`; }
+function bars(points, label, title) {
+  if (!points.length) return '<div class="hint">Данных пока нет.</div>';
+  const max = Math.max(...points.map(label)) || 1;
+  return `<div class="bars">${points.map(p => `<div class="${p.passed === false ? 'fail' : ''}" style="height:${label(p) / max * 100}%" title="${esc(title(p))}"></div>`).join('')}</div>
+    <div class="axis"><span>${esc(title(points[0]).split(':')[0])}</span><span>макс. ${max}</span><span>${esc(title(points.at(-1)).split(':')[0])}</span></div>`;
+}
+async function loadDash() {
+  if (!PID) return;
+  let m;
+  try { m = await api('GET', `/api/projects/${PID}/metrics?days=${$('#dashDays').value}`); } catch (e) { $('#dashTiles').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const a = m.automation, st = m.stability, q = m.quality, r = m.regression, sv = m.saved, sp = m.spending;
+  $('#dashTiles').innerHTML =
+    tile(m.tests, 'Автотестов', Object.entries(m.by_status).map(([k, v]) => `${({draft: 'черновиков', review: 'на ревью', ready: 'в наборе'})[k] || k}: ${v}`).join(' · ')) +
+    tile(a.share == null ? a.linked_cases : pct(a.share), 'Автоматизировано ручных кейсов', a.imported_cases ? `${a.linked_cases} из ${a.imported_cases} импортированных` : `привязано к кейсам: ${a.linked_cases}`) +
+    tile(pct(st.flaky_share), 'Нестабильных тестов', `${st.flaky} шт. · в карантине: ${st.quarantined}`) +
+    tile(pct(st.pass_rate), 'Успешных прогонов', `за ${m.days} дн.`) +
+    tile(pct(q.mutation_score), 'Доля убитых мутантов', `проверено тестов: ${q.verified}`) +
+    tile(r.last_minutes == null ? '—' : r.last_minutes + ' мин', 'Время регрессии', 'последний запуск набора') +
+    tile(sv.hours + ' ч', 'Сэкономлено ручного труда', `${sv.runs} автопрогонов × ${sv.manual_minutes} мин (настройка «Ручной прогон кейса»)`) +
+    tile(`$${sp.usd.toFixed(2)}`, `Расход на модели за ${sp.month}`, `≈ ${sp.rub.toFixed(0)} ₽` + (sp.test_generation_usd != null ? ` · генерация теста ≈ $${sp.test_generation_usd}` : ''));
+  $('#dashSuites').innerHTML = bars(r.suites, p => p.minutes, p => `${fmtTime(p.at)}: ${p.minutes} мин, ${p.passed ? 'успешно' : 'есть падения'}`);
+  $('#dashRuns').innerHTML = bars(sv.per_day, p => p.runs, p => `${p.day}: ${p.runs} прогонов`);
+}
+$('#dashDays').onchange = loadDash;
+
 // screen coverage from the Planner's site map
 async function loadCoverage() {
   const c = await api('GET', `/api/projects/${PID}/coverage`);
@@ -1375,17 +1857,119 @@ async function loadCoverage() {
 }
 
 // ---- requirements sources: Jira / Confluence (MCP) and .md files
+// ---- project tasks
+const TASK_STATUS = {todo: 'К выполнению', in_progress: 'В работе', review: 'На проверке', done: 'Готово'};
+const TASK_PRIORITY = {high: ['высокий', 'bad'], medium: ['средний', 'warn'], low: ['низкий', 'off']};
+let TASKS = [], TASK = null, STUDIO_TASK = null;   // TASK: open in the editor ({} = new)
+const statusOptions = cur => Object.entries(TASK_STATUS).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${v}</option>`).join('');
+$('#taskSt').innerHTML = statusOptions('todo');
+$('#taskPr').innerHTML = Object.entries(TASK_PRIORITY).map(([k, [v]]) => `<option value="${k}">${v}</option>`).join('');
+
+async function loadTasks() {
+  if (!PID) return;
+  const who = $('#taskWho').value === 'me' ? ME.user : '';
+  const r = await api('GET', `/api/projects/${PID}/tasks?status=${$('#taskStatus').value}&assignee=${encodeURIComponent(who)}`);
+  TASKS = r.tasks;
+  const c = r.counts;
+  $('#taskCounts').textContent = `открыто: ${c.open} · к выполнению: ${c.todo} · в работе: ${c.in_progress} · на проверке: ${c.review} · готово: ${c.done}`;
+  $('#tasksBody').innerHTML = TASKS.map(t => {
+    const [pr, cls] = TASK_PRIORITY[t.priority] || [t.priority, 'off'];
+    const desc = t.description.length > 160 ? t.description.slice(0, 160) + '…' : t.description;
+    return `<tr class="${t.status === 'done' ? 'done' : ''}">
+      <td><a href="#" onclick="openTask('${t.id}');return false"><b>${esc(t.title)}</b></a>
+        ${desc ? `<div class="muted" style="font-size:12px;white-space:pre-wrap">${esc(desc)}</div>` : ''}
+        ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="showTab('tests');openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}</div>` : ''}</td>
+      <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select></td>
+      <td><span class="badge ${cls}">${esc(pr)}</span></td>
+      <td>${esc(t.assignee) || '<span class="muted">—</span>'}</td>
+      <td class="${t.overdue ? 'overdue' : ''}" title="${t.overdue ? 'Срок прошёл' : ''}">${t.due ? new Date(t.due + 'T00:00').toLocaleDateString() : '—'}</td>
+      <td class="row"><button class="btn small" onclick="taskToStudio('${t.id}')" title="Создать тест в Studio по описанию задачи">Тест в Studio</button>
+        <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
+          <button onclick="openTask('${t.id}')">Изменить</button>
+          <button onclick="delTask('${t.id}')" style="color:var(--bad)">Удалить</button>
+        </div></details></td></tr>`;
+  }).join('') || `<tr><td colspan="6" class="muted">${c.open + c.done ? 'Нет задач с такими условиями.' : 'В проекте пока нет задач.'}</td></tr>`;
+}
+$('#taskStatus').onchange = loadTasks;
+$('#taskWho').onchange = loadTasks;
+
+async function setTaskStatus(id, status) {
+  try { await api('PATCH', `/api/tasks/${id}`, {status}); } catch (e) { alert(e.message); }
+  loadTasks();
+}
+async function openTask(id) {
+  let t = {};
+  if (id) { try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { alert(e.message); return; } }
+  TASK = t;
+  $('#taskHead').textContent = id ? 'Задача' : 'Новая задача';
+  $('#taskTitle').value = t.title || ''; $('#taskDesc').value = t.description || '';
+  $('#taskSt').value = t.status || 'todo'; $('#taskPr').value = t.priority || 'medium';
+  $('#taskDue').value = t.due || ''; $('#taskAs').value = id ? t.assignee || '' : ME.user;
+  $('#taskErr').textContent = '';
+  $('#taskDel').classList.toggle('hidden', !id); $('#taskStudio').classList.toggle('hidden', !id);
+  // Suggest people already working in the project.
+  const people = new Set([ME.user, ...TASKS.map(x => x.assignee), ...TASKS.map(x => x.created_by)].filter(Boolean));
+  $('#taskPeople').innerHTML = [...people].map(u => `<option value="${esc(u)}">`).join('');
+  const tests = await api('GET', `/api/tests?project_id=${PID}`).catch(() => []);
+  const linked = new Set(t.test_ids || []);
+  $('#taskTests').innerHTML = tests.map(x => `<label class="inline"><input type="checkbox" class="tsel" value="${x.id}" ${linked.has(x.id) ? 'checked' : ''}> ${esc(x.name)}</label>`).join('')
+    || '<span class="muted" style="font-size:12px">В проекте пока нет тестов.</span>';
+  $('#taskBox').classList.remove('hidden');
+  $('#taskBox').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  $('#taskTitle').focus();
+}
+function closeTask() { TASK = null; $('#taskBox').classList.add('hidden'); }
+$('#taskNew').onclick = () => openTask(null);
+$('#taskCancel').onclick = closeTask;
+$('#taskSave').onclick = async () => {
+  const body = {title: $('#taskTitle').value.trim(), description: $('#taskDesc').value, status: $('#taskSt').value,
+    priority: $('#taskPr').value, assignee: $('#taskAs').value.trim(), due: $('#taskDue').value,
+    test_ids: $$('.tsel').filter(c => c.checked).map(c => c.value)};
+  if (!body.title) { $('#taskErr').textContent = 'Укажите название задачи'; return; }
+  $('#taskSave').disabled = true;
+  try {
+    await api(TASK.id ? 'PATCH' : 'POST', TASK.id ? `/api/tasks/${TASK.id}` : `/api/projects/${PID}/tasks`, body);
+    closeTask(); loadTasks();
+  } catch (e) { $('#taskErr').textContent = e.message; }
+  finally { $('#taskSave').disabled = false; }
+};
+async function delTask(id) {
+  if (!confirm('Удалить задачу? Тесты задачи останутся в проекте.')) return;
+  await api('DELETE', `/api/tasks/${id}`);
+  if (TASK?.id === id) closeTask();
+  loadTasks();
+}
+$('#taskDel').onclick = () => delTask(TASK.id);
+$('#taskStudio').onclick = () => taskToStudio(TASK.id);
+
+// A test started from a task is linked to it when saved.
+function setStudioTask(t) {
+  STUDIO_TASK = t ? {id: t.id, title: t.title} : null;
+  $('#fTask').classList.toggle('hidden', !t);
+  $('#fTask').innerHTML = t ? `Тест будет привязан к задаче «${esc(t.title)}» <button class="linkbtn" onclick="setStudioTask(null)">отвязать</button>` : '';
+}
+async function taskToStudio(id) {
+  if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
+  let t;
+  try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { alert(e.message); return; }
+  $('#fName').value = t.title;
+  $('#fScenario').value = t.description || t.title;
+  showTab('studio');
+  setStudioTask(t);
+  $('#fScenario').focus();
+}
+
 function appendText(ta, title, text) {
   const cur = ta.value.trim();
   ta.value = (cur ? cur + '\n\n---\n\n' : '') + (title && !text.startsWith('#') ? `# ${title}\n\n` : '') + text.trim();
 }
 $('#srcFetch').onclick = async () => {
   const link = $('#srcLink').value.trim(); if (!link) return;
-  $('#srcFetch').disabled = true; $('#srcStatus').textContent = 'Загрузка через MCP Atlassian…';
+  $('#srcFetch').disabled = true; $('#srcStatus').textContent = 'Загрузка…';
   try {
     const r = await api('POST', '/api/requirements/fetch', {project_id: PID, link});
     appendText($('#reqText'), r.title, r.text);
-    $('#srcStatus').innerHTML = `<span class="ok">Загружено:</span> ${esc(r.kind === 'jira' ? 'Jira' : 'Confluence')} · ${esc(r.title)}` +
+    $('#srcStatus').innerHTML = `<span class="ok">Загружено:</span> ${esc({jira: 'Jira', confluence: 'Confluence', youtrack: 'YouTrack', yandex_tracker: 'Яндекс Трекер', kaiten: 'Kaiten'}[r.kind] || r.kind)} · ${esc(r.title)}` +
       (r.truncated ? ' · <span class="err">текст обрезан</span>' : '');
     $('#srcLink').value = '';
   } catch (e) {
@@ -1395,10 +1979,21 @@ $('#srcFetch').onclick = async () => {
 };
 $('#srcLink').onkeydown = e => { if (e.key === 'Enter') $('#srcFetch').click(); };
 $('#srcFileBtn').onclick = () => $('#srcFile').click();
+// A specification file: .md / .txt read here, .docx / .pdf converted to text by the server.
+async function readSpec(f) {
+  if (/\.(md|markdown|txt)$/i.test(f.name)) return {title: '', text: await f.text()};
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/requirements/file', {method: 'POST', body: fd});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || r.statusText);
+  return d;
+}
 $('#srcFile').onchange = async e => {
-  const files = [...e.target.files];
-  for (const f of files) appendText($('#reqText'), '', await f.text());
-  $('#srcStatus').innerHTML = files.length ? `<span class="ok">Загружено:</span> ${files.map(f => esc(f.name)).join(', ')}` : '';
+  const files = [...e.target.files], done = [];
+  try {
+    for (const f of files) { const d = await readSpec(f); appendText($('#reqText'), d.title, d.text); done.push(f.name + (d.truncated ? ' (обрезан)' : '')); }
+    $('#srcStatus').innerHTML = done.length ? `<span class="ok">Загружено:</span> ${done.map(esc).join(', ')}` : '';
+  } catch (err) { $('#srcStatus').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
   e.target.value = '';
 };
 $('#reqToPipe').onclick = () => {
@@ -1477,6 +2072,9 @@ function flowHtml(current) {
 async function loadPipe() {
   if (!PID) return;
   $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process');return false">настроить</a>`;
+  const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
+  $('#pipeCasesBox').classList.toggle('hidden', !tms.length);
+  $('#pipeCaseConn').innerHTML = tms.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   const jobs = await api('GET', `/api/projects/${PID}/jobs`);
   $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
     <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
@@ -1485,16 +2083,22 @@ async function loadPipe() {
   if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
 }
 $('#pipeFileBtn').onclick = () => $('#pipeFile').click();
-$('#pipeFile').onchange = async e => { for (const f of e.target.files) appendText($('#pipeText'), '', await f.text()); e.target.value = ''; };
+$('#pipeFile').onchange = async e => {
+  try { for (const f of e.target.files) { const d = await readSpec(f); appendText($('#pipeText'), d.title, d.text); } }
+  catch (err) { $('#pipeErr').textContent = err.message; }
+  e.target.value = '';
+};
 $('#pipeStart').onclick = async () => {
   $('#pipeErr').textContent = '';
   const links = $('#pipeLinks').value.split('\n').map(s => s.trim()).filter(Boolean);
   const text = $('#pipeText').value.trim(), explore = $('#pipeExplore').checked;
-  if (!links.length && !text && !explore) { $('#pipeErr').textContent = 'Укажите ссылки на требования, текст или включите исследование сайта'; return; }
+  const caseConn = $('#pipeCasesBox').open ? $('#pipeCaseConn').value : '';
+  if (!links.length && !text && !explore && !caseConn) { $('#pipeErr').textContent = 'Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта'; return; }
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
   $('#pipeStart').disabled = true;
   try {
-    const r = await api('POST', `/api/projects/${PID}/jobs`, {links, text, explore, url: $('#pipeUrl').value.trim()});
+    const r = await api('POST', `/api/projects/${PID}/jobs`, {links, text, explore, url: $('#pipeUrl').value.trim(),
+      case_connection: caseConn, case_ids: caseConn ? $('#pipeCaseIds').value : ''});
     $('#pipeExplore').checked = false;
     $('#pipeLinks').value = $('#pipeText').value = '';
     openJob(r.id); loadPipe();
@@ -1529,7 +2133,7 @@ function renderJob() {
         `<label class="inline" style="margin-top:8px"><input type="checkbox" class="jsel" value="${i}" ${s.priority !== 'low' ? 'checked' : ''}> генерировать тест</label>`)).join('')}</div>`;
   }
   if (j.items.length) {
-    html += `<table style="margin-top:10px"><thead><tr><th>Сценарий</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Zephyr</th><th></th></tr></thead><tbody>` +
+    html += `<table style="margin-top:10px"><thead><tr><th>Сценарий</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +
       j.items.map(it => {
         const [st, cls] = ITEM_STATUS[it.status] || [it.status, 'off'];
         const v = it.verify;
@@ -1566,10 +2170,21 @@ async function cancelJob() {
 // What each kind of resource is for in the process.
 const ROLES = {
   atlassian: ['Источник требований', 'Задачи Jira и страницы Confluence, из которых строятся сценарии. Только чтение.'],
+  youtrack: ['Трекер', 'Требования из задач YouTrack и дефекты по упавшим прогонам (создаёт человек).'],
+  yandex_tracker: ['Трекер', 'Требования из задач Яндекс Трекера и дефекты по упавшим прогонам (создаёт человек).'],
+  kaiten: ['Трекер', 'Требования из карточек Kaiten и дефекты по упавшим прогонам (создаёт человек).'],
   zephyr: ['Управление тестами', 'Куда публикуются тест-кейсы и результаты прогонов.'],
+  allure: ['Управление тестами', 'Allure TestOps: публикация кейсов, результаты прогонов, импорт ручных кейсов для автоматизации.'],
+  testit: ['Управление тестами', 'Test IT: автотесты с привязкой к ручным кейсам, результаты прогонов, импорт ручных кейсов.'],
   playwright: ['Движок браузера', 'Агент проходит сценарии через Playwright MCP вместо встроенного Playwright.'],
   custom: ['Дополнительные инструменты', 'Любой MCP-сервер: инструменты чтения получает агент при генерации, остальные (кроме удаления) — этап публикации.'],
 };
+const TMS = ['zephyr', 'allure', 'testit'], TRACKERS = ['youtrack', 'yandex_tracker', 'kaiten'];
+function publishConn() {
+  const p = PROJ.pipeline.publish;
+  return PROJ.connections.find(c => c.enabled && (p.connection ? c.id === p.connection : TMS.includes(c.preset)));
+}
+function tmsKey(c) { return c ? (TMS.includes(c.preset) ? c.preset : 'mcp-' + c.id) : ''; }
 let WIZ = null;   // {pid, step, suggestPublish}
 
 function showHomeList() {
@@ -1585,7 +2200,7 @@ async function renderHome() {
       return `<span class="badge ${cls}" title="${esc(state)}">${esc(c.name)}</span>`;
     }).join('') || '<span class="muted" style="font-size:12px">Подключений нет — только файлы, текст и встроенный Playwright</span>';
     return `<div class="card ${p.id === PID ? 'cur' : ''}">
-      <div class="row"><b class="grow">${esc(p.name)}</b><span class="muted" style="font-size:12px">тестов: ${p.tests}</span></div>
+      <div class="row"><b class="grow">${esc(p.name)}</b><span class="muted" style="font-size:12px">тестов: ${p.tests}${p.open_tasks ? ` · задач: ${p.open_tasks}` : ''}</span></div>
       ${p.description ? `<div class="hint" style="margin:0">${esc(p.description)}</div>` : ''}
       <div class="muted" style="font-size:12px">${p.base_url ? esc(p.base_url) : 'URL приложения не задан'}${p.has_app_login ? ' · логин задан' : ''}</div>
       <div class="chips">${modelChip(p.model, p.model_check)}${chips}</div>
@@ -1678,7 +2293,7 @@ function renderSlotHeads() {
 async function wzAdd(preset, btn) {
   btn.disabled = true;
   try {
-    if (preset === 'zephyr') WIZ.suggestPublish = true;
+    if (TMS.includes(preset)) WIZ.suggestPublish = true;
     await addConn(preset);
     const cards = document.querySelectorAll(`[data-slot="${preset}"] [data-conn-id]`);
     cards[cards.length - 1]?.querySelector('[data-f]')?.focus();
@@ -1690,9 +2305,9 @@ function fillWizardProcess() {
   const label = c => esc(c.name) + (c.enabled ? (c.check?.ok ? '' : ' — не проверено') : ' — выключено');
   const opts = (list, cur) => list.map(c => `<option value="${c.id}" ${c.id === cur ? 'selected' : ''}>${label(c)}</option>`).join('');
 
-  const jira = conns.filter(c => c.preset === 'atlassian');
+  const jira = conns.filter(c => ['atlassian', ...TRACKERS].includes(c.preset));
   $('#wzReq').innerHTML = jira.length ? opts(jira, p.requirements.connection || jira[0].id)
-    : '<option value="">Только файлы .md и текст (Jira/Confluence не подключены)</option>';
+    : '<option value="">Только файлы ТЗ (.docx, .pdf, .md) и текст (трекеры не подключены)</option>';
 
   const pw = conns.filter(c => c.preset === 'playwright');
   const curPw = p.authoring.engine === 'playwright-mcp' ? (p.authoring.browser_connection || pw[0]?.id || '') : '';
@@ -1703,9 +2318,9 @@ function fillWizardProcess() {
   $('#wzTools').innerHTML = tools.map(c => `<label class="inline"><input type="checkbox" value="${c.id}" ${p.authoring.tool_connections.includes(c.id) ? 'checked' : ''}> ${label(c)}</label>`).join('')
     || '<span class="muted">— нет подключений с инструментами</span>';
 
-  const pub = conns.filter(c => ['zephyr', 'custom'].includes(c.preset));
+  const pub = conns.filter(c => [...TMS, 'custom'].includes(c.preset));
   const on = p.publish.enabled || (WIZ.suggestPublish && pub.length);
-  const curPub = on ? (p.publish.connection || pub.find(c => c.preset === 'zephyr')?.id || pub[0]?.id || '') : '';
+  const curPub = on ? (p.publish.connection || pub.find(c => TMS.includes(c.preset))?.id || pub[0]?.id || '') : '';
   $('#wzPub').innerHTML = '<option value="">Не публиковать</option>' +
     pub.map(c => `<option value="${c.id}" ${c.id === curPub ? 'selected' : ''}>${label(c)}</option>`).join('');
   $('#wzSelect').value = p.scenarios.select;
@@ -1746,28 +2361,175 @@ function showSub(sub) {
   $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub));
   $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
   if (sub === 'ide') loadTokens();
+  if (sub === 'process') loadUsage();
+  if (sub === 'access') loadAccess();
 }
+
+// members and roles
+let ACCESS = null;
+const roleTitle = r => (ME.roles || {})[r] || r;
+function canRole(need) { const rank = {viewer: 0, editor: 1, owner: 2}; return PROJ && rank[PROJ.role] >= rank[need]; }
+async function loadAccess() {
+  try { ACCESS = await api('GET', `/api/projects/${PID}/access`); } catch (e) { $('#acMsg').textContent = e.message; return; }
+  $('#acVis').value = ACCESS.visibility;
+  $('#acUsers').innerHTML = ACCESS.users.map(u => `<option value="${esc(u)}">`).join('');
+  $('#acRole').innerHTML = ACCESS.roles.map(r => `<option value="${r.id}">${esc(r.title)}</option>`).join('');
+  $('#acRole').value = 'editor';
+  renderMembers();
+  $('#acGroups').innerHTML = ACCESS.groups.length ? '<table><thead><tr><th>Группа</th><th>Проекты</th><th>Роль</th></tr></thead><tbody>' +
+    ACCESS.groups.map(g => `<tr><td>${esc(g.group)}</td><td>${g.project === '*' ? 'все' : 'этот'}</td><td>${esc(roleTitle(g.role))}</td></tr>`).join('') +
+    '</tbody></table>' : '<span class="muted">Правил для этого проекта нет.</span>';
+  const owner = canRole('owner');
+  $('#acVis').disabled = !owner;
+  $$('.ownerOnly').forEach(x => x.classList.toggle('hidden', !owner));
+  $('#acMsg').textContent = owner ? '' : `Ваша роль — ${roleTitle(PROJ.role)}; участников меняет владелец.`;
+  $$('[data-subpanel="access"] .adminOnly').forEach(x => x.classList.toggle('hidden', !ME.is_admin));
+  if (owner) loadAudit();
+  if (ME.is_admin) api('GET', '/api/sso').then(s => {
+    $('#ssoRules').value = s.group_roles.map(r => `${r.group}; ${r.project}; ${r.role}`).join('\n');
+    $('#ssoAdmins').value = s.admin_groups.join(', ');
+  }).catch(() => {});
+}
+function renderMembers() {
+  const owner = canRole('owner');
+  $('#acList').innerHTML = ACCESS.members.map((m, i) => `<tr><td>${esc(m.user)}${ACCESS.users.includes(m.user) ? '' : ' <span class="muted">(ещё не входил)</span>'}</td>
+    <td><select onchange="ACCESS.members[${i}].role = this.value" ${owner ? '' : 'disabled'}>${ACCESS.roles.map(r =>
+      `<option value="${r.id}" ${r.id === m.role ? 'selected' : ''}>${esc(r.title)}</option>`).join('')}</select></td>
+    <td>${owner ? `<button class="linkbtn" onclick="ACCESS.members.splice(${i}, 1); renderMembers()">убрать</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">Участников нет.</td></tr>';
+}
+const AUDIT_TITLES = {'auth.login': 'Вход', 'project.access': 'Участники и доступ', 'project.update': 'Настройки проекта',
+  'project.credentials': 'Учётные данные приложения', 'connection.create': 'Подключение добавлено', 'connection.update': 'Подключение изменено',
+  'connection.delete': 'Подключение удалено', 'test.save': 'Тест сохранён', 'test.update': 'Тест изменён', 'test.meta': 'Теги, статус, карантин',
+  'test.delete': 'Тест удалён', 'test.restore': 'Откат версии', 'test.data': 'Подготовка данных', 'test.export': 'Экспорт теста',
+  'heal.accept': 'Самолечение принято', 'heal.reject': 'Самолечение отклонено', 'heal.auto': 'Самолечение без ревью',
+  'run.start': 'Прогон теста', 'suite.start': 'Прогон набора', 'pipeline.start': 'Конвейер', 'studio.start': 'Сессия Studio',
+  'project.export': 'Экспорт проекта', 'defect.create': 'Дефект в трекер', 'test.publish': 'Публикация'};
+async function loadAudit() {
+  const q = new URLSearchParams({user: $('#auUser').value.trim(), action: $('#auAction').value, limit: 300});
+  try {
+    const list = await api('GET', `/api/projects/${PID}/audit?${q}`);
+    $('#auList').innerHTML = list.map(r => `<tr><td>${esc(fmtTime(r.ts))}</td><td>${esc(r.user || '—')}${r.via !== 'web' ? ` <span class="muted">(${esc(r.via)})</span>` : ''}</td>
+      <td>${esc(AUDIT_TITLES[r.action] || r.action)}</td><td class="muted">${esc(Object.values(r.target || {}).join(' / '))}</td>
+      <td class="${String(r.status).startsWith('2') || r.status === 'ok' ? 'ok' : 'err'}">${esc(r.status)}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">Записей нет.</td></tr>';
+  } catch (e) { $('#auMsg').textContent = e.message; }
+}
+$('#auLoad').onclick = loadAudit;
+$('#auExport').onclick = () => { const m = $('#auMonth').value || new Date().toISOString().slice(0, 7); location.href = `/api/audit/export?month=${m}`; };
+$('#auVerify').onclick = async () => {
+  try { const r = await api('GET', '/api/audit/verify');
+    $('#auMsg').innerHTML = r.ok ? `<span class="ok">Цепочка цела: ${r.records} записей.</span>` : `<span class="err">Нарушена: ${esc(r.error)}</span>`;
+  } catch (e) { $('#auMsg').textContent = e.message; }
+};
+$('#acAdd').onclick = () => {
+  const user = $('#acUser').value.trim();
+  if (!user) return;
+  ACCESS.members = ACCESS.members.filter(m => m.user !== user).concat([{user, role: $('#acRole').value}]);
+  $('#acUser').value = ''; renderMembers();
+};
+$('#acSave').onclick = async () => {
+  try {
+    ACCESS = await api('PUT', `/api/projects/${PID}/access`, {visibility: $('#acVis').value,
+      members: Object.fromEntries(ACCESS.members.map(m => [m.user, m.role]))});
+    renderMembers(); $('#acMsg').textContent = 'Сохранено';
+    const keep = PID; await loadProjects(keep);
+  } catch (e) { $('#acMsg').textContent = e.message; }
+};
+$('#ssoSave').onclick = async () => {
+  const rules = $('#ssoRules').value.split('\n').map(l => l.split(';').map(x => x.trim())).filter(x => x[0])
+    .map(([group, project, role]) => ({group, project: project || '*', role: role || 'viewer'}));
+  try {
+    await api('PUT', '/api/sso', {group_roles: rules, admin_groups: $('#ssoAdmins').value.split(',').map(x => x.trim()).filter(Boolean)});
+    $('#ssoMsg').textContent = 'Сохранено'; loadAccess();
+  } catch (e) { $('#ssoMsg').textContent = e.message; }
+};
 function loadSettings() {
   if (!PROJ) return;
   $('#pName').value = PROJ.name; $('#pDesc').value = PROJ.description || ''; $('#pUrl').value = PROJ.base_url || '';
-  $('#pLogin').value = PROJ.app_username || ''; $('#pPass').value = '';
+  $('#pLang').value = PROJ.language || '';
+  $('#pLogin').value = PROJ.app_username || ''; $('#pPass').value = ''; $('#pTotp').value = '';
   $('#pPass').placeholder = PROJ.app_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#pTotp').placeholder = PROJ.app_has_totp ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#pcTotpClear').classList.toggle('hidden', !PROJ.app_has_totp);
+  const mb = PROJ.mailbox || {};
+  $('#mbKind').value = mb.kind || ''; $('#mbUrl').value = mb.url || ''; $('#mbHost').value = mb.host || '';
+  $('#mbPort').value = mb.port || 993; $('#mbUser').value = mb.user || ''; $('#mbPass').value = '';
+  $('#mbPass').placeholder = PROJ.mailbox_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
+  loadFiles(); fillNotify();
   $('#pMsg').textContent = $('#pcMsg').textContent = $('#procMsg').textContent = '';
+  if (!canRole('owner')) $('#pMsg').textContent = `Настройки проекта меняет владелец; ваша роль — ${roleTitle(PROJ.role)}.`;
   $('#dangerBox').classList.toggle('hidden', !ME.is_admin);
-  renderModel(); renderConnections(); fillProcess(); renderSkillList();
+  renderModel(); renderConnections(); fillProcess(); renderSkillList(); loadUsage();
 }
 $('#pSave').onclick = async () => {
   try {
-    await api('PUT', `/api/projects/${PID}`, {name: $('#pName').value, description: $('#pDesc').value, base_url: $('#pUrl').value});
+    await api('PUT', `/api/projects/${PID}`, {name: $('#pName').value, description: $('#pDesc').value, base_url: $('#pUrl').value,
+      language: $('#pLang').value});
     $('#pMsg').textContent = 'Сохранено';
     const keep = PID; await loadProjects(keep);
   } catch (e) { $('#pMsg').textContent = e.message; }
 };
 $('#pcSave').onclick = async () => {
   try {
-    await api('PUT', `/api/projects/${PID}/credentials`, {username: $('#pLogin').value, password: $('#pPass').value});
+    const body = {username: $('#pLogin').value, password: $('#pPass').value};
+    if ($('#pTotp').value.trim()) body.totp_secret = $('#pTotp').value.trim();
+    await api('PUT', `/api/projects/${PID}/credentials`, body);
     await refreshProject(); loadSettings(); $('#pcMsg').textContent = 'Сохранено';
   } catch (e) { $('#pcMsg').textContent = e.message; }
+};
+$('#pcTotpClear').onclick = async () => {
+  if (!confirm('Удалить секрет 2FA проекта?')) return;
+  await api('PUT', `/api/projects/${PID}/credentials`, {username: $('#pLogin').value, totp_secret: ''});
+  await refreshProject(); loadSettings();
+};
+$('#mbSave').onclick = async () => {
+  try {
+    await api('PUT', `/api/projects/${PID}/mailbox`, {kind: $('#mbKind').value, url: $('#mbUrl').value, host: $('#mbHost').value,
+      port: +$('#mbPort').value || 993, user: $('#mbUser').value, password: $('#mbPass').value, ssl: true});
+    await refreshProject(); loadSettings(); $('#mbMsg').textContent = 'Сохранено';
+  } catch (e) { $('#mbMsg').textContent = e.message; }
+};
+function fillNotify() {
+  const n = PROJ.notify, set = n.secrets_set || [], ph = k => set.includes(k) ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#ntSuite').value = n.events.suite; $('#ntStreak').value = n.events.streak;
+  $('#ntProposals').checked = n.events.proposals; $('#ntBudget').checked = n.events.budget;
+  $('#ntTg').checked = n.telegram.enabled; $('#ntTgChat').value = n.telegram.chat_id; $('#ntTgToken').value = ''; $('#ntTgToken').placeholder = ph('telegram_token');
+  $('#ntMm').checked = n.mattermost.enabled; $('#ntMmHook').value = ''; $('#ntMmHook').placeholder = ph('mattermost_webhook') || 'https://mattermost.company.ru/hooks/…';
+  const e = n.email;
+  $('#ntMail').checked = e.enabled; $('#ntHost').value = e.host; $('#ntPort').value = e.port; $('#ntUser').value = e.user;
+  $('#ntFrom').value = e.sender; $('#ntTo').value = e.to; $('#ntPass').value = ''; $('#ntPass').placeholder = ph('smtp_password');
+}
+$('#ntSave').onclick = async () => {
+  const body = {settings: {events: {suite: $('#ntSuite').value, streak: +$('#ntStreak').value || 0, proposals: $('#ntProposals').checked, budget: $('#ntBudget').checked},
+      telegram: {enabled: $('#ntTg').checked, chat_id: $('#ntTgChat').value.trim()}, mattermost: {enabled: $('#ntMm').checked},
+      email: {enabled: $('#ntMail').checked, host: $('#ntHost').value.trim(), port: +$('#ntPort').value || 587, user: $('#ntUser').value.trim(),
+        sender: $('#ntFrom').value.trim(), to: $('#ntTo').value.trim(), tls: true}},
+    secrets: {telegram_token: $('#ntTgToken').value, mattermost_webhook: $('#ntMmHook').value, smtp_password: $('#ntPass').value}};
+  try { await api('PUT', `/api/projects/${PID}/notify`, body); await refreshProject(); fillNotify(); $('#ntMsg').textContent = 'Сохранено'; }
+  catch (err) { $('#ntMsg').textContent = err.message; }
+};
+$('#ntTest').onclick = async () => {
+  $('#ntMsg').textContent = 'Отправка…';
+  try { await api('POST', `/api/projects/${PID}/notify/test`); $('#ntMsg').innerHTML = '<span class="ok">Отправлено</span>'; }
+  catch (err) { $('#ntMsg').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+};
+async function loadFiles() {
+  const list = await api('GET', `/api/projects/${PID}/files`).catch(() => []);
+  $('#filesList').innerHTML = list.map(f => `<div class="row"><span class="grow">${esc(f.name)} <span class="muted">${f.size} байт</span></span>
+    <button class="btn small danger" onclick="delFile('${encodeURIComponent(f.name)}')">Удалить</button></div>`).join('') || '<span class="muted">Файлов нет.</span>';
+}
+async function delFile(name) {
+  if (!confirm('Удалить файл? Тесты, которые его загружают, упадут.')) return;
+  await api('DELETE', `/api/projects/${PID}/files/${name}`); await refreshProject(); loadFiles();
+}
+$('#fileUp').onchange = async e => {
+  for (const f of e.target.files) {
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch(`/api/projects/${PID}/files`, {method: 'POST', body: fd});
+    if (!r.ok) { $('#filesMsg').textContent = (await r.json().catch(() => ({}))).detail || r.statusText; }
+  }
+  e.target.value = ''; await refreshProject(); loadFiles();
 };
 $('#pDelete').onclick = async () => {
   const name = prompt(`Удалить проект со всеми тестами? Введите его название для подтверждения: ${PROJ.name}`);
@@ -2010,8 +2772,10 @@ async function testConn(cid, btn) {
 // process
 const TYPES = {positive: 'позитивные', negative: 'негативные', edge: 'пограничные', boundary: 'граничные значения', accessibility: 'доступность', security: 'безопасность'};
 function connOptions(kind) {
-  const match = c => kind === 'publish' ? ['zephyr', 'custom'].includes(c.preset) : c.preset === kind;
-  const def = {atlassian: 'первое Jira/Confluence', playwright: 'первое Playwright MCP', publish: 'первое Zephyr'}[kind];
+  const match = c => kind === 'publish' ? [...TMS, 'custom'].includes(c.preset)
+    : kind === 'atlassian' ? ['atlassian', ...TRACKERS].includes(c.preset) : c.preset === kind;
+  const def = {atlassian: 'Jira/Confluence; трекеры — по адресу ссылки', playwright: 'первое Playwright MCP',
+    publish: 'первое Zephyr / Allure TestOps / Test IT'}[kind];
   return `<option value="">По умолчанию (${def})</option>` + PROJ.connections.filter(match)
     .map(c => `<option value="${c.id}">${esc(c.name)}${c.enabled ? '' : ' (выключено)'}</option>`).join('');
 }
@@ -2026,6 +2790,7 @@ function fillProcess() {
     const cur = getPath(PROJ.pipeline, box.dataset.list) || [];
     let opts = [];
     if (box.dataset.kind === 'types') opts = Object.entries(TYPES);
+    if (box.dataset.kind === 'browsers') opts = [['chromium', 'Chromium'], ['firefox', 'Firefox'], ['webkit', 'WebKit (Safari)']];
     if (box.dataset.kind === 'toolconns') opts = PROJ.connections.filter(c => c.preset !== 'playwright').map(c => [c.id, c.name]);
     if (box.dataset.kind === 'skills') opts = SKILLS.filter(s => [box.dataset.stage, 'any'].includes(s.stage) || cur.includes(s.name))
       .map(s => [s.name, s.name, s.description]);
@@ -2036,8 +2801,24 @@ function fillProcess() {
     const v = getPath(PROJ.pipeline, el.dataset.p);
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? '';
   });
+  $$('[data-csv]').forEach(el => el.value = (getPath(PROJ.pipeline, el.dataset.csv) || []).join(', '));
   syncStages();
 }
+
+// language model spending of the project this month
+async function loadUsage() {
+  const box = $('#usageBox'); if (!box || !PID) return;
+  let u;
+  try { u = await api('GET', `/api/projects/${PID}/usage`); } catch { box.innerHTML = ''; return; }
+  const cur = PROJ.pipeline.budget.currency, total = cur === 'RUB' ? u.total_rub : u.total_usd, limit = PROJ.pipeline.budget.month;
+  const sign = cur === 'RUB' ? '₽' : '$';
+  box.innerHTML = `<b>Расход за ${esc(u.month)}: ${total.toFixed(2)} ${sign}${limit ? ` из ${limit} ${sign}` : ''}</b> <span class="muted">(${u.requests} запросов; ≈ ${u.total_usd.toFixed(2)} $ / ${u.total_rub.toFixed(2)} ₽)</span>` +
+    (limit ? `<div class="bar"><span style="width:${Math.min(100, total / limit * 100)}%;background:${total >= limit ? 'var(--bad)' : total >= .8 * limit ? 'var(--warn)' : 'var(--ok)'}"></span></div>` : '') +
+    (u.rows.length ? `<table><thead><tr><th>Этап</th><th>Модель</th><th>Запросов</th><th>Токенов</th><th>Стоимость</th></tr></thead><tbody>` +
+      u.rows.map(r => `<tr><td>${esc(STAGE_NAMES[r.stage] || r.stage)}</td><td>${esc(r.model)}</td><td>${r.requests}</td><td>${fmtTok(r.tokens)}</td><td>${r.cost == null ? '—' : r.cost.toFixed(3) + ' ' + (r.currency === 'RUB' ? '₽' : '$')}</td></tr>`).join('') + '</tbody></table>'
+      : '<div class="hint">В этом месяце запросов к моделям не было.</div>');
+}
+
 function syncStages() {
   $$('.stage[data-stage]').forEach(card => {
     const cb = card.querySelector(`[data-p="${card.dataset.stage}.enabled"]`);
@@ -2049,6 +2830,7 @@ function readProcess() {
   const p = structuredClone(PROJ.pipeline);
   $$('[data-p]').forEach(el => setPath(p, el.dataset.p, el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value));
   $$('[data-list]').forEach(box => setPath(p, box.dataset.list, [...box.querySelectorAll('input:checked')].map(i => i.value)));
+  $$('[data-csv]').forEach(el => setPath(p, el.dataset.csv, el.value.split(',').map(s => s.trim()).filter(Boolean)));
   return p;
 }
 $('#procSave').onclick = async () => {

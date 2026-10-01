@@ -5,7 +5,7 @@ import pytest
 
 from fakes import Resp
 from helpers import arun
-from testgen import checks, runner
+from testgen import checks, fs, runner
 from testgen.runner import VisualVerdict
 from testgen.steps import new_step
 
@@ -23,7 +23,7 @@ def test_visual_baseline_compare_and_verdict(stand, project, fake_llm, tmp_path)
     base = checks.baseline_file(project["id"], t["id"], step_id)
 
     r1 = arun(runner.run_test(t, run_dir=tmp_path / "r1"))
-    assert r1["passed"] and r1["results"][1]["details"]["visual"]["baseline_created"] and base.exists()
+    assert r1["passed"] and r1["results"][1]["details"]["visual"]["baseline_created"] and fs.is_file(base)
 
     r2 = arun(runner.run_test(t, run_dir=tmp_path / "r2"))
     v = r2["results"][1]["details"]["visual"]

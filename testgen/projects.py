@@ -5,6 +5,7 @@ data/projects/<id>/project.json   settings (no secrets)
 data/projects/<id>/tests/*.json   saved tests (storage.py)
 data/projects/<id>/skills/*.md    project skills (skills.py)
 data/projects/<id>/jobs/*.json    pipeline runs (pipeline.py)
+data/projects/<id>/tasks/*.json   the team's tasks: status, assignee, linked tests (tasks.py)
 data/projects/<id>/runs/          run history of each test (runs.py)
 data/projects/<id>/suites/*.json  suite runs: all or tagged tests (suite.py)
 data/projects/<id>/baselines/     visual check baselines (checks.py)
@@ -12,24 +13,22 @@ data/projects/<id>/traffic/*.har  requests recorded while authoring (traffic.py)
 data/projects/<id>/explore/       site maps built by the Planner (explorer.py)
 secrets/projects/<id>/            tokens of MCP connections, login for the app under test,
                                   API key of the model connection (llm.json)
+
+With a shared database the same paths are keys of its rows (fs.py).
 """
 from __future__ import annotations
 
 import copy
 import json
-import os
 import re
-import shutil
 import time
 import uuid
 from pathlib import Path
 
-from . import vault
+from . import fs, vault
 from .llm import EFFORTS
+from .paths import DATA
 
-# TESTGEN_DATA_DIR moves the data folder, e.g. to a directory versioned with the
-# application so CI runs the same tests (python -m testgen.run).
-DATA = Path(os.environ.get("TESTGEN_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 ROOT = DATA / "projects"
 
 SCENARIO_TYPES = ["positive", "negative", "edge", "boundary", "accessibility", "security"]
@@ -66,6 +65,9 @@ DEFAULT_PIPELINE = {
         "autopilot": True,
         "headless": True,
         "max_steps": 40,
+        "prompt": "full",          # full | compact (weaker models, with examples)
+        "screenshots": "always",   # always | on_request (the agent calls `look`) | never
+        "device": "",              # record in a device profile (e.g. "iPhone 13"); empty = desktop
         "model": "", "effort": "",
     },
     "run": {
@@ -82,6 +84,12 @@ DEFAULT_PIPELINE = {
         "flaky_threshold": 30,     # percent
         "a11y_impact": "serious",  # assert_accessible fails from this impact: minor|moderate|serious|critical
         "visual_threshold": 1.0,   # assert_screenshot: percent of differing pixels allowed
+        "login_once": True,        # with a login test: other tests start logged in (saved state)
+        "browsers": ["chromium"],  # chromium | firefox | webkit: suites run every test in each
+        "devices": [],             # Playwright device profiles ("iPhone 13", "Pixel 7"); empty = desktop
+        "locale": "",              # browser locale, e.g. ru-RU (empty = en-US)
+        "timezone": "",            # e.g. Europe/Moscow (empty = the machine's)
+        "manual_minutes": 5,       # time to run one test case by hand: saved hours on the dashboard
         "skills": ["test-run-analysis"],
         "model": "", "effort": "",
     },
@@ -100,7 +108,15 @@ DEFAULT_PIPELINE = {
         "folder": "",
         "model": "", "effort": "",
     },
+    "budget": {                    # spending limits of language models, 0 = none (llm.py)
+        "session": 0.0,            # one Studio session
+        "job": 0.0,                # one pipeline run
+        "month": 0.0,              # the project per calendar month
+        "currency": "USD",         # USD | RUB
+    },
 }
+# Ranges of numbers that are not the usual 1..200 / 0..100.
+RANGES = {("budget", "session"): (0, 1e7), ("budget", "job"): (0, 1e7), ("budget", "month"): (0, 1e8)}
 
 
 def _valid_id(pid: str) -> bool:
@@ -117,6 +133,15 @@ def secrets_kind(pid: str) -> str:
     return f"projects/{pid}"
 
 
+LANGUAGES = {"ru": "Russian", "en": "English"}
+
+
+def language_rule(project: dict | None) -> str:
+    """A prompt line fixing the language of generated texts, "" when the project leaves it to the input."""
+    lang = LANGUAGES.get((project or {}).get("language") or "")
+    return f"\n- Write every description, title and text you produce in {lang}." if lang else ""
+
+
 def normalize_pipeline(p: dict | None) -> dict:
     """Stored settings merged over the defaults; unknown keys dropped, values checked."""
     out = copy.deepcopy(DEFAULT_PIPELINE)
@@ -126,16 +151,17 @@ def normalize_pipeline(p: dict | None) -> dict:
             if key not in given:
                 continue
             v = given[key]
+            low, high = RANGES.get((stage, key), (1, 200) if isinstance(default, int) else (0.0, 100.0))
             if isinstance(default, bool):
                 defaults[key] = bool(v)
             elif isinstance(default, int):
                 try:
-                    defaults[key] = max(1, min(int(v), 200))
+                    defaults[key] = int(max(low, min(int(v), high)))
                 except (TypeError, ValueError):
                     pass
             elif isinstance(default, float):
                 try:
-                    defaults[key] = max(0.0, min(float(v), 100.0))
+                    defaults[key] = float(max(low, min(float(v), high)))
                 except (TypeError, ValueError):
                     pass
             elif isinstance(default, list):
@@ -146,11 +172,18 @@ def normalize_pipeline(p: dict | None) -> dict:
     s["types"] = [t for t in s["types"] if t in SCENARIO_TYPES] or list(SCENARIO_TYPES)
     s["select"] = s["select"] if s["select"] in ("manual", "all", "high") else "manual"
     a["engine"] = a["engine"] if a["engine"] in ("builtin", "playwright-mcp") else "builtin"
+    a["prompt"] = a["prompt"] if a["prompt"] in ("full", "compact") else "full"
+    a["screenshots"] = a["screenshots"] if a["screenshots"] in ("always", "on_request", "never") else "always"
+    out["budget"]["currency"] = out["budget"]["currency"] if out["budget"]["currency"] in ("USD", "RUB") else "USD"
     r["heal_mode"] = r["heal_mode"] if r["heal_mode"] in ("review", "auto") else "review"
     r["trace"] = r["trace"] if r["trace"] in ("always", "failed", "off") else "failed"
     r["a11y_impact"] = r["a11y_impact"] if r["a11y_impact"] in ("minor", "moderate", "serious",
                                                                   "critical") else "serious"
     r["parallel"] = min(r["parallel"], 8)
+    r["browsers"] = [b for b in dict.fromkeys(r["browsers"]) if b in ("chromium", "firefox", "webkit")] or ["chromium"]
+    r["devices"] = list(dict.fromkeys(d.strip() for d in r["devices"]))[:5]
+    r["locale"] = r["locale"] if re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", r["locale"]) else ""
+    r["timezone"] = r["timezone"] if re.fullmatch(r"[A-Za-z_]+(/[A-Za-z_+-]+)*", r["timezone"]) else ""
     r["flaky_threshold"] = min(r["flaky_threshold"], 100)
     v["mutants"] = min(v["mutants"], 10)
     out["explore"]["max_pages"] = min(out["explore"]["max_pages"], 100)
@@ -183,10 +216,9 @@ def normalize_llm(d: dict | None) -> dict:
 
 
 def _read(pid: str) -> dict | None:
-    f = path(pid) / "project.json"
-    if not f.exists():
+    p = fs.read_json(path(pid) / "project.json")
+    if p is None:
         return None
-    p = json.loads(f.read_text("utf-8"))
     p["pipeline"] = normalize_pipeline(p.get("pipeline"))
     p["llm"] = normalize_llm(p.get("llm"))
     p.setdefault("connections", [])
@@ -202,21 +234,35 @@ def get(pid: str) -> dict | None:
 
 def save(p: dict) -> dict:
     p["updated"] = time.time()
-    d = path(p["id"])
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "project.json").write_text(json.dumps(p, ensure_ascii=False, indent=2), "utf-8")
+    fs.write_json(path(p["id"]) / "project.json", p)
     return p
 
 
-def create(name: str, description: str = "", base_url: str = "") -> dict:
+def create(name: str, description: str = "", base_url: str = "", owner: str = "") -> dict:
+    """With an owner (a signed-in user) the project is visible to its members only;
+    without one (CLI, TESTGEN_AUTH=off, the old layout) it is open to every user."""
     name = name.strip()
     if not name:
         raise ValueError("Укажите название проекта")
     if any(p["name"].lower() == name.lower() for p in list_projects()):
         raise ValueError("Проект с таким названием уже есть")
+    # New projects: a Russian-speaking browser in Moscow time (most sites under test are Russian);
+    # older projects keep en-US, as they were recorded.
+    pipeline = normalize_pipeline({"run": {"locale": "ru-RU", "timezone": "Europe/Moscow"}})
     return save({"id": uuid.uuid4().hex[:10], "name": name, "description": description.strip(),
                  "base_url": base_url.strip(), "created": time.time(), "connections": [],
-                 "pipeline": normalize_pipeline(None), "llm": normalize_llm(None)})
+                 "pipeline": pipeline, "llm": normalize_llm(None), "visibility": "members" if owner else "open",
+                 "members": {owner: "owner"} if owner else {}})
+
+
+def set_access(pid: str, visibility: str, members: dict) -> dict:
+    """Members {user: role} (validated by access.normalize_members) and visibility: members | open."""
+    p = get(pid)
+    if not p:
+        raise KeyError(pid)
+    p["visibility"] = visibility if visibility in ("members", "open") else "members"
+    p["members"] = members
+    return save(p)
 
 
 def update(pid: str, patch: dict) -> dict:
@@ -226,6 +272,9 @@ def update(pid: str, patch: dict) -> dict:
     for key in ("name", "description", "base_url"):
         if key in patch:
             p[key] = str(patch[key] or "").strip()
+    if "language" in patch:
+        # Language of step descriptions, scenarios and Gherkin: "" = as the scenario / requirements are written.
+        p["language"] = patch["language"] if patch["language"] in ("", "ru", "en") else ""
     if not p["name"]:
         raise ValueError("Укажите название проекта")
     if "pipeline" in patch:
@@ -235,20 +284,20 @@ def update(pid: str, patch: dict) -> dict:
 
 def delete(pid: str) -> bool:
     d = path(pid)
-    if not d.exists():
+    if not fs.exists(d / "project.json"):
         return False
-    shutil.rmtree(d)
-    shutil.rmtree(vault.SECRETS / "projects" / pid, ignore_errors=True)
+    fs.rmtree(d)
+    vault.delete_all(secrets_kind(pid))
     return True
 
 
 def list_projects() -> list[dict]:
     out = []
-    for f in sorted(ROOT.glob("*/project.json")):
-        p = json.loads(f.read_text("utf-8"))
+    for f in sorted(fs.glob(ROOT, "*/project.json")):
+        p = fs.read_json(f)
         out.append({"id": p["id"], "name": p["name"], "description": p.get("description", ""),
                     "base_url": p.get("base_url", ""),
-                    "tests": len(list((f.parent / "tests").glob("*.json")))})
+                    "tests": len(fs.glob(f.parent / "tests", "*.json"))})
     return sorted(out, key=lambda p: p["name"].lower())
 
 
@@ -258,12 +307,14 @@ def app_credentials(pid: str) -> dict:
     return vault.load(secrets_kind(pid), "app") or {}
 
 
-def set_app_credentials(pid: str, username: str, password: str = "") -> None:
-    """Empty password keeps the saved one."""
+def set_app_credentials(pid: str, username: str, password: str = "", totp_secret: str | None = None) -> None:
+    """Empty password keeps the saved one; totp_secret: None keeps, "" removes the 2FA secret."""
     c = app_credentials(pid)
     c["username"] = username.strip()
     if password:
         c["password"] = password
+    if totp_secret is not None:
+        c["totp_secret"] = re.sub(r"\s+", "", totp_secret).upper()
     c = {k: v for k, v in c.items() if v}
     if c:
         vault.save(secrets_kind(pid), "app", c)
@@ -326,9 +377,7 @@ def ensure_default() -> None:
                     by_name[name.lower()] = create(name)["id"]
                 pid = by_name[name.lower()]
                 t["project_id"] = pid
-                dest = path(pid) / "tests"
-                dest.mkdir(parents=True, exist_ok=True)
-                (dest / f.name).write_text(json.dumps(t, ensure_ascii=False, indent=2), "utf-8")
+                fs.write_json(path(pid) / "tests" / f.name, t)
                 # Old per-test login moves with the test.
                 creds = vault.load("sites", t.get("id", ""))
                 if creds:

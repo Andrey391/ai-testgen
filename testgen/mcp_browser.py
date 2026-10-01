@@ -182,6 +182,18 @@ class McpBrowser:
             await self._call("browser_navigate", {"url": v})
         elif a == "click":
             await self._call("browser_click", target)
+        elif a == "double_click":
+            await self._call("browser_click", target | {"doubleClick": True})
+        elif a == "drag_to":
+            end = step.pop("target_ref", "")
+            if not end:
+                raise ValueError("drag_to needs the ref of the target element")
+            probe = {"description": step["description"]}
+            await self._probe(end, probe)
+            step["target"] = probe.get("locator", [])
+            await self._call("browser_drag", self._drag_args(ref, end, step["description"][:200]))
+        elif a == "switch_tab":
+            await self._switch_tab(v)
         elif a == "fill":
             await self._call("browser_type", target | {"text": self.expand(v),
                                                        "submit": bool(step.get("press_enter"))})
@@ -208,10 +220,44 @@ class McpBrowser:
             new, self._errors_seen = errors[self._errors_seen:], len(errors)
             if new:
                 raise AssertionError(f"Ошибки в консоли браузера: {len(new)} — " + " | ".join(new[:3]))
-        elif a in ("assert_accessible", "assert_screenshot", "mock_route"):
+        elif a in ("assert_accessible", "assert_screenshot", "mock_route", "upload_file", "handle_dialog",
+                   "assert_download", "api_request", "read_email", "use_module"):
             raise ValueError("Этот шаг доступен только со встроенным движком Playwright")
         elif a != "assert_visible":
             raise ValueError(f"Unknown action {a}")
+
+    def _schema(self, tool: str) -> dict:
+        t = next((t for t in self.client.tools if t.name == tool), None)
+        return ((t.inputSchema or {}).get("properties") or {}) if t else {}
+
+    def _drag_args(self, start: str, end: str, element: str) -> dict:
+        """browser_drag arguments: their names differ between @playwright/mcp versions."""
+        props = self._schema("browser_drag")
+        key = "Target" if "startTarget" in props else "Ref"
+        return {"startElement": element, f"start{key}": start, "endElement": element, f"end{key}": end}
+
+    async def _switch_tab(self, which: str) -> None:
+        which = (which or "last").strip()
+        listing = result_text(await self._call("browser_tabs", {"action": "list"})) \
+            if self._schema("browser_tabs") else result_text(await self._call("browser_tab_list", {}))
+        tabs = re.findall(r"^- (\d+):.*?\((\S*)\)\s*$", listing, re.M) or \
+            [(str(i), "") for i, _ in enumerate(re.findall(r"^- ", listing, re.M))]
+        if not tabs:
+            raise ValueError("Нет открытых вкладок")
+        if which == "last":
+            index = int(tabs[-1][0])
+        elif which == "first":
+            index = int(tabs[0][0])
+        elif which.isdigit():
+            index = int(which) - 1
+        else:
+            index = next((int(i) for i, url in tabs if which in url), -1)
+            if index < 0:
+                raise ValueError(f"Нет вкладки с адресом, содержащим «{which}»")
+        if self._schema("browser_tabs"):
+            await self._call("browser_tabs", {"action": "select", "index": index})
+        else:
+            await self._call("browser_tab_select", {"index": index})
 
     async def _assert_state(self, a: str, step: dict, target: dict, info: dict) -> None:
         """Value / checked / enabled / text / count assertions, read with browser_evaluate.

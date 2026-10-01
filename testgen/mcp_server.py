@@ -9,9 +9,11 @@ Two ways to connect (see docs/mcp.md):
   process does the browser work itself, on the same data folder.
 
 A token (Проект → Доступ из IDE, or `python -m testgen.auth token <user>`)
-carries its user's rights. Nothing here deletes data or touches the commands of
-MCP connections, so admin rights are never involved; the authoring agent keeps
-all its rules (no irreversible actions, the password never reaches the LLM).
+carries its user's rights: the projects they may see (access.py) and their role in
+each - reading, runs and suites need a viewer, generating a test an editor.
+Nothing here deletes data or touches the commands of MCP connections, so admin
+rights are never involved; the authoring agent keeps all its rules (no
+irreversible actions, the password never reaches the LLM).
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from typing import Any, Awaitable, Callable
 
 from mcp.server.fastmcp import FastMCP
 
-from . import auth, exporters, pipeline, projects, runs, storage, suite, traffic
+from . import access, audit, auth, exporters, projects, runs, storage, suite, tasks, traffic, workqueue
 from .agent import StudioSession
 
 CURRENT_USER: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_user", default="")
@@ -61,26 +63,52 @@ def _user() -> str:
     return CURRENT_USER.get() or auth.ANONYMOUS
 
 
-def _project(ref: str) -> dict:
-    p = projects.get(ref)
-    if p:
-        return p
-    for item in projects.list_projects():
+def _visible_projects() -> list[dict]:
+    return access.visible(_user(), projects.list_projects(), projects.get)
+
+
+def _allowed(pid: str, need: str, missing: str) -> dict:
+    """The project if the token's user has the role `need` in it; a project they may not see is "not found"."""
+    p = projects.get(pid or "")
+    if not p:
+        raise ValueError(missing)
+    try:
+        access.check(_user(), p, need, missing)
+    except access.Denied as e:
+        raise ValueError(str(e))
+    return p
+
+
+def _project(ref: str, need: str = "viewer") -> dict:
+    missing = f"Проект не найден: {ref}. Список: list_projects"
+    if projects.get(ref or ""):
+        return _allowed(ref, need, missing)
+    for item in _visible_projects():
         if item["name"].strip().lower() == (ref or "").strip().lower():
-            return projects.get(item["id"])
-    raise ValueError(f"Проект не найден: {ref}. Список: list_projects")
+            return _allowed(item["id"], need, missing)
+    raise ValueError(missing)
 
 
-def _test(ref: str, project: str = "") -> dict:
+def _test(ref: str, project: str = "", need: str = "viewer") -> dict:
+    missing = f"Тест не найден: {ref}"
     t = storage.load(ref)
     if t:
+        _allowed(t["project_id"], need, missing)
         return t
-    pids = [_project(project)["id"]] if project else [p["id"] for p in projects.list_projects()]
+    pids = [_project(project)["id"]] if project else [p["id"] for p in _visible_projects()]
     for pid in pids:
         for t in storage.all_tests(pid):
             if t["name"].strip().lower() == (ref or "").strip().lower():
+                _allowed(pid, need, missing)
                 return t
-    raise ValueError(f"Тест не найден: {ref}")
+    raise ValueError(missing)
+
+
+def _run(run_id: str) -> dict | None:
+    run = runs.get(run_id)
+    if run:
+        _allowed(run["project_id"], "viewer", "Прогон не найден")
+    return run
 
 
 async def _until(done: Callable[[], bool], wait_seconds: float) -> None:
@@ -119,7 +147,7 @@ def build(backend: Backend | None = None) -> FastMCP:
 
     @mcp.tool(description="Projects of the studio: id, name, application URL, number of tests.")
     async def list_projects() -> list[dict]:
-        return projects.list_projects()
+        return _visible_projects()
 
     @mcp.tool(description="Saved tests of a project (name or id), optionally only those with a tag: steps, "
                           "tags, last run, quarantine, mutation score.")
@@ -127,13 +155,22 @@ def build(backend: Backend | None = None) -> FastMCP:
         return [{k: t[k] for k in ("id", "name", "url", "steps", "tags", "last_run", "quarantine", "verify")}
                 for t in storage.list_tests(_project(project)["id"], tag)]
 
+    @mcp.tool(description="Tasks of a project (name or id): title, description, status, priority, assignee, due "
+                          "date, linked tests. status: open (default: all but done) | todo | in_progress | review | "
+                          "done | all; assignee: a studio user, 'me' = the token's user.")
+    async def list_tasks(project: str, status: str = "open", assignee: str = "") -> list[dict]:
+        return [{k: t.get(k) for k in ("id", "title", "description", "status", "priority", "assignee", "due",
+                                       "overdue", "tests")}
+                for t in tasks.list_tasks(_project(project)["id"], "" if status == "all" else status,
+                                          _user() if assignee == "me" else assignee)]
+
     @mcp.tool(description="Generate a UI test: the studio's agent carries out the scenario (plain language) in a "
                           "real browser in Auto-Pilot and records the steps. The test is saved when the agent "
                           "verified the scenario (finish 'passed' with an assertion). Waits up to wait_seconds, "
                           "then returns the status; poll with get_generation.")
     async def generate_test(project: str, scenario: str, name: str = "", url: str = "",
                             wait_seconds: int = 300) -> dict:
-        p = _project(project)
+        p = _project(project, "editor")
         url = url or p.get("base_url", "")
         if not url:
             raise ValueError("Не указан URL приложения (в вызове или в настройках проекта)")
@@ -143,6 +180,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         s = StudioSession(p, (name or scenario)[:80], url if "://" in url else "https://" + url, scenario,
                           headless=a["headless"], credentials=projects.app_credentials(p["id"]))
         backend.sessions[s.id] = s
+        audit.record("studio.start", user=_user(), project_id=p["id"], target={"sid": s.id}, via="mcp")
 
         async def boot():
             try:
@@ -161,6 +199,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         await _until(lambda: _finished(s), wait_seconds)
         if s.status == "done" and s.finish_status == "passed" and not s.test_id:
             test, warnings = s.save()
+            audit.record("test.save", user=_user(), project_id=s.project["id"], target={"tid": test["id"]}, via="mcp")
             out = _session_summary(s) | {"saved": True, "warnings": warnings}
         else:
             out = _session_summary(s) | {"saved": bool(s.test_id)}
@@ -173,6 +212,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         s = backend.sessions.get(session_id)
         if not s:
             raise ValueError("Сессия не найдена (студия перезапускалась?)")
+        _allowed(s.project["id"], "viewer", "Сессия не найдена (студия перезапускалась?)")
         return await _generation(s, wait_seconds)
 
     @mcp.tool(description="Run a saved test (id or name) with self-healing and failure analysis; waits up to "
@@ -180,16 +220,20 @@ def build(backend: Backend | None = None) -> FastMCP:
     async def run_test(test: str, project: str = "", wait_seconds: int = 300) -> dict:
         t = _test(test, project)
         p = projects.get(t["project_id"])
-        run = runs.new(t, "mcp", user=_user())
-        backend.submit(pipeline.run_and_record(p, t, trigger="mcp", user=_user(), run=run))
+        run = runs.new(t, "mcp", user=_user(), live=not workqueue.enabled())
+        audit.record("run.start", user=_user(), project_id=t["project_id"], target={"tid": t["id"], "rid": run["id"]},
+                     via="mcp")
+        from .worker import start_run
+        start_run(p, t, run, backend.submit, trigger="mcp", user=_user())
         rid = run["id"]
         await _until(lambda: (runs.get(rid) or {}).get("status") != "running", wait_seconds)
         return _run_summary(runs.get(rid) or run, backend)
 
     @mcp.tool(description="A run by id: status, steps, analysis, browser events, trace link.")
     async def get_run(run_id: str, wait_seconds: int = 0) -> dict:
+        _run(run_id)
         await _until(lambda: (runs.get(run_id) or {}).get("status") != "running", wait_seconds)
-        run = runs.get(run_id)
+        run = _run(run_id)
         if not run:
             raise ValueError("Прогон не найден")
         return _run_summary(run, backend)
@@ -203,11 +247,16 @@ def build(backend: Backend | None = None) -> FastMCP:
         if not tests:
             raise ValueError("Нет тестов для прогона")
         s = suite.new(p, tests, tags=tags, trigger="mcp", user=_user())
-        backend.submit(suite.run(p, s, tests))
+        audit.record("suite.start", user=_user(), project_id=p["id"], target={"sid": s["id"]}, via="mcp")
+        from .worker import start_suite
+        start_suite(p, s, tests, backend.submit)
         return await get_suite(s["id"], wait_seconds)
 
     @mcp.tool(description="A suite run by id: verdict, counts and the result of every test.")
     async def get_suite(suite_id: str, wait_seconds: int = 0) -> dict:
+        s = suite.get(suite_id)
+        if s:
+            _allowed(s["project_id"], "viewer", "Прогон набора не найден")
         await _until(lambda: (suite.get(suite_id) or {}).get("status") != "running", wait_seconds)
         s = suite.get(suite_id)
         if not s:
@@ -234,7 +283,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         t = _test(test, project)
         p = projects.get(t["project_id"]) or {"name": "", "pipeline": projects.normalize_pipeline(None)}
         if format == "gherkin":
-            return exporters.to_gherkin(t | {"project": p.get("name", "")})
+            return exporters.to_gherkin(t | {"project": p.get("name", "")}, p.get("language", ""))
         if format == "api":
             return exporters.to_api_tests(t, traffic.load(t["project_id"], t["id"]))
         return exporters.to_playwright(t, p["pipeline"]["run"]["a11y_impact"])
@@ -242,7 +291,7 @@ def build(backend: Backend | None = None) -> FastMCP:
     @mcp.tool(description="Playwright trace of a run (recorded for failed runs by default): file path, download "
                           "link and the command to open it in Trace Viewer.")
     async def get_trace(run_id: str) -> dict:
-        run = runs.get(run_id)
+        run = _run(run_id)
         if not run:
             raise ValueError("Прогон не найден")
         names = [a["trace"] for a in run.get("attempts") or [] if a.get("trace")] or \

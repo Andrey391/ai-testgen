@@ -4,7 +4,14 @@ Static pages from tests/site/<variant>/ (falling back to v1), so switching
 `variant` to "v2" changes the layout under the same URLs - the case for fallback
 locators and self-healing. A small JSON API keeps state in memory:
 
-    POST /api/login      {"username", "password"} -> {"ok": bool}   (demo / s3cret-pass!)
+    POST /api/login      {"username", "password"} -> {"ok": bool}   (demo / s3cret-pass!); sets the "auth" cookie
+    GET  /api/me         {"user"} with a valid "auth" cookie, else 401 (account.html: login-once)
+    POST /api/otp        {"code"} -> {"ok"}: the TOTP code of TOTP_SECRET (login-2fa.html)
+    POST /api/send-code  {"email"}: "sends" a letter with a code to the fake Mailpit below
+    POST /api/check-code {"email", "code"} -> {"ok"}
+    GET  /mailpit/api/v1/search?query=to:"x", /mailpit/api/v1/message/<id>   a fake Mailpit
+    GET/POST /api/orders, DELETE /api/orders/<id>   orders (before/after data preparation)
+    GET  /download/report.csv   a file download
     GET  /api/items      -> [{"name"}]              (`default_items` for a new visitor)
     POST /api/items      {"name"} -> all items of this visitor
     GET  /api/flaky      500 on the first call after reset, then 200 (flaky tests)
@@ -15,14 +22,28 @@ from the same list, as with a per-user account in a real application.
 """
 from __future__ import annotations
 
+import datetime
 import json
+import random
+import re
+import sys
 import threading
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 SITE = Path(__file__).resolve().parent / "site"
 USERNAME, PASSWORD = "demo", "s3cret-pass!"
+TOTP_SECRET = "JBSWY3DPEHPK3PXP"
+
+
+def _totp_ok(code: str) -> bool:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import time
+
+    from testgen.testdata import totp
+    return any(totp(TOTP_SECRET, time.time() + d) == str(code).strip() for d in (-30, 0, 30))
 
 
 class Stand:
@@ -44,15 +65,21 @@ class Stand:
                 self._sid = sid
                 return stand.visitors[sid]
 
-            def _json(self, data, status=200):
+            def _json(self, data, status=200, cookies=()):
                 body = json.dumps(data, ensure_ascii=False).encode()
                 self.send_response(status)
                 if getattr(self, "_sid", ""):
                     self.send_header("Set-Cookie", f"sid={self._sid}; Path=/")
+                for c in cookies:
+                    self.send_header("Set-Cookie", c)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _cookie(self, name: str) -> str:
+                cookie = self.headers.get("Cookie") or ""
+                return next((c.split("=", 1)[1] for c in cookie.split("; ") if c.startswith(name + "=")), "")
 
             def _body(self) -> dict:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -72,16 +99,70 @@ class Stand:
                 if path.startswith("/__variant/"):            # manual demos: switch the layout
                     stand.variant = path.rsplit("/", 1)[1] if (SITE / path.rsplit("/", 1)[1]).is_dir() else "v1"
                     return self._json({"variant": stand.variant})
+                if path == "/api/me":
+                    token = self._cookie("auth")
+                    return self._json({"user": USERNAME}) if token in stand.tokens else self._json({"error": "auth"}, 401)
+                if path == "/api/orders":
+                    return self._json(stand.orders)
+                if path == "/download/report.csv":
+                    body = "id;name\n1;Отчёт\n2;Итоги\n".encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/csv; charset=utf-8")
+                    self.send_header("Content-Disposition", 'attachment; filename="report-2026.csv"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return None
+                if path == "/mailpit/api/v1/search":
+                    query = parse_qs(urlparse(self.path).query).get("query", [""])[0]
+                    m = re.search(r'to:"([^"]+)"', query)
+                    found = [x for x in reversed(stand.mails) if not m or x["To"][0]["Address"] == m.group(1)]
+                    return self._json({"messages": [{k: v for k, v in x.items() if k != "Text"} for x in found]})
+                if path.startswith("/mailpit/api/v1/message/"):
+                    mid = path.rsplit("/", 1)[1]
+                    mail = next((x for x in stand.mails if x["ID"] == mid), None)
+                    return self._json(mail | {"HTML": ""} if mail else {"error": "not found"}, 200 if mail else 404)
                 if path in ("/logout", "/delete-account"):
                     stand.dangerous.append(path)
                 return super().do_GET()
+
+            def do_DELETE(self):
+                path = self.path.split("?")[0]
+                stand.requests.append(("DELETE", path))
+                m = re.fullmatch(r"/api/orders/(\d+)", path)
+                if m and any(o["id"] == int(m.group(1)) for o in stand.orders):
+                    stand.orders = [o for o in stand.orders if o["id"] != int(m.group(1))]
+                    return self._json({"ok": True})
+                return self._json({"error": "not found"}, 404)
 
             def do_POST(self):
                 path = self.path.split("?")[0]
                 stand.requests.append(("POST", path))
                 data = self._body()
                 if path == "/api/login":
-                    return self._json({"ok": data.get("username") == USERNAME and data.get("password") == PASSWORD})
+                    ok = data.get("username") == USERNAME and data.get("password") == PASSWORD
+                    stand.logins += ok
+                    token = uuid.uuid4().hex
+                    if ok:
+                        stand.tokens.add(token)
+                    return self._json({"ok": ok}, cookies=[f"auth={token}; Path=/; HttpOnly"] if ok else [])
+                if path == "/api/otp":
+                    return self._json({"ok": _totp_ok(data.get("code", ""))})
+                if path == "/api/send-code":
+                    code = f"{random.randint(0, 999999):06d}"
+                    stand.codes[data.get("email", "")] = code
+                    stand.mails.append({"ID": uuid.uuid4().hex[:12], "Subject": "Код подтверждения",
+                                        "Created": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        "To": [{"Address": data.get("email", "")}],
+                                        "Text": f"Здравствуйте! Ваш код подтверждения: {code}. Никому его не сообщайте."})
+                    return self._json({"ok": True})
+                if path == "/api/check-code":
+                    return self._json({"ok": bool(data.get("code")) and stand.codes.get(data.get("email", "")) == data["code"]})
+                if path == "/api/orders":
+                    stand.next_order += 1
+                    order = {"id": stand.next_order, "title": str(data.get("title", ""))}
+                    stand.orders.append(order)
+                    return self._json(order, 201)
                 if path == "/api/items":
                     items = self._visitor()
                     items.append({"name": str(data.get("name", ""))})
@@ -111,6 +192,15 @@ class Stand:
         self.flaky_calls = 0
         self.requests: list[tuple[str, str]] = []
         self.dangerous: list[str] = []
+        self.tokens: set[str] = set()       # valid "auth" cookies (expire_sessions() logs everyone out)
+        self.logins = 0
+        self.codes: dict[str, str] = {}
+        self.mails: list[dict] = []
+        self.orders: list[dict] = []
+        self.next_order = 0
+
+    def expire_sessions(self) -> None:
+        self.tokens.clear()
 
     def close(self) -> None:
         self.server.shutdown()

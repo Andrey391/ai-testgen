@@ -23,7 +23,7 @@ import time
 import uuid
 from urllib.parse import urldefrag, urlparse
 
-from . import projects, storage
+from . import fs, projects, storage
 from .browser import BrowserSession
 from .steps import needs_element, perform
 
@@ -162,16 +162,14 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
 
 def save(result: dict) -> None:
     d = _dir(result["project_id"])
-    d.mkdir(parents=True, exist_ok=True)
     text = json.dumps(result, ensure_ascii=False, indent=1)
-    (d / f"{result['id']}.json").write_text(text, "utf-8")
+    fs.write_text(d / f"{result['id']}.json", text)
     if result["status"] == "done":
-        (d / "latest.json").write_text(text, "utf-8")
+        fs.write_text(d / "latest.json", text)
 
 
 def latest(pid: str) -> dict | None:
-    f = _dir(pid) / "latest.json"
-    return json.loads(f.read_text("utf-8")) if f.exists() else None
+    return fs.read_json(_dir(pid) / "latest.json")
 
 
 def get(pid: str, eid: str) -> dict | None:
@@ -179,8 +177,7 @@ def get(pid: str, eid: str) -> dict | None:
         return LIVE[eid]
     if not re.fullmatch(r"[0-9a-f]{10}", eid or ""):
         return None
-    f = _dir(pid) / f"{eid}.json"
-    return json.loads(f.read_text("utf-8")) if f.exists() else None
+    return fs.read_json(_dir(pid) / f"{eid}.json")
 
 
 def to_requirements(result: dict) -> str:
