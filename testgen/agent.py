@@ -1,4 +1,4 @@
-"""The test-authoring agent ("Auto-Pilot").
+"""The test-authoring agent (guarded mode and Auto-Pilot).
 
 The LLM sees the live page (screenshot + list of interactive elements), and
 proposes ONE browser action at a time as a tool call. Each executed action is
