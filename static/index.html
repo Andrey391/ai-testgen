@@ -260,17 +260,24 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     </div>
 
     <div data-wz="2" class="hidden">
-      <div class="card">
-        <h3>Подключения к ресурсам</h3>
-        <div class="muted">Подключите системы, с которыми работает команда: заполните поля и нажмите «Сохранить и проверить» — студия запустит MCP-сервер и покажет его инструменты. Токены хранятся на сервере и не показываются в интерфейсе. Без подключений работают файлы .md, текст требований и встроенный Playwright; любой ресурс можно добавить позже в «Проект → Подключения».</div>
-      </div>
-      <div id="wzSlots"></div>
+      <div id="wzModel"></div>
       <div class="card row" style="margin-top:12px">
         <button class="btn" data-wzgo="1">← Назад</button><span class="grow"></span>
         <button class="btn primary" data-wzgo="3">Далее →</button></div>
     </div>
 
     <div data-wz="3" class="hidden">
+      <div class="card">
+        <h3>Подключения к ресурсам</h3>
+        <div class="muted">Подключите системы, с которыми работает команда: заполните поля и нажмите «Сохранить и проверить» — студия запустит MCP-сервер и покажет его инструменты. Токены хранятся на сервере и не показываются в интерфейсе. Без подключений работают файлы .md, текст требований и встроенный Playwright; любой ресурс можно добавить позже в «Проект → Подключения».</div>
+      </div>
+      <div id="wzSlots"></div>
+      <div class="card row" style="margin-top:12px">
+        <button class="btn" data-wzgo="2">← Назад</button><span class="grow"></span>
+        <button class="btn primary" data-wzgo="4">Далее →</button></div>
+    </div>
+
+    <div data-wz="4" class="hidden">
       <div class="card">
         <h3>Как проект использует ресурсы</h3>
         <div class="muted">Привязка подключений к этапам процесса генерации. Остальные параметры этапов (скиллы, модель, лимиты) — в «Проект → Процесс генерации».</div>
@@ -293,7 +300,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="hint" id="wzWarn"></div>
       </div>
       <div class="card row" style="margin-top:12px">
-        <button class="btn" data-wzgo="2">← Назад</button><span class="err grow" id="wz3Err"></span>
+        <button class="btn" data-wzgo="3">← Назад</button><span class="err grow" id="wz3Err"></span>
         <button class="btn primary" id="wzFinish">Готово — к требованиям</button></div>
     </div>
   </div>
@@ -304,7 +311,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div id="startForm" class="card start">
     <h2>Новый тест-кейс</h2>
     <div class="muted">Опишите сценарий обычным языком — AI-агент пройдёт его в браузере и запишет шаги. Тест сохранится в проект <b class="projName"></b>.</div>
-    <label>URL приложения</label><input id="fUrl" placeholder="https://www.saucedemo.com">
+    <label>URL приложения</label><input id="fUrl" placeholder="https://staging.example.com">
     <label>Название теста</label><input id="fName" placeholder="Покупка товара">
     <div class="hint hidden" id="fTask"></div>
     <label>Сценарий</label>
@@ -597,11 +604,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="settings">
     <div class="subnav">
       <button data-sub="general" class="on">Общие</button>
+      <button data-sub="model">Модель</button>
       <button data-sub="access">Участники и доступ</button>
       <button data-sub="conns">Подключения (MCP)</button>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
-      <button data-sub="models">Модели ИИ</button>
       <button data-sub="ide">Доступ из IDE (MCP)</button>
     </div>
     <div>
@@ -679,6 +686,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
       </div>
 
+      <!-- Model -->
+      <div data-subpanel="model" class="hidden"><div id="modelBox"></div></div>
       <!-- Members and access -->
       <div data-subpanel="access" class="hidden">
         <div class="card">
@@ -739,7 +748,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div data-subpanel="process" class="hidden">
         <div class="card">
           <h3>Процесс генерации тест-кейсов</h3>
-          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — значения по умолчанию студии (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — как в «Проект → Модель» (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
         </div>
 
         <div class="card stage">
@@ -775,10 +784,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="checks" data-list="scenarios.types" data-kind="types"></div>
           <label>Скиллы</label>
           <div class="checks" data-list="scenarios.skills" data-kind="skills" data-stage="scenarios"></div>
-          <div class="grid3">
-            <div><label>Провайдер модели</label><select data-p="scenarios.provider" class="providerSel"></select></div>
-            <div><label>Модель</label><input data-p="scenarios.model" class="modelIn" list="modelList-scenarios"><datalist id="modelList-scenarios" class="modelList"></datalist></div>
-            <div><label>Effort (Claude)</label><select data-p="scenarios.effort" class="effortSel"></select></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="scenarios.model" class="modelIn" list="llmModels"></div>
+            <div><label>Effort</label><select data-p="scenarios.effort" class="effortSel"></select></div>
           </div>
         </div>
 
@@ -801,29 +809,25 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <label>Инструменты подключений для агента (только чтение)</label>
           <div class="checks" data-list="authoring.tool_connections" data-kind="toolconns"></div>
           <div class="hint">Например, агент сможет сам прочитать задачу Jira или существующие тест-кейсы Zephyr во время генерации.</div>
-          <div class="grid3">
+          <div class="grid2">
             <div><label>Промпт агента</label>
               <select data-p="authoring.prompt">
-                <option value="auto">По модели</option>
-                <option value="full">Полный (Claude)</option>
-                <option value="compact">Компактный с примерами (GigaChat, локальные)</option>
+                <option value="full">Полный</option>
+                <option value="compact">Компактный с примерами (модели слабее)</option>
               </select></div>
             <div><label>Скриншоты страницы</label>
               <select data-p="authoring.screenshots">
-                <option value="auto">По модели</option>
                 <option value="always">На каждом шаге</option>
                 <option value="on_request">По запросу агента (текстовый режим)</option>
                 <option value="never">Никогда (только список элементов)</option>
               </select></div>
-            <div><label>Auto-Pilot не-Claude моделей: успех на бенчмарке от, %</label><input type="number" min="0" max="100" data-p="authoring.autopilot_min_success"></div>
           </div>
-          <div class="hint">Моделям слабее Claude ошибки ответа (неверный ref, несуществующий инструмент, битый JSON) возвращаются на исправление — не больше двух раз на шаг. Если доля успешных тестов модели на бенчмарке ниже порога, каждый шаг подтверждает человек.</div>
+          <div class="hint">Ошибки ответа модели (неверный ref, несуществующий инструмент, битый JSON) возвращаются ей на исправление — не больше двух раз на шаг.</div>
           <label>Скиллы</label>
           <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
-          <div class="grid3">
-            <div><label>Провайдер модели</label><select data-p="authoring.provider" class="providerSel"></select></div>
-            <div><label>Модель</label><input data-p="authoring.model" class="modelIn" list="modelList-authoring"><datalist id="modelList-authoring" class="modelList"></datalist></div>
-            <div><label>Effort (Claude)</label><select data-p="authoring.effort" class="effortSel"></select></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="authoring.model" class="modelIn" list="llmModels"></div>
+            <div><label>Effort</label><select data-p="authoring.effort" class="effortSel"></select></div>
           </div>
         </div>
 
@@ -872,13 +876,12 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="checks" style="margin-top:8px">
             <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
           </div>
-          <div class="hint">На ревью: прогон продолжается с найденным Claude элементом, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
+          <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
           <label>Скиллы</label>
           <div class="checks" data-list="run.skills" data-kind="skills" data-stage="run"></div>
-          <div class="grid3">
-            <div><label>Провайдер модели</label><select data-p="run.provider" class="providerSel"></select></div>
-            <div><label>Модель</label><input data-p="run.model" class="modelIn" list="modelList-run"><datalist id="modelList-run" class="modelList"></datalist></div>
-            <div><label>Effort (Claude)</label><select data-p="run.effort" class="effortSel"></select></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="run.model" class="modelIn" list="llmModels"></div>
+            <div><label>Effort</label><select data-p="run.effort" class="effortSel"></select></div>
           </div>
         </div>
 
@@ -909,10 +912,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="checks" data-list="publish.skills" data-kind="skills" data-stage="publish"></div>
           <label>Скиллы отправки результата прогона</label>
           <div class="checks" data-list="publish.run_skills" data-kind="skills" data-stage="publish"></div>
-          <div class="grid3">
-            <div><label>Провайдер модели</label><select data-p="publish.provider" class="providerSel"></select></div>
-            <div><label>Модель</label><input data-p="publish.model" class="modelIn" list="modelList-publish"><datalist id="modelList-publish" class="modelList"></datalist></div>
-            <div><label>Effort (Claude)</label><select data-p="publish.effort" class="effortSel"></select></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="publish.model" class="modelIn" list="llmModels"></div>
+            <div><label>Effort</label><select data-p="publish.effort" class="effortSel"></select></div>
           </div>
         </div>
 
@@ -963,39 +965,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
       </div>
 
-      <!-- Language models (studio-wide) -->
-      <div data-subpanel="models" class="hidden">
-        <div class="card">
-          <h3>Модели ИИ студии</h3>
-          <div class="muted">Провайдеры языковых моделей для всех проектов: Claude, GigaChat, Yandex AI Studio, своя модель на сервере (vLLM, Ollama — без доступа в интернет). Этап процесса выбирает провайдера и модель в «Процессе генерации»; пусто — провайдер по умолчанию. Если провайдер недоступен, запрос уходит следующему из резервной цепочки. Ключи хранятся на сервере и не показываются. Менять настройки может администратор.</div>
-          <div class="grid3">
-            <div><label>Провайдер по умолчанию</label><select id="llmDefault"></select></div>
-            <div><label>Курс, ₽ за $ (для лимитов и отчётов)</label><input id="llmRate" type="number" min="1" step="0.1"></div>
-          </div>
-          <label>Резервная цепочка (по порядку)</label>
-          <div class="checks" id="llmFallbacks"></div>
-          <div class="row" style="margin-top:10px"><span class="muted grow" id="llmMsg"></span>
-            <button class="btn primary adminOnly" id="llmSave">Сохранить</button></div>
-        </div>
-        <div id="llmProviders"></div>
-        <div class="card adminOnly">
-          <h3>Добавить провайдера</h3>
-          <div class="row">
-            <select id="llmTpl" style="width:auto"></select>
-            <input id="llmNewId" placeholder="идентификатор, например gigachat" style="width:auto">
-            <button class="btn primary" id="llmAdd">Добавить</button>
-          </div>
-          <div class="hint">GigaChat: ключ авторизации из личного кабинета, сертификаты НУЦ Минцифры (поле «Проверка TLS» — путь к файлу сертификата). Yandex AI Studio: API-ключ сервисного аккаунта, модель <code>gpt://&lt;folder_id&gt;/yandexgpt/latest</code>. Своя модель: адрес vLLM/Ollama с OpenAI-совместимым API; для агента нужна модель с поддержкой инструментов, лучше с изображениями (Qwen2.5-VL).</div>
-        </div>
-      </div>
-
       <!-- IDE access -->
       <div data-subpanel="ide" class="hidden">
         <div class="card">
           <h3>Студия как MCP-сервер</h3>
-          <div class="muted">Агенты в IDE — Claude Code, GitHub Copilot, Cursor — могут генерировать и запускать тесты, читать падения и забирать код тестов и trace, не открывая студию. Инструменты: <code>generate_test</code>, <code>run_test</code>, <code>run_suite</code>, <code>list_failures</code>, <code>export_test</code>, <code>get_trace</code> и другие. Токен действует с вашими правами; удалять данные через MCP нельзя.</div>
+          <div class="muted">Агенты в IDE могут генерировать и запускать тесты, читать падения и забирать код тестов и trace, не открывая студию. Инструменты: <code>generate_test</code>, <code>run_test</code>, <code>run_suite</code>, <code>list_failures</code>, <code>export_test</code>, <code>get_trace</code> и другие. Токен действует с вашими правами; удалять данные через MCP нельзя.</div>
           <div class="row" style="margin-top:10px">
-            <input id="tokName" placeholder="Название токена, например «Claude Code на ноутбуке»" class="grow">
+            <input id="tokName" placeholder="Название токена, например «IDE на ноутбуке»" class="grow">
             <button class="btn primary" id="tokCreate">Создать токен</button>
           </div>
           <div id="tokNew" class="hidden" style="margin-top:10px"></div>
@@ -1007,6 +983,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </div>
 </section>
 </main>
+
+<datalist id="llmModels"></datalist>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -1025,7 +1003,7 @@ const fmtTime = t => t ? new Date(t * 1000).toLocaleString() : '';
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 const setPath = (o, p, v) => { const ks = p.split('.'); ks.slice(0, -1).reduce((x, k) => x[k], o)[ks.at(-1)] = v; };
 
-let ME = null, PID = null, PROJ = null, PROJECTS = [], PRESETS = [], SKILLS = [], LLM = null;
+let ME = null, PID = null, PROJ = null, PROJECTS = [], PRESETS = [], SKILLS = [];
 
 // ---- login
 function showLogin() {
@@ -1062,12 +1040,7 @@ async function loggedIn(me) {
   $('#whoami').textContent = me.user + (me.is_admin && me.auth_enabled ? ' (админ)' : '');
   $('#whoami').classList.toggle('hidden', !me.auth_enabled);
   $('#logoutBtn').classList.toggle('hidden', !me.auth_enabled);
-  $('#defModel').textContent = `${me.model}, effort ${me.effort}`;
-  $$('.modelIn').forEach(i => i.placeholder = me.model);
-  $$('.effortSel').forEach(s => s.innerHTML = `<option value="">по умолчанию (${esc(me.effort)})</option>` +
-    ['low', 'medium', 'high', 'xhigh', 'max'].map(e => `<option>${e}</option>`).join(''));
   try { PRESETS = await api('GET', '/api/mcp/presets'); } catch {}
-  try { LLM = await api('GET', '/api/llm'); } catch {}
   $$('.adminOnly').forEach(x => x.classList.toggle('hidden', !me.is_admin));
   $('#connPreset').innerHTML = PRESETS.filter(p => !p.admin_only || ME.is_admin)
     .map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
@@ -1199,7 +1172,7 @@ function render() {
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
   $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
     (s.model ? ` · ${s.model.name}${s.model.screenshots !== 'always' ? ' (текстовый режим)' : ''}` : '') + usageText(s.usage);
-  $('#stText').title = s.usage?.requests ? `Запросов к Claude: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '';
+  $('#stText').title = s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '';
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
@@ -1561,7 +1534,7 @@ function detailsHtml(r, x, t) {
   if (vis?.baseline_created) html += '<div class="hint">Визуальная проверка: эталон сохранён при этом прогоне.</div>';
   else if (vis && (vis.diff || vis.actual)) {
     html += `<div class="hint">Визуальная проверка: отличается ${(vis.ratio * 100).toFixed(2)}% пикселей (допуск ${vis.threshold}%)` +
-      (vis.verdict?.verdict ? ` · Claude: <b>${esc(VISUAL_VERDICT[vis.verdict.verdict] || vis.verdict.verdict)}</b> — ${esc(vis.verdict.summary)}` : '') + '</div>' +
+      (vis.verdict?.verdict ? ` · ИИ: <b>${esc(VISUAL_VERDICT[vis.verdict.verdict] || vis.verdict.verdict)}</b> — ${esc(vis.verdict.summary)}` : '') + '</div>' +
       `<div class="imgs"><figure><img src="/api/tests/${r.test_id}/baselines/${x.id}?t=${Date.now()}" alt=""><figcaption>эталон</figcaption></figure>` +
       `<figure><img src="/api/runs/${r.id}/files/${vis.actual}" alt=""><figcaption>сейчас</figcaption></figure>` +
       (vis.diff ? `<figure><img src="/api/runs/${r.id}/files/${vis.diff}" alt=""><figcaption>различия</figcaption></figure>` : '') + '</div>' +
@@ -1607,7 +1580,7 @@ function renderRun(r, t) {
   else if (['failed', 'flaky'].includes(r.status) && PROJ.connections.some(c => c.enabled && [...TRACKERS, 'atlassian'].includes(c.preset)))
     html += `<div id="defectBox" style="margin-top:8px"><button class="btn small" onclick="defectDraft('${r.id}')">Черновик дефекта${r.analysis?.verdict === 'product_bug' ? ' (похоже на дефект продукта)' : ''}</button></div>`;
   const traces = attempts.filter(a => a.trace).map(a => a.trace);
-  if (traces.length) html += `<div class="hint">Playwright trace: ${traces.map(n => `<a href="/api/runs/${r.id}/files/${n}">${esc(n)}</a>`).join(', ')} — откройте на <a href="https://trace.playwright.dev" target="_blank" rel="noopener">trace.playwright.dev</a> или <code>npx playwright show-trace &lt;файл&gt;</code>. Пароль в trace замаскирован.</div>`;
+  if (traces.length) html += `<div class="hint">Playwright trace: ${traces.map(n => `<a href="/api/runs/${r.id}/files/${n}">${esc(n)}</a>`).join(', ')} — откройте командой <code>playwright show-trace &lt;файл&gt;</code>. Пароль в trace замаскирован.</div>`;
   const events = r.events || [];
   if (events.length) html += `<details class="opt"><summary>События браузера: ${events.length} (ошибки консоли, запросы 4xx/5xx)</summary><div class="events">` +
     events.map(e => `<div><span class="badge ${e.type === 'http' ? 'warn' : 'bad'}">${esc(e.type)}</span> шаг ${e.step + 1}: ${esc(e.text)}</div>`).join('') + '</div></details>';
@@ -1660,14 +1633,14 @@ async function openTest(id, quiet) {
   html += `<div class="sub"><b>Ревью самолечения</b>`;
   html += props.length ? props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
       <div><b>Шаг ${stepN(p.step_id)}:</b> ${esc(p.description)}</div>
-      <div class="hint">Claude: ${esc(p.reason)}</div>
+      <div class="hint">ИИ: ${esc(p.reason)}</div>
       <div class="grid2"><div><label>Было</label><div class="loc">${p.old.map(c => esc(candText(c))).join('<br>') || '—'}</div></div>
         <div><label>Станет</label><div class="loc">${p.new.map(c => esc(candText(c))).join('<br>')}</div></div></div>
       ${p.screenshot ? `<img class="shot" style="margin-top:6px" src="/api/runs/${p.run_id}/files/${p.screenshot}" alt="Найденный элемент обведён">` : ''}
       <div class="row" style="margin-top:8px"><span class="muted grow" style="font-size:12px">прогон ${fmtTime(p.at)}</span>
         <button class="btn" onclick="healDecision('${t.id}', '${p.id}', 'reject')">Отклонить</button>
         <button class="btn primary" onclick="healDecision('${t.id}', '${p.id}', 'accept')">Принять</button></div></div>`).join('')
-    : '<div class="hint">Нет предложений. Когда сломанный локатор чинит Claude, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
+    : '<div class="hint">Нет предложений. Когда сломанный локатор чинит ИИ, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
   html += '</div>';
 
   const st = t.status || 'ready', comments = t.comments || [];
@@ -2144,7 +2117,7 @@ function renderJob() {
   box.classList.remove('hidden');
   const live = ['running', 'awaiting_selection'].includes(j.status);
   let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
-    ${j.usage?.requests ? `<span class="muted" style="font-size:12px">Claude${usageText(j.usage)}</span>` : ''}
+    ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}</div>
     <div class="flow">${flowHtml(live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '')}</div>`;
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
@@ -2230,10 +2203,10 @@ async function renderHome() {
       <div class="row"><b class="grow">${esc(p.name)}</b><span class="muted" style="font-size:12px">тестов: ${p.tests}${p.open_tasks ? ` · задач: ${p.open_tasks}` : ''}</span></div>
       ${p.description ? `<div class="hint" style="margin:0">${esc(p.description)}</div>` : ''}
       <div class="muted" style="font-size:12px">${p.base_url ? esc(p.base_url) : 'URL приложения не задан'}${p.has_app_login ? ' · логин задан' : ''}</div>
-      <div class="chips">${chips}</div>
+      <div class="chips">${modelChip(p.model, p.model_check)}${chips}</div>
       <div class="row" style="margin-top:auto;padding-top:6px">
         <button class="btn primary small" onclick="openProject('${p.id}')">Открыть</button>
-        <button class="btn small" onclick="openWizard('${p.id}')">Настроить подключения</button></div></div>`;
+        <button class="btn small" onclick="openWizard('${p.id}')">Настроить</button></div></div>`;
   }).join('') || '<div class="card muted">Проектов пока нет.</div>';
 }
 async function openProject(pid) {
@@ -2245,7 +2218,7 @@ $('#wzClose').onclick = () => { if (PID) showTab('home'); };
 
 async function openWizard(pid) {
   if (pid && pid !== PID) await switchProject(pid);
-  WIZ = {pid, step: pid ? 2 : 1, suggestPublish: false};
+  WIZ = {pid, step: !pid ? 1 : PROJ.llm.model ? 3 : 2, suggestPublish: false};
   $('#homeList').classList.add('hidden'); $('#wizard').classList.remove('hidden');
   $('#wzClose').classList.toggle('hidden', !PROJECTS.length);
   $('#wzName').value = pid ? PROJ.name : ''; $('#wzDesc').value = pid ? PROJ.description || '' : '';
@@ -2260,12 +2233,13 @@ function renderWizard() {
   const w = WIZ;
   $('#wzTitle').textContent = w.pid ? `Настройка проекта «${PROJ.name}»` : 'Новый проект';
   $('#wz1Next').textContent = w.pid ? 'Сохранить и продолжить →' : 'Создать проект →';
-  $('#wzSteps').innerHTML = [[1, 'Приложение'], [2, 'Подключения к ресурсам'], [3, 'Привязка к процессу']].map(([n, t]) =>
+  $('#wzSteps').innerHTML = [[1, 'Приложение'], [2, 'Модель ИИ'], [3, 'Подключения к ресурсам'], [4, 'Привязка к процессу']].map(([n, t]) =>
     `<button data-wzgo="${n}" class="${n === w.step ? 'cur' : n < w.step || w.pid ? 'done' : ''}" ${!w.pid && n > 1 ? 'disabled' : ''}>${n}. ${t}</button>`
   ).join('<span class="muted">→</span>');
   $$('[data-wz]').forEach(x => x.classList.toggle('hidden', +x.dataset.wz !== w.step));
-  if (w.step === 2) renderSlots();
-  if (w.step === 3) fillWizardProcess();
+  if (w.step === 2) renderModel();
+  if (w.step === 3) renderSlots();
+  if (w.step === 4) fillWizardProcess();
 }
 document.addEventListener('click', e => {
   const go = e.target.closest('[data-wzgo]');
@@ -2356,7 +2330,7 @@ function wizardWarn() {
   const ids = [$('#wzReq').value, $('#wzEngine').value, $('#wzPub').value,
     ...$$('#wzTools input:checked').map(i => i.value)].filter(Boolean);
   const bad = PROJ.connections.filter(c => ids.includes(c.id) && !(c.enabled && c.check?.ok));
-  $('#wzWarn').innerHTML = bad.length ? `<span class="err">Не проверены или выключены: ${bad.map(c => esc(c.name)).join(', ')}.</span> Вернитесь к шагу 2 и нажмите «Сохранить и проверить».` : '';
+  $('#wzWarn').innerHTML = bad.length ? `<span class="err">Не проверены или выключены: ${bad.map(c => esc(c.name)).join(', ')}.</span> Вернитесь к шагу 3 и нажмите «Сохранить и проверить».` : '';
 }
 ['#wzReq', '#wzEngine', '#wzPub', '#wzTools'].forEach(s => $(s).addEventListener('change', wizardWarn));
 
@@ -2387,7 +2361,6 @@ function showSub(sub) {
   $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub));
   $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
   if (sub === 'ide') loadTokens();
-  if (sub === 'models') api('GET', '/api/llm').then(r => { LLM = r; renderModels(); }).catch(e => alert(e.message));
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
 }
@@ -2487,7 +2460,7 @@ function loadSettings() {
   $('#pMsg').textContent = $('#pcMsg').textContent = $('#procMsg').textContent = '';
   if (!canRole('owner')) $('#pMsg').textContent = `Настройки проекта меняет владелец; ваша роль — ${roleTitle(PROJ.role)}.`;
   $('#dangerBox').classList.toggle('hidden', !ME.is_admin);
-  renderConnections(); fillProcess(); renderSkillList(); loadUsage();
+  renderModel(); renderConnections(); fillProcess(); renderSkillList(); loadUsage();
 }
 $('#pSave').onclick = async () => {
   try {
@@ -2567,6 +2540,129 @@ $('#pDelete').onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 
+// model connection (the same card in the settings and in the wizard; the studio has no built-in model)
+const CAPS = {structured_outputs: 'структурированный ответ', image_input: 'изображения', context_management: 'context editing'};
+function llmState(model, check) {
+  if (!model) return ['модель не выбрана', 'warn'];
+  if (check?.ok) return ['работает', 'ok'];
+  if (check) return ['ошибка проверки', 'bad'];
+  return ['не проверено', 'off'];
+}
+function modelChip(model, check) {
+  const [state, cls] = llmState(model, check);
+  return `<span class="badge ${cls}" title="${esc(state)}">${model ? 'модель: ' + esc(model) : esc(state)}</span>`;
+}
+// Models whose price matters: the project's, the stages' overrides and those already priced.
+function pricedModels(cur) {
+  const p = PROJ.pipeline;
+  return [...new Set([cur, ...['scenarios', 'authoring', 'run', 'publish'].map(s => p[s].model),
+                      ...Object.keys(PROJ.llm.prices)].filter(Boolean))];
+}
+function priceRows(card) {
+  const box = card.querySelector('[data-prices]'), cur = card.querySelector('[data-l="model"]').value.trim();
+  const typed = {};   // keep what was typed but not saved yet
+  box.querySelectorAll('[data-price]').forEach(r => typed[r.dataset.price] = [r.querySelector('[data-in]').value, r.querySelector('[data-out]').value]);
+  box.innerHTML = pricedModels(cur).map(m => {
+    const [i, o] = typed[m] || PROJ.llm.prices[m] || ['', ''];
+    return `<div class="row" data-price="${esc(m)}"><code class="grow">${esc(m)}</code>
+      <label class="inline">вход <input type="number" min="0" step="0.01" data-in value="${esc(i)}" style="width:90px"></label>
+      <label class="inline">выход <input type="number" min="0" step="0.01" data-out value="${esc(o)}" style="width:90px"></label></div>`;
+  }).join('') || '<span class="muted">Сначала выберите модель.</span>';
+}
+function effortOptions(model, cur) {
+  const known = PROJ.llm.models.find(m => m.id === model);
+  const levels = known && known.efforts ? known.efforts : ME.efforts;
+  return '<option value="">по умолчанию модели</option>' + levels.map(e => `<option ${e === cur ? 'selected' : ''}>${e}</option>`).join('')
+    + (cur && !levels.includes(cur) ? `<option selected value="${cur}">${cur} — модель не поддерживает</option>` : '');
+}
+function modelHint(card) {
+  const m = card.querySelector('[data-l="model"]').value.trim(), L = PROJ.llm;
+  const known = L.models.find(x => x.id === m);
+  let h = '';
+  if (m && L.models.length && !known) h = `<span class="err">Модели «${esc(m)}» нет в списке, который вернул API.</span>`;
+  else if (known?.missing.length) h = `<span class="err">Модель не поддерживает: ${known.missing.map(k => CAPS[k] || k).join(', ')} — часть этапов работать не будет.</span>`;
+  else if (known && known.efforts === null) h = 'API не сообщил, какие уровни effort поддерживает модель.';
+  card.querySelector('[data-l-hint]').innerHTML = h;
+}
+function renderModel() {
+  const L = PROJ.llm, [state, cls] = llmState(L.model, L.check);
+  $('#llmModels').innerHTML = L.models.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+  const keyPh = L.key_set ? 'сохранён — введите новый, чтобы заменить'
+    : L.env_key ? 'не задан — используется ANTHROPIC_API_KEY сервера' : 'sk-ant-…';
+  const html = `<div class="card" data-llm>
+    <div class="row"><h3 class="grow" style="margin:0">Модель ИИ</h3>
+      <span class="badge ${cls}" title="${esc(L.check?.error || (L.check?.at ? 'проверено ' + fmtTime(L.check.at) : ''))}">${esc(state)}</span></div>
+    <div class="muted">Студия не привязана к конкретной модели: проект выбирает свою. Её используют все этапы — сценарии, агент, самолечение, анализ падений, публикация; в «Процессе генерации» этап может взять другую модель. Запросы идут в Claude API (Anthropic Messages API) или совместимый шлюз. Ключ хранится на сервере и не показывается в интерфейсе.</div>
+    <div class="grid2">
+      <div><label>API-ключ${L.key_set ? ` · <a href="#" onclick="clearLlmKey();return false">очистить</a>` : ''}</label>
+        <input data-l="api_key" type="password" autocomplete="new-password" placeholder="${esc(keyPh)}"></div>
+      <div><label>Адрес API</label><input data-l="base_url" value="${esc(L.base_url)}" placeholder="по умолчанию — api.anthropic.com" ${ME.is_admin ? '' : 'disabled'}>
+        ${ME.is_admin ? '' : '<div class="hint" style="margin:0">Меняет только администратор: туда уходит ключ.</div>'}</div>
+    </div>
+    <div class="grid2">
+      <div><label>Модель *</label><input data-l="model" list="llmModels" value="${esc(L.model)}" placeholder="идентификатор модели; список — после проверки"></div>
+      <div><label>Effort по умолчанию</label><select data-l="effort">${effortOptions(L.model, L.effort)}</select></div>
+    </div>
+    <div class="hint" data-l-hint></div>
+    <details class="opt"><summary>Цены для оценки стоимости, $ за 1M токенов</summary>
+      <div class="hint" style="margin-top:0">Без цены расход показывается в токенах. Запись в кэш считается как 1,25 входа, чтение — 0,1.</div>
+      <div data-prices></div></details>
+    <div class="row" style="margin-top:10px"><span class="muted grow" data-msg></span>
+      <button class="btn primary" onclick="saveModel(this)">Сохранить и проверить</button></div>
+    <div class="tools" data-models></div></div>`;
+  // The settings tab and the wizard step each hold a copy.
+  $('#modelBox').innerHTML = $('#wzModel').innerHTML = html;
+  $$('[data-llm]').forEach(card => {
+    const model = card.querySelector('[data-l="model"]');
+    model.addEventListener('input', () => {
+      card.querySelector('[data-l="effort"]').innerHTML = effortOptions(model.value.trim(), card.querySelector('[data-l="effort"]').value);
+      modelHint(card); priceRows(card); renderModelList(card);
+    });
+    priceRows(card); modelHint(card); renderModelList(card);
+  });
+}
+function renderModelList(card) {
+  const cur = card.querySelector('[data-l="model"]').value.trim();
+  card.querySelector('[data-models]').innerHTML = PROJ.llm.models.map(m => `<div>
+      <a href="#" onclick="pickModel(this, '${esc(m.id)}');return false"><code>${esc(m.id)}</code></a>
+      ${m.id === cur ? '<span class="badge ok">выбрана</span>' : ''}<span class="muted">${esc(m.name)}</span>
+      ${m.efforts?.length ? `<span class="badge off">effort: ${m.efforts.join(', ')}</span>` : ''}
+      ${m.missing.length ? `<span class="badge warn">нет: ${m.missing.map(k => CAPS[k] || k).join(', ')}</span>` : ''}</div>`).join('');
+}
+function pickModel(link, id) {
+  const model = link.closest('[data-llm]').querySelector('[data-l="model"]');
+  model.value = id; model.dispatchEvent(new Event('input'));
+}
+async function saveModel(btn) {
+  const card = btn.closest('[data-llm]'), msg = card.querySelector('[data-msg]');
+  const val = k => card.querySelector(`[data-l="${k}"]`).value.trim();
+  const prices = {};
+  card.querySelectorAll('[data-price]').forEach(r => {
+    const i = r.querySelector('[data-in]').value, o = r.querySelector('[data-out]').value;
+    if (i !== '' || o !== '') prices[r.dataset.price] = [+i || 0, +o || 0];
+  });
+  const body = {model: val('model'), effort: val('effort'), prices, api_key: val('api_key')};
+  if (ME.is_admin) body.base_url = val('base_url');
+  btn.disabled = true; msg.textContent = 'Проверка подключения…';
+  let error = '';
+  try {
+    PROJ = await api('PUT', `/api/projects/${PID}/llm`, body);
+    try { await api('POST', `/api/projects/${PID}/llm/test`); } catch (e) { error = e.message; }
+    await refreshProject();
+  } catch (e) { error = e.message; }
+  finally { btn.disabled = false; }
+  renderModel(); fillProcess();
+  const L = PROJ.llm, m = ($$('[data-llm]').find(e => e.offsetParent) || $('[data-llm]')).querySelector('[data-msg]');
+  m.innerHTML = error ? `<span class="err">${esc(error)}</span>`
+    : !L.model ? `<span class="ok">Подключение работает</span> · выберите модель из списка (моделей: ${L.models.length})`
+    : `<span class="ok">Сохранено, подключение работает</span> · моделей доступно: ${L.models.length}`;
+}
+async function clearLlmKey() {
+  if (!confirm('Удалить сохранённый API-ключ?')) return;
+  await api('DELETE', `/api/projects/${PID}/llm/key`);
+  await refreshProject(); renderModel();
+}
+
 // connections (the same card is used in the settings and in the new project wizard)
 function presetOf(c) { return PRESETS.find(p => p.id === c.preset) || {fields: []}; }
 function connState(c) {
@@ -2590,7 +2686,7 @@ function connCard(c, wizard) {
       : `<input data-f="${f.key}" ${f.secret ? 'type="password" autocomplete="new-password"' : ''} value="${esc(val)}" placeholder="${esc(ph)}" ${locked ? 'disabled' : ''}>`;
     return `<div><label>${esc(f.label)}${f.required ? ' *' : ''}${f.secret && set ? ` · <a href="#" onclick="clearSecret('${c.id}','${f.key}');return false">очистить</a>` : ''}</label>${input}</div>`;
   }).join('');
-  const cmd = c.command || [pr.command, ...(pr.args || [])].filter(Boolean).join(' ') || (c.preset === 'atlassian' ? 'mcp-atlassian' : '');
+  const cmd = c.command || [pr.command, ...(pr.args || [])].filter(Boolean).join(' ') || (pr.command_env ? `не задана, укажите ${pr.command_env}` : '');
   const admin = ME.is_admin ? `<details class="opt"><summary>Запуск сервера (администратор)</summary>
       <div class="grid2">
         <div><label>Транспорт</label><select data-a="transport"><option value="stdio">stdio (команда)</option><option value="http" ${c.transport === 'http' ? 'selected' : ''}>HTTP (streamable)</option></select></div>
@@ -2658,7 +2754,7 @@ async function delConn(cid) {
 }
 async function testConn(cid, btn) {
   const card = btn.closest('[data-conn-id]');
-  btn.disabled = true; card.querySelector('[data-msg]').textContent = 'Запуск MCP-сервера… (первый запуск через npx может занять минуту)';
+  btn.disabled = true; card.querySelector('[data-msg]').textContent = 'Запуск MCP-сервера… (первый запуск может занять минуту)';
   try {
     const r = await api('POST', `/api/projects/${PID}/connections/${cid}/test`);
     card.querySelector('[data-msg]').innerHTML = `<span class="ok">Работает</span> · инструментов: ${r.tools.length}`;
@@ -2683,22 +2779,12 @@ function connOptions(kind) {
   return `<option value="">По умолчанию (${def})</option>` + PROJ.connections.filter(match)
     .map(c => `<option value="${c.id}">${esc(c.name)}${c.enabled ? '' : ' (выключено)'}</option>`).join('');
 }
-function providerOptions() {
-  const def = LLM?.providers.find(p => p.id === LLM.default);
-  return `<option value="">По умолчанию${def ? ` (${esc(def.title)}: ${esc(def.model)})` : ''}</option>` +
-    (LLM?.providers || []).map(p => `<option value="${esc(p.id)}">${esc(p.title)}</option>`).join('');
-}
-function syncModelLists() {
-  $$('.providerSel').forEach(sel => {
-    const stage = sel.dataset.p.split('.')[0];
-    const p = LLM?.providers.find(x => x.id === (sel.value || LLM.default));
-    const list = $(`#modelList-${stage}`), input = $(`[data-p="${stage}.model"]`);
-    if (list) list.innerHTML = (p?.models || []).map(m => `<option value="${esc(m.name)}">`).join('');
-    if (input) input.placeholder = p?.model || '';
-  });
-}
 function fillProcess() {
-  $$('.providerSel').forEach(s => s.innerHTML = providerOptions());
+  const L = PROJ.llm;
+  $('#defModel').textContent = L.model ? `${L.model}, effort ${L.effort || 'модели'}` : 'модель не выбрана';
+  $$('.modelIn').forEach(i => i.placeholder = L.model || 'модель не выбрана');
+  $$('.effortSel').forEach(s => s.innerHTML = `<option value="">как в проекте (${esc(L.effort || 'по умолчанию модели')})</option>` +
+    ME.efforts.map(e => `<option>${e}</option>`).join(''));
   $$('[data-conn]').forEach(s => s.innerHTML = connOptions(s.dataset.conn));
   $$('[data-list]').forEach(box => {
     const cur = getPath(PROJ.pipeline, box.dataset.list) || [];
@@ -2716,9 +2802,8 @@ function fillProcess() {
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? '';
   });
   $$('[data-csv]').forEach(el => el.value = (getPath(PROJ.pipeline, el.dataset.csv) || []).join(', '));
-  syncStages(); syncModelLists();
+  syncStages();
 }
-document.addEventListener('change', e => { if (e.target.classList?.contains('providerSel')) syncModelLists(); });
 
 // language model spending of the project this month
 async function loadUsage() {
@@ -2730,100 +2815,10 @@ async function loadUsage() {
   box.innerHTML = `<b>Расход за ${esc(u.month)}: ${total.toFixed(2)} ${sign}${limit ? ` из ${limit} ${sign}` : ''}</b> <span class="muted">(${u.requests} запросов; ≈ ${u.total_usd.toFixed(2)} $ / ${u.total_rub.toFixed(2)} ₽)</span>` +
     (limit ? `<div class="bar"><span style="width:${Math.min(100, total / limit * 100)}%;background:${total >= limit ? 'var(--bad)' : total >= .8 * limit ? 'var(--warn)' : 'var(--ok)'}"></span></div>` : '') +
     (u.rows.length ? `<table><thead><tr><th>Этап</th><th>Модель</th><th>Запросов</th><th>Токенов</th><th>Стоимость</th></tr></thead><tbody>` +
-      u.rows.map(r => `<tr><td>${esc(STAGE_NAMES[r.stage] || r.stage)}</td><td>${esc(r.provider)} / ${esc(r.model)}</td><td>${r.requests}</td><td>${fmtTok(r.tokens)}</td><td>${r.cost == null ? '—' : r.cost.toFixed(3) + ' ' + (r.currency === 'RUB' ? '₽' : '$')}</td></tr>`).join('') + '</tbody></table>'
+      u.rows.map(r => `<tr><td>${esc(STAGE_NAMES[r.stage] || r.stage)}</td><td>${esc(r.model)}</td><td>${r.requests}</td><td>${fmtTok(r.tokens)}</td><td>${r.cost == null ? '—' : r.cost.toFixed(3) + ' ' + (r.currency === 'RUB' ? '₽' : '$')}</td></tr>`).join('') + '</tbody></table>'
       : '<div class="hint">В этом месяце запросов к моделям не было.</div>');
 }
 
-// studio-wide language models
-function renderModels() {
-  if (!LLM) return;
-  const admin = ME.is_admin, dis = admin ? '' : 'disabled';
-  $('#llmDefault').innerHTML = LLM.providers.map(p => `<option value="${esc(p.id)}" ${p.id === LLM.default ? 'selected' : ''}>${esc(p.title)} (${esc(p.model)})</option>`).join('');
-  $('#llmDefault').disabled = !admin; $('#llmRate').disabled = !admin;
-  $('#llmRate').value = LLM.usd_rub;
-  $('#llmFallbacks').innerHTML = LLM.providers.map(p => `<label class="inline"><input type="checkbox" value="${esc(p.id)}" ${LLM.fallbacks.includes(p.id) ? 'checked' : ''} ${dis}> ${esc(p.title)}</label>`).join('');
-  $('#llmTpl').innerHTML = Object.entries(LLM.templates).map(([k, t]) => `<option value="${k}">${esc(t.title)}</option>`).join('');
-  $('#llmProviders').innerHTML = LLM.providers.map(p => {
-    const gc = p.kind === 'gigachat';
-    const models = (p.models || []).map((m, i) => `<tr data-model="${i}">
-      <td><input data-m="name" value="${esc(m.name)}" ${dis}></td><td><input data-m="input" type="number" step="0.01" value="${m.input}" ${dis}></td>
-      <td><input data-m="output" type="number" step="0.01" value="${m.output}" ${dis}></td>
-      <td><select data-m="currency" ${dis}><option ${m.currency === 'USD' ? 'selected' : ''}>USD</option><option ${m.currency === 'RUB' ? 'selected' : ''}>RUB</option></select></td>
-      <td><input type="checkbox" data-m="vision" ${m.vision ? 'checked' : ''} ${dis}></td>
-      <td>${m.bench ? `<span class="badge ${m.bench.success >= .7 ? 'ok' : 'warn'}" title="${esc(fmtTime(m.bench.at))}">${Math.round(m.bench.success * 100)}%</span>` : '<span class="muted">—</span>'}</td></tr>`).join('');
-    return `<div class="card" data-prov="${esc(p.id)}">
-      <div class="row"><b class="grow">${esc(p.title)}</b><span class="badge">${esc({anthropic: 'Anthropic API', openai: 'OpenAI-совместимый', gigachat: 'GigaChat API'}[p.kind])}</span>
-        ${p.key_set ? '<span class="badge ok">ключ задан</span>' : '<span class="badge warn">ключ не задан</span>'}
-        ${p.id === LLM.default ? '<span class="badge">по умолчанию</span>' : ''}</div>
-      <div class="grid3">
-        <div><label>Название</label><input data-f="title" value="${esc(p.title)}" ${dis}></div>
-        <div><label>Адрес API</label><input data-f="base_url" value="${esc(p.base_url)}" placeholder="${p.kind === 'anthropic' ? 'api.anthropic.com (или прокси gpt2giga)' : ''}" ${dis}></div>
-        <div><label>Модель по умолчанию</label><input data-f="model" value="${esc(p.model)}" ${dis}></div>
-        <div><label>${gc ? 'Ключ авторизации' : 'API-ключ'}</label><input data-f="api_key" type="password" autocomplete="new-password" placeholder="${p.key_stored ? 'сохранён — введите новый, чтобы заменить' : p.key_set ? 'из переменной ' + esc(p.api_key_env) : ''}" ${dis}></div>
-        <div><label>…или переменная окружения</label><input data-f="api_key_env" value="${esc(p.api_key_env || '')}" ${dis}></div>
-        ${gc ? `<div><label>Scope</label><input data-f="scope" value="${esc(p.scope || 'GIGACHAT_API_PERS')}" ${dis}></div>
-          <div><label>Адрес авторизации</label><input data-f="auth_url" value="${esc(p.auth_url || '')}" ${dis}></div>` : ''}
-        ${p.kind !== 'anthropic' ? `<div><label>Проверка TLS (путь к сертификатам или false)</label><input data-f="verify" value="${esc(p.verify ?? '')}" ${dis}></div>` : ''}
-        <div><label>Промпт агента</label><select data-f="prompt" ${dis}><option value="full" ${p.prompt === 'full' ? 'selected' : ''}>полный</option><option value="compact" ${p.prompt === 'compact' ? 'selected' : ''}>компактный с примерами</option></select></div>
-        <div><label>Скриншоты агенту</label><select data-f="screenshots" ${dis}>${[['always', 'на каждом шаге'], ['on_request', 'по запросу'], ['never', 'никогда']].map(([v, t]) => `<option value="${v}" ${p.screenshots === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-        <div><label>Возможности API (через запятую)</label><input data-f="features" value="${esc((p.features || []).join(', '))}" ${dis} title="${p.kind === 'anthropic' ? 'cache, context_editing, effort, fallbacks, structured' : 'json_schema, parallel_tool_calls'}"></div>
-      </div>
-      <label>Модели и цены за 1 млн токенов (вход / выход); «Бенчмарк» — доля тестов, прошедших с первой генерации</label>
-      <table><thead><tr><th>Модель</th><th>Вход</th><th>Выход</th><th>Валюта</th><th>Видит изображения</th><th>Бенчмарк</th></tr></thead><tbody>${models}</tbody></table>
-      ${admin ? `<button class="linkbtn" onclick="addModelRow('${esc(p.id)}')">+ модель</button>` : ''}
-      <div class="row" style="margin-top:10px"><span class="muted grow" data-msg></span>
-        ${admin ? `<button class="btn" onclick="testProvider('${esc(p.id)}', this)">Проверить</button>
-        ${p.id !== 'anthropic' ? `<button class="btn danger" onclick="delProvider('${esc(p.id)}')">Удалить</button>` : ''}
-        <button class="btn primary" onclick="saveProvider('${esc(p.id)}', this)">Сохранить</button>` : ''}</div></div>`;
-  }).join('');
-}
-function addModelRow(pid) {
-  const tb = $(`[data-prov="${pid}"] tbody`);
-  tb.insertAdjacentHTML('beforeend', `<tr data-model="new"><td><input data-m="name"></td><td><input data-m="input" type="number" step="0.01" value="0"></td><td><input data-m="output" type="number" step="0.01" value="0"></td><td><select data-m="currency"><option>USD</option><option>RUB</option></select></td><td><input type="checkbox" data-m="vision" checked></td><td></td></tr>`);
-}
-function readProvider(pid) {
-  const card = $(`[data-prov="${pid}"]`), old = LLM.providers.find(p => p.id === pid);
-  const val = f => card.querySelector(`[data-f="${f}"]`)?.value;
-  const models = [...card.querySelectorAll('tbody tr')].map(tr => {
-    const g = k => tr.querySelector(`[data-m="${k}"]`);
-    const prev = old.models[+tr.dataset.model] || {};
-    return {...prev, name: g('name').value.trim(), input: +g('input').value, output: +g('output').value, currency: g('currency').value, vision: g('vision').checked};
-  }).filter(m => m.name);
-  const p = {...old, title: val('title'), base_url: val('base_url'), model: val('model'), api_key_env: val('api_key_env'),
-    prompt: val('prompt'), screenshots: val('screenshots'), features: (val('features') || '').split(',').map(s => s.trim()).filter(Boolean), models};
-  for (const f of ['scope', 'auth_url', 'verify']) if (card.querySelector(`[data-f="${f}"]`)) p[f] = val(f);
-  return {provider: p, api_key: val('api_key') || ''};
-}
-async function saveProvider(pid, btn) {
-  const msg = btn.closest('.card').querySelector('[data-msg]');
-  try { await api('PUT', `/api/llm/providers/${pid}`, readProvider(pid)); LLM = await api('GET', '/api/llm'); renderModels(); fillProcess(); }
-  catch (e) { msg.textContent = e.message; }
-}
-async function testProvider(pid, btn) {
-  const msg = btn.closest('.card').querySelector('[data-msg]');
-  btn.disabled = true; msg.textContent = 'Запрос к модели…';
-  try { const r = await api('POST', `/api/llm/providers/${pid}/test`, {}); msg.innerHTML = `<span class="ok">Работает</span> · ${esc(r.model)} ответила «${esc(r.text)}» за ${r.seconds} с`; }
-  catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-  finally { btn.disabled = false; }
-}
-async function delProvider(pid) {
-  if (!confirm('Удалить провайдера и его ключ? Этапы, которые его используют, перейдут на провайдера по умолчанию.')) return;
-  await api('DELETE', `/api/llm/providers/${pid}`); LLM = await api('GET', '/api/llm'); renderModels(); fillProcess();
-}
-$('#llmAdd').onclick = async () => {
-  const id = $('#llmNewId').value.trim().toLowerCase(), tpl = LLM.templates[$('#llmTpl').value];
-  if (!id) return alert('Укажите идентификатор провайдера (латиница, цифры, дефис)');
-  if (LLM.providers.some(p => p.id === id)) return alert('Такой провайдер уже есть');
-  try { await api('PUT', `/api/llm/providers/${id}`, {provider: {...tpl, id}}); $('#llmNewId').value = ''; LLM = await api('GET', '/api/llm'); renderModels(); fillProcess(); }
-  catch (e) { alert(e.message); }
-};
-$('#llmSave').onclick = async () => {
-  try {
-    LLM = await api('PUT', '/api/llm', {default: $('#llmDefault').value, usd_rub: +$('#llmRate').value,
-      fallbacks: $$('#llmFallbacks input:checked').map(i => i.value)});
-    $('#llmMsg').textContent = 'Сохранено'; renderModels(); fillProcess();
-  } catch (e) { $('#llmMsg').textContent = e.message; }
-};
 function syncStages() {
   $$('.stage[data-stage]').forEach(card => {
     const cb = card.querySelector(`[data-p="${card.dataset.stage}.enabled"]`);

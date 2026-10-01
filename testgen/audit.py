@@ -40,7 +40,7 @@ ACTIONS = {
     "user.create": "Пользователь создан", "user.delete": "Пользователь удалён",
     "project.create": "Проект создан", "project.update": "Настройки проекта", "project.delete": "Проект удалён",
     "project.access": "Участники и доступ", "project.credentials": "Учётные данные приложения",
-    "project.mailbox": "Почтовый ящик", "project.notify": "Уведомления", "project.export": "Экспорт проекта",
+    "project.mailbox": "Почтовый ящик", "project.llm": "Модель ИИ", "project.notify": "Уведомления", "project.export": "Экспорт проекта",
     "connection.create": "Подключение добавлено", "connection.update": "Подключение изменено",
     "connection.delete": "Подключение удалено", "connection.secret_clear": "Секрет подключения удалён",
     "connection.test": "Проверка подключения",
@@ -53,7 +53,7 @@ ACTIONS = {
     "heal.accept": "Самолечение принято", "heal.reject": "Самолечение отклонено", "heal.auto": "Самолечение без ревью",
     "run.start": "Прогон теста", "suite.start": "Прогон набора", "pipeline.start": "Конвейер",
     "defect.create": "Дефект в трекер", "baseline.accept": "Новый эталон снимка",
-    "llm.settings": "Модели ИИ", "llm.provider": "Провайдер модели", "sso.settings": "Группы каталога → роли",
+    "sso.settings": "Группы каталога → роли",
 }
 
 

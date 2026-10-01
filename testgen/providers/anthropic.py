@@ -1,26 +1,23 @@
-"""Claude through the Anthropic Messages API - every feature the studio was built on.
+"""Requests to the model through the Anthropic Messages API - every feature the studio was built on.
 
-Features (provider setting "features", env TESTGEN_LLM_FEATURES) that can be switched
-off for an Anthropic-compatible proxy such as gpt2giga (GigaChat behind POST /messages):
+Features (llm.Model.features) a model may lack - the studio then does the same on its side:
 
     cache            prompt caching (a breakpoint on tools + system, automatic caching of the conversation)
     context_editing  old screenshots are cleared server-side (clear_tool_uses); off: the studio cuts them
     effort           output_config.effort
-    fallbacks        fallbacks="default": a declined request is re-run on Anthropic's fallback model
+    fallbacks        fallbacks="default": a declined request is re-run on the provider's fallback model
     structured       messages.parse with a pydantic output format; off: JSON schema in the prompt
-
-TESTGEN_LLM_BASE_URL points the client at such a proxy; then every feature is off
-unless TESTGEN_LLM_FEATURES lists it.
 """
 from __future__ import annotations
 
 import anthropic
 
-from .base import ProviderError, Reply, Request, strip_meta, trim_history, usage_dict
+from .base import ProviderError, Reply, Request, trim_history, usage_dict
 
 FEATURES = ("cache", "context_editing", "effort", "fallbacks", "structured")
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CONTEXT_BETA = "context-management-2025-06-27"
+CLEAR_TOOL_USES = "clear_tool_uses_20250919"
 EPHEMERAL = {"type": "ephemeral"}
 STOP = {"tool_use": "tool", "end_turn": "end", "stop_sequence": "end", "pause_turn": "end",
         "max_tokens": "max_tokens", "refusal": "refusal", "model_context_window_exceeded": "max_tokens"}
@@ -34,16 +31,19 @@ def _dump(block) -> dict:
     return {k: v for k, v in vars(block).items() if v is not None}
 
 
+NO_KEY = "API ИИ: неверный или не заданный API-ключ (укажите его в «Проект → Модель»)."
+
+
 def error_text(e: Exception) -> str:
     if isinstance(e, anthropic.AuthenticationError) or (isinstance(e, TypeError) and "authentication" in str(e)):
         # The SDK raises the TypeError before sending anything when no credentials are set.
-        return "Claude API: invalid or missing credentials (set ANTHROPIC_API_KEY)."
+        return NO_KEY
     if isinstance(e, anthropic.RateLimitError):
-        return "Claude API: rate limited, try again in a moment."
+        return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
-        return f"Claude API error {e.status_code}: {e.message}"
+        return f"Ошибка API ИИ {e.status_code}: {e.message}"
     if isinstance(e, anthropic.APIConnectionError):
-        return "Claude API: network error."
+        return "API ИИ: ошибка сети."
     return f"{type(e).__name__}: {e}"
 
 
@@ -52,16 +52,12 @@ def is_error(e: Exception) -> bool:
 
 
 class AnthropicProvider:
-    kind = "anthropic"
-
-    def __init__(self, cfg: dict, client_factory):
-        self.cfg = cfg
-        self.id = cfg["id"]
-        self.features = set(cfg.get("features") or [])
-        self._client_factory = client_factory     # llm.anthropic_client: tests replace the client there
+    def __init__(self, client, features: set[str]):
+        self._client = client
+        self.features = set(features)
 
     def client(self):
-        return self._client_factory(self.cfg)
+        return self._client
 
     def _params(self, req: Request) -> tuple[dict, list[str]]:
         cache = req.cache and "cache" in self.features
@@ -89,7 +85,7 @@ class AnthropicProvider:
                 betas.append(CONTEXT_BETA)
                 # Old screenshots/snapshots are useless once the page moved on.
                 p["context_management"] = {"edits": [{
-                    "type": "clear_tool_uses_20250919",
+                    "type": CLEAR_TOOL_USES,
                     "trigger": {"type": "input_tokens", "value": 40000},
                     "keep": {"type": "tool_uses", "value": req.keep_images},
                     "clear_at_least": {"type": "input_tokens", "value": 8000},
@@ -98,14 +94,14 @@ class AnthropicProvider:
                 messages = trim_history(messages, req.keep_images)
         if cache and req.cache_all:
             p["cache_control"] = EPHEMERAL
-        p["messages"] = strip_meta(messages)
+        p["messages"] = messages
         return p, betas
 
     def _reply(self, resp) -> Reply:
         u = getattr(resp, "usage", None)
         return Reply(content=[_dump(b) for b in resp.content or []],
                      stop=STOP.get(getattr(resp, "stop_reason", "") or "", "end"),
-                     model=getattr(resp, "model", "") or "", provider=self.id,
+                     model=getattr(resp, "model", "") or "",
                      usage=usage_dict(getattr(u, "input_tokens", 0), getattr(u, "output_tokens", 0),
                                       getattr(u, "cache_creation_input_tokens", 0),
                                       getattr(u, "cache_read_input_tokens", 0)),

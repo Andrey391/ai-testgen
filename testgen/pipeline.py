@@ -1,7 +1,7 @@
 """The full, configurable test generation process of a project:
 
     requirements (Jira / Confluence via MCP, .md, text, or the Planner's site map)
-      -> scenarios (test design by Claude + skills; manual or automatic selection)
+      -> scenarios (test design by the LLM + skills; manual or automatic selection)
       -> authoring (agent in a real browser: built-in Playwright or Playwright MCP)
       -> run (replay with self-healing, re-run of failures, failure analysis)
       -> verify (mutation testing of the assertions; weak ones are strengthened by the agent)

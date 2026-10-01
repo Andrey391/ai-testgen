@@ -4,6 +4,9 @@
 #        huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct --local-dir ./models/Qwen2.5-VL-7B-Instruct
 #   2. docker compose up -d
 #   3. The first start prints the password of the studio user "admin": docker compose logs studio
+#   4. In "Проект → Модель" set the API address http://vllm:8000 and the model Qwen2.5-VL-7B-Instruct:
+#      the studio speaks the Anthropic Messages API, which vLLM serves on /v1/messages (or put an
+#      Anthropic-compatible proxy such as LiteLLM in front of the model).
 #
 # GPU and model size (docs/offline.md): 7B - one 24 GB GPU (L4, A10, RTX 4090); 32B - one 80 GB GPU
 # (A100/H100) or two 48 GB; 72B - four 80 GB GPUs. The agent needs a model with tool calling;
@@ -15,10 +18,7 @@ services:
     ports:
       - "8765:8765"
     environment:
-      TESTGEN_OFFLINE: "on"                       # no CDN, no npx downloads, no Anthropic API
-      TESTGEN_LOCAL_LLM_URL: "http://vllm:8000/v1"
-      TESTGEN_LOCAL_LLM_MODEL: "Qwen2.5-VL-7B-Instruct"
-      TESTGEN_LLM_PROVIDER: "local"               # the default for every stage
+      TESTGEN_OFFLINE: "on"                       # no CDN, no npx downloads, models only at a project's own address
       TESTGEN_SIGNUP: "off"
     volumes:
       - ./deploy/data:/data

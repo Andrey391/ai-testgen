@@ -2,7 +2,7 @@
 # without internet access (TESTGEN_OFFLINE=on): browsers, axe-core, the MCP servers of the presets.
 #
 #   docker build -t ai-testgen .
-#   docker compose up          # the studio + a local vision model (vLLM), see docker-compose.yml
+#   docker compose up          # the studio + a local model (vLLM), see docker-compose.yml
 FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
 
 ARG AXE_VERSION=4.13.0
@@ -20,8 +20,11 @@ RUN python -m pip install -r requirements.txt \
     && python -m playwright install --with-deps chromium firefox webkit
 
 # MCP servers of the presets: installed and cached, so `npx --offline` finds them without a network.
+# The studio takes their launch commands from TESTGEN_*_MCP (mcp_hub.py).
 RUN npm install -g @playwright/mcp mcp-zephyr-scale \
     && npm cache add @playwright/mcp mcp-zephyr-scale
+ENV TESTGEN_PLAYWRIGHT_MCP="npx --offline @playwright/mcp" \
+    TESTGEN_ZEPHYR_MCP="npx --offline mcp-zephyr-scale"
 # axe-core for accessibility checks (the studio downloads it from a CDN when it may).
 RUN mkdir -p /opt/testgen \
     && curl -fsSL "https://cdn.jsdelivr.net/npm/axe-core@${AXE_VERSION}/axe.min.js" -o /opt/testgen/axe.min.js

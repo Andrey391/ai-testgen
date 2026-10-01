@@ -3,10 +3,10 @@
 Healing has two layers:
 1. Each step stores several locator candidates; if the first no longer matches,
    the next one is tried.
-2. If none match, Claude gets the step description plus the current page's
+2. If none match, the LLM gets the step description plus the current page's
    element list and picks the element that now plays that role. In "review" mode
    (run.heal_mode, the default) the run goes on with that element, but the saved
-   test only gets a proposal - old and new locator, Claude's reason, a screenshot
+   test only gets a proposal - old and new locator, the LLM's reason, a screenshot
    with the element outlined - that a person accepts or rejects; a locator that
    was rejected once is never used again. In "auto" mode the step's locator is
    rewritten right away.
@@ -15,7 +15,7 @@ Every attempt records what the page reported (console errors, page errors,
 failed and 4xx/5xx requests) and, per run.trace, a Playwright trace (open it in
 Trace Viewer: `playwright show-trace trace.zip`) with the app password masked.
 
-After a failed run Claude can classify the failure (product bug, test issue,
+After a failed run the LLM can classify the failure (product bug, test issue,
 environment, flaky) from the failed step, the error, the screenshot, the page
 events and the test's recent history. A failed visual check gets its own verdict
 (bug / expected change / noise) from the baseline, the actual image and the diff.
@@ -83,7 +83,7 @@ class VisualVerdict(BaseModel):
 
 async def heal(bs: BrowserSession, step: dict, cfg: dict | None = None,
                project_id: str = "") -> tuple[str, str] | None:
-    """-> (ref of the element that now plays the step's role, Claude's reason) or None."""
+    """-> (ref of the element that now plays the step's role, the LLM's reason) or None."""
     cfg = cfg or {}
     snap = await bs.snapshot()
     elements = "\n".join(describe_element(e) for e in listed(snap["elements"], 250, 60))
@@ -233,7 +233,7 @@ async def _heal_step(bs: BrowserSession, owner: dict, i: int, step: dict, cfg: d
                                     "description": step["description"], "action": step["action"],
                                     "old": step["locator"], "new": new, "reason": reason,
                                     "screenshot": shot, "at": time.time()})
-    step["locator"] = new    # this run goes on with the element Claude found
+    step["locator"] = new    # this run goes on with the element the LLM found
     return loc
 
 
@@ -428,7 +428,7 @@ async def run_test(test: dict, headless: bool = True, on_progress=None,
 
 
 async def _judge(test: dict, step: dict, res: dict, cfg: dict, run_dir: Path | None) -> None:
-    """A failed visual check: ask Claude whether it is a bug or an expected change."""
+    """A failed visual check: ask the LLM whether it is a bug or an expected change."""
     v = (res.get("details") or {}).get("visual")
     if not v or not cfg.get("analyze_failures") or not run_dir:
         return

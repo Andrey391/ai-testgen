@@ -1,5 +1,11 @@
-"""MCP connections of a project: Jira/Confluence (mcp-atlassian), Zephyr Scale,
-Playwright MCP, or any other MCP server.
+"""MCP connections of a project: Jira/Confluence, Zephyr Scale, Playwright MCP,
+or any other MCP server.
+
+The studio does not name or download any MCP server package itself. A preset's
+launch command comes from the connection (set by an admin) or from the preset's
+environment variable (TESTGEN_ATLASSIAN_MCP, TESTGEN_ZEPHYR_MCP,
+TESTGEN_PLAYWRIGHT_MCP); for Jira/Confluence the server installed from
+requirements.txt next to this interpreter is found as well.
 
 A connection is created from a preset. Its public part (preset, name, command,
 non-secret fields) lives in project.json; secret fields (API tokens) live in
@@ -36,9 +42,8 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
 from . import vault
-from .paths import OFFLINE
 
-STARTUP_TIMEOUT = 120      # npx may download the package on first start
+STARTUP_TIMEOUT = 120      # a package runner may download the server on first start
 CALL_TIMEOUT = 120
 MAX_RESULT_CHARS = 30_000
 
@@ -57,15 +62,26 @@ def normalize_site(site: str) -> str:
 
 # ---------- presets ----------
 
-def _atlassian_command() -> tuple[str, list[str]]:
-    custom = os.environ.get("TESTGEN_ATLASSIAN_MCP")
-    if custom:
-        cmd, *args = shlex.split(custom, posix=os.name != "nt")
-        return cmd, args
-    # Installed from requirements.txt next to this interpreter; else try uvx.
-    exe = (shutil.which("mcp-atlassian", path=os.path.dirname(sys.executable))
-           or shutil.which("mcp-atlassian"))
-    return (exe, []) if exe else ("uvx", ["mcp-atlassian"])
+def _env_command(var: str) -> tuple[str, list[str]] | None:
+    custom = os.environ.get(var, "").strip()
+    if not custom:
+        return None
+    cmd, *args = shlex.split(custom, posix=os.name != "nt")
+    return cmd, args
+
+
+def _installed(name: str) -> tuple[str, list[str]] | None:
+    """A server installed from requirements.txt next to this interpreter."""
+    exe = shutil.which(name, path=os.path.dirname(sys.executable))
+    return (exe, []) if exe else None
+
+
+def preset_command(preset: str) -> tuple[str, list[str]] | None:
+    """The configured launch command of a preset, or None if it is not configured."""
+    p = PRESETS[preset]
+    if not p.get("command_env"):
+        return None
+    return _env_command(p["command_env"]) or (_installed(p["installed"]) if p.get("installed") else None)
 
 
 def _atlassian_env(f: dict) -> dict:
@@ -82,8 +98,10 @@ PRESETS: dict[str, dict] = {
     "atlassian": {
         "title": "Jira / Confluence",
         "kind": "requirements",
-        "hint": "MCP-сервер mcp-atlassian (Atlassian Cloud), только чтение. Токен: "
-                "id.atlassian.com → Security → API tokens.",
+        "hint": "MCP-сервер Jira/Confluence, только чтение. Команда запуска — переменная "
+                "TESTGEN_ATLASSIAN_MCP или сервер из requirements.txt. Токен: профиль Atlassian → "
+                "Security → API tokens.",
+        "command_env": "TESTGEN_ATLASSIAN_MCP", "installed": "mcp-atlassian",
         "fields": [
             {"key": "site", "label": "Адрес", "placeholder": "https://company.atlassian.net", "required": True},
             {"key": "email", "label": "Email", "required": True},
@@ -96,9 +114,9 @@ PRESETS: dict[str, dict] = {
     "zephyr": {
         "title": "Zephyr Scale",
         "kind": "test_management",
-        "hint": "MCP-сервер mcp-zephyr-scale (Zephyr Scale Cloud, нужен Node.js). Токен: Jira → "
-                "профиль → Zephyr API keys.",
-        "command": "npx", "args": ["-y", "mcp-zephyr-scale"],
+        "hint": "MCP-сервер Zephyr Scale. Команда запуска — переменная TESTGEN_ZEPHYR_MCP "
+                "или поле «Команда» (администратор). Токен: Jira → профиль → Zephyr API keys.",
+        "command_env": "TESTGEN_ZEPHYR_MCP",
         "fields": [
             {"key": "project_key", "label": "Ключ проекта Jira", "placeholder": "PROJ", "required": True},
             {"key": "token", "label": "Zephyr API-токен", "secret": True, "required": True},
@@ -109,10 +127,10 @@ PRESETS: dict[str, dict] = {
     "playwright": {
         "title": "Playwright MCP",
         "kind": "browser",
-        "hint": "Официальный MCP-сервер Playwright (@playwright/mcp, нужен Node.js). Используется как "
-                "движок браузера при генерации тестов. По умолчанию берёт Chromium, установленный "
-                "командой playwright install.",
-        "command": "npx", "args": ["-y", "@playwright/mcp@latest"],
+        "hint": "MCP-сервер Playwright. Используется как движок браузера при генерации тестов. "
+                "Команда запуска — переменная TESTGEN_PLAYWRIGHT_MCP или поле «Команда» "
+                "(администратор). По умолчанию берёт Chromium, установленный командой playwright install.",
+        "command_env": "TESTGEN_PLAYWRIGHT_MCP",
         "fields": [],
         "env": lambda f: {},
     },
@@ -217,11 +235,14 @@ def parse_env(text: str) -> dict:
     return env
 
 
-def presets_public() -> list[dict]:
-    return [{"id": k, "title": p["title"], "kind": p["kind"], "hint": p["hint"],
-             "admin_only": p.get("admin_only", False), "rest": p.get("rest", False),
-             "fields": p["fields"], "command": p.get("command", ""), "args": p.get("args", [])}
-            for k, p in PRESETS.items()]
+def presets_public(with_commands: bool = False) -> list[dict]:
+    out = []
+    for k, p in PRESETS.items():
+        cmd, args = (preset_command(k) if with_commands else None) or ("", [])
+        out.append({"id": k, "title": p["title"], "kind": p["kind"], "hint": p["hint"],
+                    "admin_only": p.get("admin_only", False), "rest": p.get("rest", False),
+                    "fields": p["fields"], "command": cmd, "args": args, "command_env": p.get("command_env", "")})
+    return out
 
 
 def new_connection(preset: str, name: str = "") -> dict:
@@ -289,17 +310,13 @@ def find(project: dict, preset: str | None = None, cid: str = "", enabled_only: 
 def _command(conn: dict) -> tuple[str, list[str]]:
     if conn.get("command"):
         return conn["command"], list(conn.get("args") or [])
-    p = PRESETS[conn["preset"]]
-    if conn["preset"] == "atlassian":
-        cmd, args = _atlassian_command()
-        return cmd, args + list(conn.get("args") or [])
-    if not p.get("command"):
-        raise McpError(f"Для подключения «{conn['name']}» не задана команда запуска")
-    args = list(p.get("args", []))
-    if OFFLINE and p["command"] == "npx":
-        # Without internet npx must take the package from the npm cache (filled when the image is built).
-        args = ["--offline"] + [a.removesuffix("@latest") for a in args]
-    return p["command"], args + list(conn.get("args") or [])
+    found = preset_command(conn["preset"])
+    if not found:
+        var = PRESETS[conn["preset"]].get("command_env")
+        raise McpError(f"Для подключения «{conn['name']}» не задана команда запуска"
+                       + (f": укажите её в {var} или в настройках подключения (администратор)" if var else ""))
+    cmd, args = found
+    return cmd, args + list(conn.get("args") or [])
 
 
 def _env(project_id: str, conn: dict) -> dict:
@@ -369,8 +386,7 @@ async def connect(project_id: str, conn: dict, extra_args: list[str] | None = No
             raise McpError(f"MCP-сервер «{conn['name']}» не ответил вовремя")
         stderr = _tail(errlog)
         raise McpError(f"Не удалось подключиться к MCP-серверу «{conn['name']}»: "
-                       + (f"{stderr}" if stderr else f"{_first_error(e)}. Проверьте команду запуска"
-                          + (" и что установлен Node.js" if _command_name(conn).startswith("npx") else "")))
+                       + (f"{stderr}" if stderr else f"{_first_error(e)}. Проверьте команду запуска"))
     finally:
         errlog.close()
 
@@ -389,13 +405,6 @@ def _tail(f, lines: int = 6) -> str:
         return ""
     rows = [r.strip() for r in text.splitlines() if r.strip() and not r.strip().startswith("at ")]
     return " ".join(rows[-lines:])[:800]
-
-
-def _command_name(conn: dict) -> str:
-    try:
-        return os.path.basename(_command(conn)[0]).lower()
-    except McpError:
-        return ""
 
 
 def result_text(res) -> str:
@@ -474,7 +483,7 @@ async def test(project_id: str, conn: dict) -> list[dict]:
              "access": access(t.name)} for t in tools]
 
 
-# ---------- tools for Claude ----------
+# ---------- tools for the LLM ----------
 
 _READ = {"get", "list", "search", "read", "find", "fetch", "query", "describe", "view", "show",
          "download", "export", "count", "browse", "lookup", "check"}
@@ -499,7 +508,7 @@ def access(tool_name: str) -> str:
 
 
 class Toolbox:
-    """MCP tools of several connections, offered to Claude as regular tools.
+    """MCP tools of several connections, offered to the LLM as regular tools.
 
     mode="read": only tools that look read-only (authoring agent context);
     mode="write": everything except destructive tools (publishing to Zephyr).

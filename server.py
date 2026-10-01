@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from pydantic import BaseModel
 
 from testgen import (access, audit, auth, checks, db, defects, explorer, exporters, fs, llm, mailbox, mcp_hub,
-                     mcp_server, metrics, monitoring, mutations, notify, pipeline, projects, providers, publisher,
+                     mcp_server, metrics, monitoring, mutations, notify, pipeline, projects, publisher,
                      reports, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic, trackers, vault,
                      workqueue)
 from testgen import worker as worker_mod
@@ -170,9 +170,6 @@ AUDIT_ACTIONS = {
     ("POST", "/api/auth/register"): "auth.register",
     ("POST", "/api/auth/tokens"): "token.create",
     ("DELETE", "/api/auth/tokens/{tid}"): "token.delete",
-    ("PUT", "/api/llm"): "llm.settings",
-    ("PUT", "/api/llm/providers/{prov_id}"): "llm.provider",
-    ("DELETE", "/api/llm/providers/{prov_id}"): "llm.provider",
     ("PUT", "/api/sso"): "sso.settings",
     ("POST", "/api/projects"): "project.create",
     ("PUT", "/api/projects/{pid}"): "project.update",
@@ -180,6 +177,8 @@ AUDIT_ACTIONS = {
     ("PUT", "/api/projects/{pid}/access"): "project.access",
     ("PUT", "/api/projects/{pid}/credentials"): "project.credentials",
     ("PUT", "/api/projects/{pid}/mailbox"): "project.mailbox",
+    ("PUT", "/api/projects/{pid}/llm"): "project.llm",
+    ("DELETE", "/api/projects/{pid}/llm/key"): "project.llm",
     ("PUT", "/api/projects/{pid}/notify"): "project.notify",
     ("GET", "/api/projects/{pid}/export"): "project.export",
     ("POST", "/api/projects/{pid}/connections"): "connection.create",
@@ -255,6 +254,9 @@ ROLE_RULES = {
     ("PUT", "/api/projects/{pid}/access"): "owner",
     ("PUT", "/api/projects/{pid}/credentials"): "owner",
     ("PUT", "/api/projects/{pid}/mailbox"): "owner",
+    ("PUT", "/api/projects/{pid}/llm"): "owner",
+    ("DELETE", "/api/projects/{pid}/llm/key"): "owner",
+    ("POST", "/api/projects/{pid}/llm/test"): "owner",
     ("PUT", "/api/projects/{pid}/notify"): "owner",
     ("POST", "/api/projects/{pid}/notify/test"): "owner",
     ("POST", "/api/projects/{pid}/connections"): "owner",
@@ -465,14 +467,13 @@ async def logout():
 
 @app.get("/api/auth/me")
 async def me(request: Request):
-    pid, model = providers.resolve(None)
     admin = bool(request.state.user) and auth.is_admin(request.state.user)
     return {"user": request.state.user, "auth_enabled": auth.ENABLED, "signup": auth.SIGNUP,
             "local_login": auth.LOCAL_LOGIN, "sso": {"oidc": sso.oidc_title(), "ldap": sso.ldap_enabled()},
             "groups": auth.user_groups(request.state.user), "secrets": vault.describe() if admin else None,
             "is_admin": bool(request.state.user) and auth.is_admin(request.state.user),
             "roles": {r: access.LABELS[r] for r in access.ROLES},
-            "model": model, "provider": pid, "effort": llm.EFFORT, "prompt_cache": llm.PROMPT_CACHE,
+            "efforts": llm.EFFORTS, "prompt_cache": llm.PROMPT_CACHE,
             "mcp_url": f"{request.base_url}".rstrip("/") + "/mcp"}
 
 
@@ -496,94 +497,6 @@ async def delete_token(tid: str, request: Request):
     return {"ok": auth.delete_api_token(request.state.user, tid)}
 
 
-# ---------- Language models (studio-wide; admins change them: keys and addresses) ----------
-
-@app.get("/api/llm")
-async def llm_settings():
-    s = providers.settings()
-    return s | {"providers": [providers.public(p) for p in s["providers"]], "templates": providers.TEMPLATES,
-                "kinds": list(providers.KINDS)}
-
-
-class LlmSettingsBody(BaseModel):
-    default: str = "anthropic"
-    fallbacks: list[str] = []
-    usd_rub: float = 80.0
-
-
-@app.put("/api/llm")
-async def save_llm_settings(body: LlmSettingsBody, request: Request):
-    require_admin(request)
-    s = providers.settings()
-    if not providers.provider_cfg(body.default):
-        raise HTTPException(400, "Нет такого провайдера")
-    s.update(default=body.default, fallbacks=[f for f in body.fallbacks if providers.provider_cfg(f.split(":")[0])],
-             usd_rub=max(1.0, body.usd_rub))
-    providers.save_settings(s)
-    return await llm_settings()
-
-
-class ProviderBody(BaseModel):
-    provider: dict
-    api_key: str = ""          # empty = keep the saved one
-    clear_key: bool = False
-
-
-@app.put("/api/llm/providers/{prov_id}")
-async def save_provider(prov_id: str, body: ProviderBody, request: Request):
-    """Create or change a provider."""
-    require_admin(request)
-    s = providers.settings()
-    try:
-        cfg = providers.normalize(body.provider | {"id": prov_id})
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    s["providers"] = [p for p in s["providers"] if p["id"] != prov_id] + [cfg]
-    if prov_id == "anthropic":
-        cfg["kind"] = "anthropic"
-    providers.save_settings(s)
-    if body.api_key.strip():
-        providers.set_key(prov_id, body.api_key.strip())
-    elif body.clear_key:
-        providers.set_key(prov_id, "")
-    return providers.public(providers.provider_cfg(prov_id))
-
-
-@app.delete("/api/llm/providers/{prov_id}")
-async def delete_provider(prov_id: str, request: Request):
-    require_admin(request)
-    if prov_id == "anthropic":
-        raise HTTPException(400, "Встроенный провайдер Claude удалить нельзя")
-    s = providers.settings()
-    s["providers"] = [p for p in s["providers"] if p["id"] != prov_id]
-    s["fallbacks"] = [f for f in s["fallbacks"] if f.split(":")[0] != prov_id]
-    if s["default"] == prov_id:
-        s["default"] = "anthropic"
-    providers.save_settings(s)
-    providers.set_key(prov_id, "")
-    return {"ok": True}
-
-
-class ProviderTestBody(BaseModel):
-    model: str = ""
-
-
-@app.post("/api/llm/providers/{prov_id}/test")
-async def test_provider(prov_id: str, body: ProviderTestBody, request: Request):
-    """A tiny request to the model: is the address, key and model right?"""
-    require_admin(request)
-    if not providers.provider_cfg(prov_id):
-        raise HTTPException(404, "Провайдер не найден")
-    started = time.time()
-    try:
-        reply = await call(llm.chat({"provider": prov_id, "model": body.model}, system="Answer with one word.",
-                                    messages=[{"role": "user", "content": "Say OK."}], max_tokens=50))
-    except llm.ProviderError as e:
-        raise HTTPException(400, str(e))
-    return {"model": reply.model, "text": reply.text[:200], "seconds": round(time.time() - started, 2),
-            "usage": reply.usage}
-
-
 # ---------- Projects ----------
 
 def project(pid: str, need: str = "viewer") -> dict:
@@ -600,7 +513,15 @@ def _project_view(p: dict) -> dict:
                 "app_username": c.get("username", "") if access.RANK[role] >= access.RANK["editor"] else "",
                 "app_has_password": bool(c.get("password")),
                 "app_has_totp": bool(c.get("totp_secret")), "mailbox_has_password": bool(mailbox.password(p["id"])),
-                "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p)}
+                "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p),
+                "llm": p["llm"] | {"key_set": bool(projects.llm_key(p["id"])),
+                                   "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+
+
+def _require_model(p: dict) -> None:
+    """Fail before starting a browser when the project has no model to drive it."""
+    if not p["llm"]["model"]:
+        raise HTTPException(400, "Модель не настроена: выберите её в «Проект → Модель».")
 
 
 class ProjectBody(BaseModel):
@@ -623,6 +544,7 @@ async def list_projects(request: Request):
         conns = [mcp_hub.public_view(item["id"], c) for c in p["connections"]]
         out.append(item | {"connections": [{k: c[k] for k in ("id", "name", "preset", "title", "enabled",
                                                                 "missing", "check")} for c in conns],
+                           "model": p["llm"]["model"], "model_check": p["llm"]["check"],
                            "has_app_login": bool(projects.app_credentials(item["id"]).get("username")),
                            "open_tasks": tasks.counts(item["id"])["open"], "role": role,
                            "visibility": p.get("visibility", "open")})
@@ -660,6 +582,55 @@ async def delete_project(pid: str, request: Request):
     require_admin(request)
     project(pid)
     return {"ok": projects.delete(pid)}
+
+
+# ---------- The project's model connection ----------
+
+class LlmBody(BaseModel):
+    model: str | None = None
+    effort: str | None = None
+    base_url: str | None = None
+    prices: dict[str, list[float]] | None = None
+    api_key: str = ""    # empty = keep the saved one
+
+
+@app.put("/api/projects/{pid}/llm")
+async def update_llm(pid: str, body: LlmBody, request: Request):
+    """The project's model connection. The API address decides where requests (and the
+    key) go, so only an administrator changes it."""
+    p = project(pid, "owner")
+    patch = body.model_dump(exclude_none=True, exclude={"api_key"})
+    if "base_url" in patch and patch["base_url"].strip().rstrip("/") != p["llm"]["base_url"]:
+        require_admin(request)
+    return _project_view(projects.update_llm(pid, patch, body.api_key))
+
+
+@app.delete("/api/projects/{pid}/llm/key")
+async def clear_llm_key(pid: str):
+    project(pid, "owner")
+    projects.clear_llm_key(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/llm/test")
+async def test_llm(pid: str):
+    """Check the connection and list the models it offers; remembered in the project."""
+    project(pid, "owner")
+    conf = projects.llm_settings(pid)
+    try:
+        models = await call(asyncio.wait_for(llm.check(conf), 60))
+        result = {"ok": True, "models": len(models)}
+    except Exception as e:
+        models, result = [], {"ok": False, "error": "Нет ответа от API" if isinstance(e, asyncio.TimeoutError)
+                              else llm.api_error_text(e)}
+    p = projects.get(pid)
+    p["llm"]["check"] = result | {"at": time.time()}
+    if result["ok"]:
+        p["llm"]["models"] = models
+    projects.save(p)
+    if not result["ok"]:
+        raise HTTPException(400, result["error"])
+    return {"models": models}
 
 
 # ---------- Members of a project; directory groups -> roles (admins) ----------
@@ -897,8 +868,9 @@ async def export_project(pid: str, tag: str = "", testit: bool = False):
 # ---------- Project MCP connections ----------
 
 @app.get("/api/mcp/presets")
-async def mcp_presets():
-    return mcp_hub.presets_public()
+async def mcp_presets(request: Request):
+    # Launch commands come from the server's environment: only admins see them.
+    return mcp_hub.presets_public(with_commands=bool(request.state.user) and auth.is_admin(request.state.user))
 
 
 class NewConnection(BaseModel):
@@ -1117,6 +1089,8 @@ async def create_session(body: NewSession, request: Request):
     if not any(creds.values()):
         creds = projects.app_credentials(p["id"])
     engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
+    if body.scenario.strip() or body.autopilot:
+        _require_model(p)
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
                       engine=engine, use_login_state=not body.fresh_login)
     request.state.project_id = p["id"]
@@ -1232,7 +1206,7 @@ class StepsBody(BaseModel):
 async def set_steps(sid: str, body: StepsBody):
     s = sess(sid)
     s.steps = body.steps
-    s.edits += 1           # a person corrected the agent: a metric of the benchmark
+    s.edits += 1           # a person corrected the agent (authoring_stats)
     return {"ok": True}
 
 
@@ -1661,6 +1635,7 @@ async def strengthen(tid: str, request: Request):
     if not v.get("weak"):
         raise HTTPException(400, "Сначала проверьте тест мутациями: усиливать нечего")
     p = project(t["project_id"])
+    _require_model(p)
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=True,
                       credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v))
     s.test_id = tid
@@ -1825,6 +1800,7 @@ class ReqBody(BaseModel):
 @app.post("/api/scenarios")
 async def gen_scenarios(body: ReqBody):
     p = project(body.project_id, "editor")
+    _require_model(p)
     try:
         res = await call(scenarios.generate(body.requirements, body.url, project=p))
     except Exception as e:
@@ -1879,6 +1855,7 @@ async def start_job(pid: str, body: JobBody, request: Request):
         cases = {"connection": body.case_connection, "ids": publisher.parse_ids(body.case_ids)}
     if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases:
         raise HTTPException(400, "Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта")
+    _require_model(p)
     job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore,
                        cases=cases)
     pipeline.JOBS[job.id] = job
@@ -1936,6 +1913,5 @@ app.mount("/", MCP_APP)
 
 if __name__ == "__main__":
     auth.ensure_admin()
-    pid, model = providers.resolve(None)
-    print(f"AI Test Generator: http://{HOST}:{PORT}  (model {pid}/{model}, effort {llm.EFFORT})")
+    print(f"AI Test Generator: http://{HOST}:{PORT}  (the model is set per project: Project -> Model)")
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

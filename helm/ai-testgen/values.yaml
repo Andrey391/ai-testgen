@@ -63,7 +63,7 @@ ldap:
   userFilter: ""
 admins: "admin"               # TESTGEN_ADMINS; admin groups of the directory: Проект → Участники и доступ
 
-# Anything else the studio reads (TESTGEN_LLM_PROVIDER, TESTGEN_OFFLINE, TESTGEN_AUDIT_SYSLOG...).
+# Anything else the studio reads (TESTGEN_OFFLINE, TESTGEN_AUDIT_SYSLOG, TESTGEN_PLAYWRIGHT_MCP...).
 extraEnv: {}
 
 ingress:

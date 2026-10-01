@@ -2,8 +2,9 @@
 
 assert_accessible runs axe-core in the page and fails on WCAG 2.x A/AA violations
 of at least the project's impact threshold (run.a11y_impact). axe-core is not
-shipped with the studio: it is downloaded once from a CDN into data/cache/, or
-read from TESTGEN_AXE_JS (a path to axe.min.js) for offline machines and CI.
+shipped with the studio and its source is not hard-coded: TESTGEN_AXE_JS is a
+path to axe.min.js, TESTGEN_AXE_URL an address it is downloaded from once (kept
+in data/cache/). Without either the check fails with a hint.
 
 assert_screenshot compares the page (or one element) with a baseline image. The
 first run of a saved test stores the baseline in
@@ -17,6 +18,7 @@ A failed check raises CheckFailed with `details` for the run report.
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -24,9 +26,6 @@ from pathlib import Path
 from . import fs, projects
 from .paths import OFFLINE
 
-AXE_VERSION = "4.13.0"
-AXE_URLS = [f"https://cdn.jsdelivr.net/npm/axe-core@{AXE_VERSION}/axe.min.js",
-            f"https://cdnjs.cloudflare.com/ajax/libs/axe-core/{AXE_VERSION}/axe.min.js"]
 WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]
 IMPACTS = ["minor", "moderate", "serious", "critical"]
 DEFAULT_VISUAL_THRESHOLD = 1.0   # percent of differing pixels
@@ -50,27 +49,29 @@ async def axe_source() -> str:
     if custom:
         _axe = Path(custom).read_text("utf-8")
         return _axe
-    cache = projects.DATA / "cache" / f"axe-{AXE_VERSION}.min.js"
+    url = os.environ.get("TESTGEN_AXE_URL", "").strip()
+    if not url:
+        raise RuntimeError("Проверка доступности не настроена: укажите путь к axe.min.js в TESTGEN_AXE_JS "
+                           "или адрес для загрузки в TESTGEN_AXE_URL")
+    cache = projects.DATA / "cache" / f"axe-{hashlib.sha256(url.encode()).hexdigest()[:12]}.min.js"
     if cache.exists():
         _axe = cache.read_text("utf-8")
         return _axe
     if OFFLINE:
         raise RuntimeError("Режим без интернета (TESTGEN_OFFLINE): укажите путь к axe.min.js в TESTGEN_AXE_JS "
-                           f"(axe-core {AXE_VERSION}; в Docker-образе студии он уже есть)")
+                           "(в Docker-образе студии он уже есть)")
     import httpx
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        for url in AXE_URLS:
-            try:
-                r = await client.get(url)
-            except httpx.HTTPError:
-                continue
-            if r.status_code == 200 and "axe" in r.text[:2000]:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(r.text, "utf-8")
-                _axe = r.text
-                return _axe
-    raise RuntimeError("Не удалось загрузить axe-core: нет доступа к CDN. Скачайте axe.min.js "
-                       f"(axe-core {AXE_VERSION}) и укажите путь в TESTGEN_AXE_JS")
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.get(url)
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"Не удалось загрузить axe-core из TESTGEN_AXE_URL: {e}") from None
+    if r.status_code != 200 or "axe" not in r.text[:2000]:
+        raise RuntimeError(f"TESTGEN_AXE_URL не вернул axe-core (HTTP {r.status_code})")
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(r.text, "utf-8")
+    _axe = r.text
+    return _axe
 
 
 _AXE_RUN = """async (tags) => {

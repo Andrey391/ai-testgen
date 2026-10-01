@@ -13,7 +13,7 @@ AI Test Generator — открытая реализация подхода из 
 
 | CoTester | Здесь |
 |---|---|
-| Проекты | Стартовая вкладка «Проекты» и мастер нового проекта: приложение → подключения к ресурсам (с проверкой) → привязка к этапам процесса. У проекта свои тесты, подключения, скиллы, процесс |
+| Проекты | Стартовая вкладка «Проекты» и мастер нового проекта: приложение → модель ИИ → подключения к ресурсам (с проверкой) → привязка к этапам процесса. У проекта свои тесты, модель, подключения, скиллы, процесс |
 | Задачи команды | Вкладка «Задачи»: статус, приоритет, исполнитель, срок, тесты задачи; «Тест в Studio» — тест привязывается к задаче при сохранении |
 | Start Generating Test Case: URL, проект, название | Форма «Новый тест» |
 | Описание сценария агенту | Поле «Сценарий» и чат с агентом |
@@ -42,22 +42,17 @@ venv держим по короткому пути: драйвер Playwright н
 python -m venv $env:LOCALAPPDATA\aitestgen\venv
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m playwright install chromium
-$env:ANTHROPIC_API_KEY = "sk-ant-..."   # или другой провайдер моделей, см. ниже
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ можно задать в «Проект → Модель»
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python server.py   # http://127.0.0.1:8765
 ```
 
-Студия работает не только на Claude: GigaChat, Yandex AI Studio, своя модель (vLLM, Ollama) и любой
-OpenAI-совместимый сервер. Провайдеры, модели, цены и резервная цепочка — на вкладке «Проект → Модели ИИ» (общие для студии)
-(`data/llm.json`, ключи в `secrets/llm/`) или переменными `TESTGEN_LLM_*` / `TESTGEN_LOCAL_LLM_*`;
-провайдер и модель можно задать каждому этапу проекта. Контур без интернета — `docker-compose.yml`
-и `docs/offline.md`. Качество модели меряет бенчмарк (`docs/bench.md`, стоит денег, в CI только вручную):
+Модель студия не выбирает сама: каждый проект задаёт модель, effort, API-ключ, адрес API и цены в
+«Проект → Модель» (запросы идут по Anthropic Messages API — в облако или на свой сервер/прокси с
+этим API). Контур без интернета — `docker-compose.yml` и `docs/offline.md`.
 
-```powershell
-& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.bench --provider gigachat --model GigaChat-2-Max
-```
-
-Для подключений Zephyr Scale (`mcp-zephyr-scale`) и Playwright MCP (`@playwright/mcp`) нужен Node.js:
-они запускаются через `npx` при первом использовании. Для локального запуска из Claude Code есть
+Команды запуска MCP-серверов Zephyr Scale и Playwright MCP задаются в `TESTGEN_ZEPHYR_MCP` и
+`TESTGEN_PLAYWRIGHT_MCP` (или администратором в настройках подключения): студия не скачивает пакеты
+сама. Для локального запуска из Claude Code есть
 `.claude/launch.json` (конфигурация `studio`, `TESTGEN_AUTH=off`, свободный порт).
 
 Управление пользователями студии:
@@ -91,8 +86,8 @@ OpenAI-совместимый сервер. Провайдеры, модели, 
 (логин/пароль — `TESTGEN_USERNAME` / `TESTGEN_PASSWORD`, адрес стенда — `TESTGEN_BASE_URL`).
 
 Тесты самой студии — pytest на локальном стенде `tests/site/` (`tests/stand.py`, вариант `v2` —
-изменённая вёрстка) с заглушками LLM (`tests/fakes.py`: `FakeClient` вместо клиента Anthropic — фикстура `fake_llm`,
-`FakeHttpLLM` — OpenAI-совместимый сервер и GigaChat, фикстура `fake_http`), без ключей API и затрат. Данные и секреты
+изменённая вёрстка) с заглушкой LLM (`tests/fakes.py`: `FakeClient` вместо клиента API — фикстура `fake_llm`;
+фикстура `project` задаёт проекту модель `test-model`), без ключей API и затрат. Данные и секреты
 тестов уходят во временную папку (`TESTGEN_DATA_DIR`/`TESTGEN_SECRETS_DIR` в `tests/conftest.py`).
 Запускай после правок; CI — `.github/workflows/tests.yml`. Те же тесты на общем хранилище:
 `TESTGEN_TEST_DB=sqlite` (или адрес PostgreSQL — база на каждый поток xdist) и `TESTGEN_TEST_S3=moto`;
@@ -109,24 +104,17 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
 
 ## Переменные окружения
 
-- `ANTHROPIC_API_KEY` — ключ Claude (провайдер `anthropic`); не нужна, если модели другого провайдера.
-- `TESTGEN_MODEL` (по умолчанию `claude-opus-5`), `TESTGEN_EFFORT` (`medium`; для сложных сайтов `high`).
-- `TESTGEN_LLM_PROVIDER` — провайдер по умолчанию (id из «Модели ИИ», например `gigachat`, `local`).
-- `TESTGEN_LLM_BASE_URL` — Claude через Anthropic-совместимый прокси (например, gpt2giga → GigaChat);
-  тогда beta-функции выключены, `TESTGEN_LLM_FEATURES` включает нужные (`cache`, `context_editing`,
-  `effort`, `fallbacks`, `structured` или `all`).
-- `TESTGEN_LOCAL_LLM_URL`, `TESTGEN_LOCAL_LLM_MODEL`, `TESTGEN_LOCAL_LLM_VISION=off`, `TESTGEN_LOCAL_LLM_KEY` —
-  своя OpenAI-совместимая модель как провайдер `local` (docker-compose).
-- Ключи других провайдеров — из `secrets/llm/<провайдер>.json` или переменной, названной в настройке
-  провайдера `api_key_env` (в шаблонах `GIGACHAT_CREDENTIALS`, `YANDEX_API_KEY`).
-- `TESTGEN_USD_RUB` — курс для пересчёта расходов (иначе из настроек, по умолчанию 80).
-- `TESTGEN_OFFLINE=on` — без обращений в интернет: без CDN и `npx` из сети, Claude только через прокси
-  во внутренней сети.
+- Модель в коде не задана: модель, effort, API-ключ, адрес API и цены выбираются в «Проект → Модель»
+  (шаг 2 мастера нового проекта); этап процесса может переопределить модель и effort.
+- `ANTHROPIC_API_KEY` — ключ для проектов без своего ключа (удобно для CI, где нет папки `secrets/`).
+- `TESTGEN_USD_RUB` — курс для пересчёта расходов в рубли (по умолчанию 80).
+- `TESTGEN_OFFLINE=on` — без обращений в интернет: без CDN и `npx` из сети, модель только по адресу API
+  проекта (во внутренней сети).
 - `TESTGEN_AUTH=off` — без входа в студию; `TESTGEN_SIGNUP=off` — без саморегистрации.
 - `TESTGEN_ADMINS` — администраторы студии через запятую (по умолчанию `admin`; ещё — группы каталога
   из «Участники и доступ»): владельцы всех проектов; только они задают команды, аргументы и переменные
-  окружения MCP-подключений, создают подключения «Другой MCP-сервер», меняют модели и группы и удаляют
-  проекты. При `TESTGEN_AUTH=off` администратор — любой.
+  окружения MCP-подключений, создают подключения «Другой MCP-сервер», меняют адрес API модели и группы
+  и удаляют проекты. При `TESTGEN_AUTH=off` администратор — любой.
 - Вход через каталог (`testgen/sso.py`): `TESTGEN_OIDC_ISSUER`, `TESTGEN_OIDC_CLIENT_ID`,
   `TESTGEN_OIDC_CLIENT_SECRET` (+ `_SCOPES`, `_USERNAME_CLAIM`, `_GROUPS_CLAIM`, `_TITLE`, `_REDIRECT_URL`,
   `_CACERT`); `TESTGEN_LDAP_URL`, `TESTGEN_LDAP_BASE_DN`, `TESTGEN_LDAP_BIND_DN`, `TESTGEN_LDAP_BIND_PASSWORD`
@@ -139,13 +127,15 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   `_SECRET_KEY` / `_REGION` / `_PREFIX`, `TESTGEN_INSTANCE_URL` (адрес экземпляра для других экземпляров),
   `TESTGEN_EMBEDDED_WORKER` (`on`), `TESTGEN_QUEUE` (`on`), `TESTGEN_WORKER_CONCURRENCY` (2),
   `TESTGEN_METRICS_PORT` (воркер), `TESTGEN_METRICS_TOKEN` (`/metrics`), `TESTGEN_DB_MIGRATE`, `TESTGEN_DB_POOL`.
-- `TESTGEN_ATLASSIAN_MCP` — своя команда запуска MCP-сервера Atlassian
-  (по умолчанию `mcp-atlassian` из venv, иначе `uvx mcp-atlassian`).
+- `TESTGEN_ATLASSIAN_MCP`, `TESTGEN_ZEPHYR_MCP`, `TESTGEN_PLAYWRIGHT_MCP` — команды запуска
+  MCP-серверов пресетов (Atlassian без неё ищется в venv из `requirements.txt`). Не задана и не
+  задана в подключении — подключение сообщает, что команды нет; студия ничего не скачивает сама.
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` — учётные данные по умолчанию для прогонов.
 - `TESTGEN_DATA_DIR` / `TESTGEN_SECRETS_DIR` — другие папки данных и секретов (CI, тесты студии).
 - `TESTGEN_PROMPT_CACHE=off` — без кэширования промптов (сравнить стоимость; расход виден в Studio,
   прогонах и конвейере).
-- `TESTGEN_AXE_JS` — путь к `axe.min.js` для проверки доступности без доступа к CDN.
+- `TESTGEN_AXE_JS` — путь к `axe.min.js` или `TESTGEN_AXE_URL` — адрес, откуда его скачать (кэш в
+  `data/cache/`). Без них `assert_accessible` падает с подсказкой; адресов CDN в коде нет.
 - `TESTGEN_FAKER_LOCALE` — локаль тестовых данных `{{faker.*}}` (по умолчанию `en_US`).
 - `TESTGEN_TOKEN`, `TESTGEN_STUDIO_URL` — для `python -m testgen.mcp_server` (stdio).
 - `PORT` (по умолчанию 8765).
@@ -197,7 +187,7 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   однотипных элементов, `browser.group_candidates`), `assert_element_text`, `assert_no_console_errors`,
   `assert_accessible`, `assert_screenshot` (последние три — `AUXILIARY_ASSERTIONS`, не проверка
   результата); `mock_route` — подмена ответа запроса.
-- `testgen/checks.py` — `assert_accessible` (axe-core из CDN в `data/cache/` или `TESTGEN_AXE_JS`,
+- `testgen/checks.py` — `assert_accessible` (axe-core из `TESTGEN_AXE_JS` или `TESTGEN_AXE_URL`,
   порог `run.a11y_impact`) и `assert_screenshot` (эталон при первом прогоне в
   `data/projects/<id>/baselines/`, сравнение на canvas в отдельной странице, маски `step["masks"]`,
   допуск `run.visual_threshold`). Провал — `CheckFailed` с `details` для отчёта.
@@ -211,7 +201,7 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   Интерфейс движка для агента: `describe()`, `screenshot_b64()`, `execute(step)`, `url`, `close()`.
 - `testgen/testdata.py` — плейсхолдеры `{{unique}}`, `{{today}}`, `{{faker.email}}`, … : новое значение
   на каждый прогон, одно и то же внутри прогона (`DataValues`); экспорт встраивает тот же генератор.
-- `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`@playwright/mcp`).
+- `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`TESTGEN_PLAYWRIGHT_MCP`).
   Агент и шаги не меняются; снимок — ARIA-снапшот MCP. Локаторы шага: код, сгенерированный MCP
   (`--codegen python`), плюс `ELEMENT_INFO_JS` через `browser_evaluate` (те же поля, что у встроенного
   снимка). По умолчанию берёт Chromium из `playwright install` (`--executable-path`). Picker/Record
@@ -230,12 +220,12 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   не могут отменить.
 - `testgen/agent.py` — `StudioSession`, цикл агента: модель получает скриншот и список элементов и
   вызывает по одному инструменту за ход (`click`, `fill`, `assert_*`, …, `finish`); каждый вызов
-  становится шагом. Старые скриншоты вычищаются (`keep_images`: у Claude — context editing
-  `clear_tool_uses_20250919`, у остальных — `providers.base.trim_history`). Для моделей слабее Claude
-  (`providers.profile`): компактный промпт и примеры ходов (скилл `authoring-examples`), текстовый режим
-  (скриншот по инструменту `look` или никогда), ремонт ответа (`check_call`, не больше `MAX_REPAIRS` на
-  шаг), Auto-Pilot только при успехе на бенчмарке не ниже `authoring.autopilot_min_success`.
-  Настройки этапа `authoring` проекта: движок, скиллы, провайдер и модель, лимит шагов, read-only инструменты
+  становится шагом. Старые скриншоты вычищаются (`keep_images`: context editing
+  `clear_tool_uses_20250919`, а если модель его не поддерживает — `providers.base.trim_history`). Для
+  моделей слабее — настройки этапа: компактный промпт и примеры ходов (`authoring.prompt`, скилл
+  `authoring-examples`), текстовый режим (`authoring.screenshots`: скриншот по инструменту `look` или
+  никогда). Неверный ответ возвращается модели на исправление (`check_call`, не больше `MAX_REPAIRS` на шаг).
+  Настройки этапа `authoring` проекта: движок, скиллы, модель и effort, лимит шагов, read-only инструменты
   подключений (их вызовы выполняются сразу и не становятся шагами). `save()` сохраняет тест (сохраняя
   теги, карантин, ключ Zephyr) и трафик; `usage` — расход токенов сессии. С `base_steps` сессия сначала
   воспроизводит сохранённый тест и получает `task` — так агент усиливает слабые проверки.
@@ -281,25 +271,23 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
 - `testgen/sources.py` — загрузка ТЗ из Jira/Confluence через Atlassian-подключение проекта
   ([mcp-atlassian](https://github.com/sooperset/mcp-atlassian), stdio-процесс на каждый запрос,
   `READ_ONLY_MODE`).
-- `testgen/llm.py` — единственная дверь к моделям. Все запросы идут через `llm.chat(stage, system=...,
-  messages=..., tools=...)` или `llm.parse(stage, ..., schema=...)` (ответ в pydantic-модели); `stage` —
-  настройки этапа проекта (`provider`, `model`, `effort`). Они пробуют провайдера этапа, затем резервную
-  цепочку, проверяют бюджеты (`Usage.limit`, месячный лимит проекта `pipeline.budget`, `BudgetExceeded`,
-  предупреждение на 80%) и учитывают расход (`track`: `Usage`, `usage_scope()`, журнал проекта
-  `data/projects/<id>/usage/<месяц>.json`). Не обращайся к SDK провайдеров мимо `llm.py`;
-  кэширование промптов, context editing и `fallbacks` включает сам провайдер `anthropic`.
-- `testgen/providers/` — провайдеры моделей с общим форматом запроса (`base.Request`, сообщения в формате
-  Anthropic Messages) и ответа (`base.Reply`): `anthropic` (все функции Claude, их можно выключить для
-  прокси), `openai_compat` (vLLM, Ollama, Yandex AI Studio), `gigachat` (OAuth-токен, картинки через
-  `/files`, одна на сообщение). Чего нет у API, заменяется в `base.py`: обрезка старых скриншотов,
-  structured output — JSON-схема в промпте, проверка pydantic и один повтор. `__init__.py` — настройки
-  (`data/llm.json`: провайдеры, умолчание, резервная цепочка, цены в $ и ₽, результат бенчмарка модели),
-  `resolve`/`chain`/`profile`. Новый провайдер: класс с `chat()` (и `parse()`, если есть серверный
-  structured output) в пакете, вид в `KINDS`, шаблон в `TEMPLATES`, тест инвариантов в
-  `tests/test_providers.py`.
-- `testgen/bench.py` — бенчмарк модели на `bench/sites.json`: генерация в Auto-Pilot, 3 чистых прогона,
-  прогон с внесённым дефектом, вёрстка `v2`, мутации; отчёт в `bench/results/`, успех — в настройки
-  модели (`providers.record_bench`, порог Auto-Pilot).
+- `testgen/llm.py` — единственная дверь к модели. Привязки к конкретным моделям в коде нет: настройки
+  проекта `project.json` → `llm` (`model`, `effort`, `base_url`, `prices` в $, результат проверки `check` и
+  список моделей `models` из Models API с поддерживаемыми effort и недостающими возможностями),
+  ключ — `secrets/projects/<id>/llm.json` (`projects.llm_settings`/`update_llm`), без него —
+  `ANTHROPIC_API_KEY`. Все запросы идут через `llm.chat(stage, system=..., messages=..., tools=...,
+  project_id=...)` или `llm.parse(stage, ..., schema=...)` (ответ в pydantic-модели); `stage` — настройки
+  этапа проекта, переопределяют модель и effort (`llm.model(project_id, stage)`). Они проверяют бюджеты
+  (`Usage.limit`, месячный лимит проекта `pipeline.budget`, `BudgetExceeded`, предупреждение на 80%) и
+  учитывают расход (`track`: `Usage`, `usage_scope()`, журнал проекта `data/projects/<id>/usage/<месяц>.json`,
+  стоимость — по ценам проекта). Без модели — `llm.NotConfigured`; сервер не запускает генерацию без
+  модели (`_require_model`). `llm.check()` — проверка подключения. Не обращайся к SDK мимо `llm.py` и не
+  добавляй в код идентификаторы моделей, их цены и умолчания.
+- `testgen/providers/` — формат запроса (`base.Request`, сообщения в формате Anthropic Messages) и ответа
+  (`base.Reply`) и их отправка в Messages API (`anthropic.py`: точка кэша на tools + system, context
+  editing, effort, `fallbacks`, structured output). Чего модели не хватает по последней проверке
+  (`Model.features`), заменяется в `base.py`: обрезка старых скриншотов, structured output — JSON-схема в
+  промпте, проверка pydantic и один повтор.
 - `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256), группы
   каталога и настройки «группа → роль» (`data/sso.json`); `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
   `data/projects/<id>/tests/<test>.json` (теги, карантин, `heal_proposals`, `verify`), `update()` —
@@ -318,7 +306,8 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   свои у теста — `secrets/projects/<id>/test-<test>.json`; видят их редакторы, в API только логин.
 - Токены MCP-подключений: `secrets/projects/<id>/conn-<cid>.json`; в `project.json` и API только
   признак «задан» (`secrets_set`).
-- Ключи провайдеров моделей: `secrets/llm/<провайдер>.json`; в `data/llm.json` и API — только признак.
+- API-ключ модели: `secrets/projects/<id>/llm.json`; в API только `key_set`. Адрес API (`base_url`)
+  меняет только администратор: туда уходит ключ.
 - Команда, аргументы и env MCP-сервера — это запуск кода на сервере: менять их может только
   администратор (`auth.is_admin`); обычный пользователь заполняет лишь поля, объявленные пресетом.
 - `secrets/` в `.gitignore` — никогда не коммить и не выводи его содержимое.
@@ -330,24 +319,24 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   `tests/test_access.py` обходом всех маршрутов.
 - **Секреты только зашифрованы в общей базе**, в API — только признак «задан»; наблюдатель не видит
   даже логин приложения. Журнал действий только дописывается, тела запросов в него не попадают.
-- **Пароль не попадает к модели и в артефакты** — ни к одному провайдеру. Агент видит только плейсхолдеры `{{username}}` и
+- **Пароль не попадает к модели и в артефакты.** Агент видит только плейсхолдеры `{{username}}` и
   `{{password}}` (плюс сам логин); реальное значение подставляется в момент выполнения шага
   (`BrowserSession.expand`). В шагах, экспорте и истории чата пароля быть не должно
   (`StudioSession._mask`, в том числе после проверки, взявшей значение со страницы). Экспорт читает
   значения из `os.environ["TESTGEN_*"]`. В trace пароль заменяется на `***` (`runner.mask_trace`), в
   записанном трафике — на `{{password}}`, секретные заголовки и поля — на `***` (`traffic.mask_entry`).
-  Проверяется тестами `tests/test_agent_invariants.py` и `tests/test_providers.py` (для каждого провайдера).
+  Проверяется тестами `tests/test_agent_invariants.py`.
 - **Самолечение не меняет тест без человека** в режиме `review` (по умолчанию): ИИ не должен «вылечить»
   тест под баг.
 - **Никаких необратимых действий.** Системный промпт агента запрещает реальную оплату, заказы,
   отправку сообщений и удаление данных: агент доходит до этой точки, ставит проверку и завершает сценарий.
-  Инструменты MCP с удалением (`mcp_hub.access() == "destructive"`) не передаются Claude ни на одном этапе;
+  Инструменты MCP с удалением (`mcp_hub.access() == "destructive"`) не передаются модели ни на одном этапе;
   Atlassian работает только на чтение. Скиллы добавляются после правил и не могут их отменить.
   Planner ходит только по ссылкам (GET) и пропускает выход/удаление; мутации меняют только DOM и
   ответы запросов в браузере теста; MCP-сервер студии не даёт удалять данные.
 - В режиме Playwright MCP пароль подставляется прямо перед вызовом инструмента и маскируется во всём,
   что вернул сервер (`McpBrowser._mask`).
-- Запросы идут через `llm.chat`/`llm.parse` с резервной цепочкой провайдеров; у Claude ещё
-  `fallbacks: "default"`: если классификатор безопасности отклонит запрос, API повторит его на резервной
-  модели. Инструменты с удалением и правила системного промпта одинаковы для всех провайдеров.
+- Запросы идут через `llm.chat`/`llm.parse` с `fallbacks: "default"`: если классификатор безопасности
+  отклонит запрос, API повторит его на резервной модели. Инструменты с удалением и правила системного
+  промпта одинаковы для любой модели проекта.
 - Интерфейс и сообщения пользователю — на русском.

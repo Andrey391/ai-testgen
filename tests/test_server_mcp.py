@@ -124,7 +124,7 @@ def test_dashboard_metrics(client, open_studio, stand, project, save_test):
 def test_tokens_and_mcp_over_http(client, monkeypatch, project):
     monkeypatch.setattr(auth, "ENABLED", True)
     auth.set_password("ide-user", "password-123")
-    token, rec = auth.create_api_token("ide-user", "Claude Code")
+    token, rec = auth.create_api_token("ide-user", "IDE")
     assert auth.user_for_api_token(token) == "ide-user" and auth.user_for_api_token(token + "x") is None
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -166,3 +166,31 @@ def test_mcp_tools_in_process(stand, project, save_test):
     with pytest.raises(Exception):
         arun(mcp.call_tool("run_test", {"test": "нет такого"}))
     assert storage.load(t["id"])
+
+
+def test_model_connection_is_a_project_setting(client, open_studio, project, fake_llm):
+    pid = project["id"]
+    base = client.get(f"/api/projects/{pid}").json()["llm"]
+    assert base["model"] == "test-model" and not base["key_set"]
+
+    # The key is stored on the server and never comes back.
+    p = client.put(f"/api/projects/{pid}/llm", json={"api_key": "sk-secret-123", "effort": "high"}).json()
+    assert p["llm"]["key_set"] and p["llm"]["effort"] == "high" and "sk-secret-123" not in json.dumps(p)
+
+    # The check lists the models the connection offers and remembers them.
+    fake_llm.model_list = [{"id": "test-model", "display_name": "Test", "capabilities": {
+        "effort": {"supported": True, "low": {"supported": True}, "medium": {"supported": True},
+                   "high": {"supported": False}}}}]
+    r = client.post(f"/api/projects/{pid}/llm/test").json()
+    assert r["models"] == [{"id": "test-model", "name": "Test", "efforts": ["low", "medium"], "missing": []}]
+    llm_view = client.get(f"/api/projects/{pid}").json()["llm"]
+    assert llm_view["check"]["ok"] and llm_view["models"][0]["id"] == "test-model"
+
+    # Without a model nothing that needs one starts.
+    client.put(f"/api/projects/{pid}/llm", json={"model": ""})
+    r = client.post("/api/sessions", json={"project_id": pid, "url": "http://127.0.0.1:1", "scenario": "Войти"})
+    assert r.status_code == 400 and "Модель не настроена" in r.json()["detail"]
+    r = client.post("/api/scenarios", json={"project_id": pid, "requirements": "Вход по логину"})
+    assert r.status_code == 400
+    client.delete(f"/api/projects/{pid}/llm/key")
+    assert not client.get(f"/api/projects/{pid}").json()["llm"]["key_set"]

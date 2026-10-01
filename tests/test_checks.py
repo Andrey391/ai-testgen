@@ -1,4 +1,4 @@
-"""assert_screenshot (baselines, diff, Claude's verdict) and assert_accessible (axe-core)."""
+"""assert_screenshot (baselines, diff, the LLM's verdict) and assert_accessible (axe-core)."""
 from __future__ import annotations
 
 import pytest

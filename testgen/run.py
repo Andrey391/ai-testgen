@@ -7,8 +7,10 @@
 
 Tests, settings and history come from the data folder (TESTGEN_DATA_DIR, by
 default ./data), the application login from the project / test settings or
-TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis need
-ANTHROPIC_API_KEY; without it a broken locator simply fails the step.
+TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis use the
+project's model (Project -> Model in the studio) and its API key, or ANTHROPIC_API_KEY
+when the secrets folder is not there; without a model a broken locator simply fails
+the step.
 
 Exit code: 0 - all tests passed (flaky ones and failures in quarantine do not
 count), 1 - failures, 2 - bad arguments or setup.
@@ -96,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     c = s["summary"]
     print(f"\npassed {c['passed']}, flaky {c['flaky']}, failed {c['failed']}, errors {c['error']}"
           + (f" (in quarantine: {c['quarantined_failed']})" if c["quarantined_failed"] else "")
-          + (f"; Claude API ≈ ${s['usage']['cost_usd']}" if s["usage"].get("requests") and s["usage"].get("cost_usd") else ""))
+          + (f"; LLM ≈ ${s['usage']['cost_usd']}" if s["usage"].get("requests") and s["usage"].get("cost_usd") else ""))
     if args.junit:
         Path(args.junit).parent.mkdir(parents=True, exist_ok=True)
         Path(args.junit).write_text(reports.junit(s), "utf-8")

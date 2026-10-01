@@ -24,7 +24,7 @@ _TMP = Path(tempfile.mkdtemp(prefix="testgen-tests-"))
 os.environ["TESTGEN_DATA_DIR"] = str(_TMP / "data")
 os.environ["TESTGEN_SECRETS_DIR"] = str(_TMP / "secrets")
 for var in ("TESTGEN_USERNAME", "TESTGEN_PASSWORD", "TESTGEN_TOTP_SECRET", "TESTGEN_PROMPT_CACHE", "TESTGEN_BASE_URL",
-            "TESTGEN_LLM_BASE_URL", "TESTGEN_LLM_FEATURES", "TESTGEN_LLM_PROVIDER", "TESTGEN_LOCAL_LLM_URL",
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "TESTGEN_USD_RUB",
             "TESTGEN_OFFLINE", "TESTGEN_DATABASE_URL", "TESTGEN_S3_BUCKET", "TESTGEN_SECRET_KEY", "TESTGEN_VAULT_ADDR",
             "TESTGEN_OIDC_ISSUER", "TESTGEN_LDAP_URL", "TESTGEN_INSTANCE_URL", "TESTGEN_AUDIT_SYSLOG",
             "TESTGEN_AUDIT_FILE"):
@@ -62,7 +62,7 @@ import pytest  # noqa: E402
 
 from fakes import FakeClient  # noqa: E402
 from stand import PASSWORD, USERNAME, Stand  # noqa: E402
-from testgen import fs, llm, projects, storage  # noqa: E402
+from testgen import llm, projects, storage  # noqa: E402
 
 
 def pytest_collection_modifyitems(items):
@@ -84,30 +84,22 @@ def stand(_stand):
     return _stand
 
 
+MODEL = "test-model"
+
+
 @pytest.fixture
 def fake_llm(monkeypatch):
     client = FakeClient()
-    monkeypatch.setattr(llm, "_client", client)
+    monkeypatch.setattr(llm, "make_client", lambda api_key, base_url: client)
+    monkeypatch.setattr(llm, "_clients", {})
     return client
-
-
-@pytest.fixture
-def fake_http(monkeypatch):
-    """Fake OpenAI-compatible and GigaChat servers as providers (see fakes.use_providers)."""
-    from fakes import FakeHttpLLM
-    from testgen import providers
-    monkeypatch.setenv("FAKE_GIGA_KEY", "Z2lnYS1rZXk=")
-    fake = FakeHttpLLM()
-    yield fake
-    providers.TRANSPORT = None
-    fs.unlink(providers.FILE)
-    providers._instances.clear()
 
 
 @pytest.fixture
 def project(stand):
     p = projects.create(f"Стенд {uuid.uuid4().hex[:6]}", base_url=stand.url)
     projects.set_app_credentials(p["id"], USERNAME, PASSWORD)
+    projects.update_llm(p["id"], {"model": MODEL, "effort": "medium", "prices": {MODEL: [5, 25]}})
     return projects.get(p["id"])
 
 

@@ -1,22 +1,15 @@
-"""What every LLM provider speaks: requests and replies in one neutral format.
-
-The neutral message format is Anthropic's Messages format with plain dicts, so the
-agent's conversation needs no conversion for Claude:
+"""Requests and replies in one neutral format: the Anthropic Messages format with plain dicts,
+so the agent's conversation goes to the API as is:
 
     {"role": "user" | "assistant", "content": str | [block, ...]}
     block: {"type": "text", "text"}
            {"type": "image", "source": {"type": "base64", "media_type", "data"}}
-           {"type": "tool_use", "id", "name", "input", "_meta"?}
+           {"type": "tool_use", "id", "name", "input"}
            {"type": "tool_result", "tool_use_id", "content": str | [text/image blocks], "is_error"?}
 
-A provider translates it to its own API (OpenAI-compatible Chat Completions,
-GigaChat) and back. Provider-specific data a later request needs (GigaChat's
-functions_state_id) rides in a block's "_meta" and is dropped for other providers.
-Tools are Anthropic-style dicts ({name, description, input_schema}).
-
-Functions the other APIs lack are replaced here: old screenshots are cut out of the
-history (`trim_history`) instead of server-side context editing; structured output is
-a JSON schema in the prompt, checked with pydantic and asked again once on error.
+What a model may lack is replaced here: old screenshots are cut out of the history
+(	rim_history) instead of server-side context editing; structured output is a JSON
+schema in the prompt, checked with pydantic and asked again once on error.
 """
 from __future__ import annotations
 
@@ -111,59 +104,7 @@ def _trim_block(b: dict) -> dict:
     return b
 
 
-def drop_images(messages: list[dict], note: str = "[image omitted: this model does not see images]") -> list[dict]:
-    out = copy.deepcopy(messages)
-    for m in out:
-        if isinstance(m["content"], list):
-            m["content"] = [_no_image(b, note) for b in m["content"]]
-    return out
-
-
-def _no_image(b: dict, note: str) -> dict:
-    if b.get("type") == "image":
-        return {"type": "text", "text": note}
-    if b.get("type") == "tool_result" and isinstance(b.get("content"), list):
-        return b | {"content": [_no_image(x, note) for x in b["content"]]}
-    return b
-
-
-def blocks(content) -> list[dict]:
-    return [{"type": "text", "text": content}] if isinstance(content, str) else list(content or [])
-
-
-def result_parts(content) -> tuple[str, list[dict]]:
-    """A tool_result's content -> (text, image blocks)."""
-    text, images = [], []
-    for b in blocks(content):
-        if b.get("type") == "image":
-            images.append(b)
-        elif b.get("type") == "text":
-            text.append(b.get("text", ""))
-    return "\n".join(text), images
-
-
-def strip_meta(messages: list[dict]) -> list[dict]:
-    """Messages without provider-specific extras (for Anthropic, which rejects unknown keys)."""
-    out = []
-    for m in messages:
-        if isinstance(m["content"], list):
-            m = m | {"content": [{k: v for k, v in b.items() if k != "_meta"} for b in m["content"]]}
-        out.append(m)
-    return out
-
-
 # ---------- tools ----------
-
-def plain_schema(schema: dict) -> dict:
-    """A JSON schema without the keywords weaker function-calling APIs reject."""
-    def clean(s):
-        if isinstance(s, dict):
-            return {k: clean(v) for k, v in s.items() if k not in ("strict", "additionalProperties", "$schema")}
-        if isinstance(s, list):
-            return [clean(x) for x in s]
-        return s
-    return clean(schema or {"type": "object", "properties": {}})
-
 
 def check_call(call: dict, tools: list[dict]) -> str:
     """"" if the tool call fits the declared tools, else what is wrong (sent back to the model)."""
@@ -181,25 +122,6 @@ def check_call(call: dict, tools: list[dict]) -> str:
         if k in inp and spec.get("enum") and inp[k] not in spec["enum"]:
             return f"Argument {k} of {tool['name']} must be one of {spec['enum']}."
     return ""
-
-
-def loads_args(raw) -> dict:
-    """Function arguments as a dict; unparsable JSON -> {"__raw__": text} (repaired by the agent)."""
-    if isinstance(raw, dict):
-        return raw
-    try:
-        v = json.loads(raw or "{}")
-        return v if isinstance(v, dict) else {"__raw__": str(raw)}
-    except (TypeError, ValueError):
-        m = re.search(r"\{.*\}", str(raw or ""), re.S)
-        if m:
-            try:
-                v = json.loads(m.group(0))
-                if isinstance(v, dict):
-                    return v
-            except ValueError:
-                pass
-        return {"__raw__": str(raw)}
 
 
 # ---------- structured output without server support ----------

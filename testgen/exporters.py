@@ -185,8 +185,7 @@ def console_errors(page) -> list:
     return errors
 '''
 
-FIXTURE_A11Y = f'''AXE_URL = {checks.AXE_URLS[0]!r}
-IMPACTS = {checks.IMPACTS!r}
+FIXTURE_A11Y = f'''IMPACTS = {checks.IMPACTS!r}
 _axe_source = []
 
 
@@ -196,8 +195,12 @@ def check_accessibility(page):
     def check(threshold: str = "serious") -> None:
         if not page.evaluate("() => typeof window.axe === 'object'"):
             if not _axe_source:
-                _axe_source.append(os.environ.get("TESTGEN_AXE_JS") and open(os.environ["TESTGEN_AXE_JS"], encoding="utf-8").read()
-                                   or urllib.request.urlopen(AXE_URL, timeout=30).read().decode("utf-8"))
+                if os.environ.get("TESTGEN_AXE_JS"):
+                    _axe_source.append(open(os.environ["TESTGEN_AXE_JS"], encoding="utf-8").read())
+                elif os.environ.get("TESTGEN_AXE_URL"):
+                    _axe_source.append(urllib.request.urlopen(os.environ["TESTGEN_AXE_URL"], timeout=30).read().decode("utf-8"))
+                else:
+                    pytest.fail("axe-core is not configured: set TESTGEN_AXE_JS (path to axe.min.js) or TESTGEN_AXE_URL")
             page.evaluate(_axe_source[0])
         violations = page.evaluate("""async () => (await axe.run(document, {{runOnly: {{type: 'tag',
             values: {checks.WCAG_TAGS!r}}}}})).violations.map(v => ({{id: v.id, impact: v.impact || 'minor',

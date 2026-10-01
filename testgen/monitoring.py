@@ -4,7 +4,7 @@ TESTGEN_METRICS_PORT. With TESTGEN_METRICS_TOKEN set, /metrics wants "Authorizat
     testgen_http_requests_total{method,route,status}   requests to the API (routes as templates, no ids)
     testgen_http_request_duration_seconds{route}       their duration
     testgen_runs_total{status,trigger}                 finished runs of saved tests (this process)
-    testgen_llm_requests_total{stage,provider,model}   requests to language models (this process)
+    testgen_llm_requests_total{stage,model}            requests to language models (this process)
     testgen_studio_sessions                            live Studio sessions of this instance
     testgen_queue_items{status}                        the work queue (shared database)
     testgen_queue_oldest_seconds                       how long the oldest queued item waits
@@ -22,7 +22,7 @@ REQUESTS = Counter("testgen_http_requests_total", "API requests", ["method", "ro
 LATENCY = Histogram("testgen_http_request_duration_seconds", "API request duration", ["route"], registry=REGISTRY,
                     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60))
 RUNS = Counter("testgen_runs_total", "Finished runs of saved tests", ["status", "trigger"], registry=REGISTRY)
-LLM = Counter("testgen_llm_requests_total", "Requests to language models", ["stage", "provider", "model"],
+LLM = Counter("testgen_llm_requests_total", "Requests to language models", ["stage", "model"],
               registry=REGISTRY)
 SESSIONS = Gauge("testgen_studio_sessions", "Live Studio sessions of this instance", registry=REGISTRY)
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"

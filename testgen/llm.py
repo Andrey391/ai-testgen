@@ -1,22 +1,27 @@
-"""The one door to language models: every request of the studio goes through
-`chat()` (a conversation, optionally with tools) or `parse()` (an answer in a pydantic
-structure). The provider and model come from the pipeline stage (providers.resolve);
-when a provider fails, the next one of the fallback chain is tried.
+"""The one door to the model: every request of the studio goes through `chat()` (a
+conversation, optionally with tools) or `parse()` (an answer in a pydantic structure).
 
-Prompt caching (Claude, providers/anthropic.py). Requests render as tools -> system ->
+Model connection. The studio is not tied to any model: each project chooses its own
+in "Проект → Модель" (project.json "llm": model, effort, API address, prices; the API
+key in secrets/projects/<id>/llm.json, or ANTHROPIC_API_KEY on the server when the
+project has none). Pipeline stages may override the model and effort. `model(project_id,
+stage)` resolves them for a request; without a model the project's LLM features fail
+with `NotConfigured`. `check()` asks the connection which models it offers.
+
+Prompt caching (providers/anthropic.py). Requests render as tools -> system ->
 messages. The system prompt carries a cache breakpoint, so the tools, the rules and the
 skills (the static prefix of every request of a stage) are read from the cache after the
 first request. The authoring agent adds automatic caching of its growing conversation
 (cache_all). Context editing (clear_tool_uses) rewrites old tool results, which
 invalidates the conversation cache from the first cleared block on, but never the
 tools + system breakpoint - that is why it is explicit. TESTGEN_PROMPT_CACHE=off
-switches caching off, to measure the difference. Other providers cut old screenshots
-out themselves (keep_images).
+switches caching off, to measure the difference.
 
 Token accounting. Every answer is added to a `Usage`: the one given, those opened
 with `usage_scope()` around a piece of work (a test run, a pipeline job) and, with a
 project, the project's monthly ledger (data/projects/<id>/usage/<YYYY-MM>.json, by
-stage and model). Costs come from the providers' prices, in dollars and rubles.
+stage and model). Costs come from the prices entered in the project settings ($ per
+million tokens), in rubles at TESTGEN_USD_RUB.
 
 Budgets. A Usage can carry a limit (session, pipeline job) and the project a monthly
 one (pipeline "budget"): a request that would start over a limit raises
@@ -33,18 +38,28 @@ from typing import Callable
 
 import anthropic
 
-from . import fs, providers
-from .paths import DATA
+from . import fs
+from .paths import DATA, OFFLINE
+from .providers.anthropic import (CLEAR_TOOL_USES, CONTEXT_BETA, FALLBACK_BETA, FEATURES,  # noqa: F401
+                                  AnthropicProvider, error_text, is_error)
 from .providers.base import ProviderError, Reply, Request, schema_instruction, validate
 
-MODEL = os.environ.get("TESTGEN_MODEL", "claude-opus-5")
-# Browser driving is a latency-sensitive loop of many small decisions;
-# "medium" keeps each step fast. Raise to "high" for tricky apps.
-EFFORT = os.environ.get("TESTGEN_EFFORT", "medium")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PROMPT_CACHE = os.environ.get("TESTGEN_PROMPT_CACHE", "on").lower() not in ("off", "0", "false", "no")
 WARN_AT = 0.8
 FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+# Capabilities the studio relies on: structured output (scenarios, healing, analysis),
+# screenshots, context editing (the authoring agent).
+NEEDED = {"structured_outputs": "структурированный ответ", "image_input": "изображения",
+          "context_management": "context editing"}
+
+
+class NotConfigured(ProviderError):
+    """The project has no model chosen."""
+
+    def __init__(self, message: str):
+        super().__init__(message, retryable=False)
 
 
 class BudgetExceeded(ProviderError):
@@ -52,36 +67,113 @@ class BudgetExceeded(ProviderError):
         super().__init__(message, retryable=False)
 
 
-# ---------- the Anthropic client (tests replace _client) ----------
-
-_client: anthropic.AsyncAnthropic | None = None
-_clients: dict[tuple, anthropic.AsyncAnthropic] = {}
-
-
-def client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        base = os.environ.get("TESTGEN_LLM_BASE_URL", "").strip()
-        _client = anthropic.AsyncAnthropic(**({"base_url": base} if base else {}))
-    return _client
+def usd_rub() -> float:
+    try:
+        return float(os.environ.get("TESTGEN_USD_RUB") or 80)
+    except ValueError:
+        return 80.0
 
 
-def anthropic_client(cfg: dict) -> anthropic.AsyncAnthropic:
-    """The client for an Anthropic provider: the global one (environment key and address) for the
-    built-in provider as configured by the environment, else one per (address, key)."""
-    base = cfg.get("base_url", "")
-    if cfg.get("id") == "anthropic" and not _own_key(cfg) and base == os.environ.get("TESTGEN_LLM_BASE_URL", "").strip():
-        return client()
-    key = providers.key_of(cfg)
-    k = (base, key)
-    if k not in _clients:
-        _clients[k] = anthropic.AsyncAnthropic(api_key=key or None, **({"base_url": base} if base else {}))
-    return _clients[k]
+# ---------- the model connection (tests replace make_client) ----------
+
+def make_client(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
+    """Empty values fall back to the SDK's environment (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL)."""
+    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None)
 
 
-def _own_key(cfg: dict) -> bool:
-    from . import vault
-    return bool((vault.load(providers.SECRETS_KIND, cfg["id"]) or {}).get("api_key"))
+_clients: dict[tuple[str, str], anthropic.AsyncAnthropic] = {}
+
+
+def client_for(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
+    key = (api_key, base_url)
+    if key not in _clients:
+        _clients[key] = make_client(api_key, base_url)
+    return _clients[key]
+
+
+def model_info(m) -> dict:
+    """A Models API entry -> {id, name, efforts, missing}. `efforts`: supported effort
+    levels, None if the API did not say; `missing`: capabilities from NEEDED it lacks."""
+    d = m.to_dict() if hasattr(m, "to_dict") else dict(m)
+    caps = d.get("capabilities") or {}
+    eff = caps.get("effort")
+    efforts = None
+    if isinstance(eff, dict):
+        efforts = [e for e in EFFORTS if eff.get("supported") and (eff.get(e) or {}).get("supported")]
+    missing = [k for k in NEEDED if isinstance(caps.get(k), dict) and caps[k].get("supported") is False]
+    return {"id": d.get("id", ""), "name": d.get("display_name") or d.get("id", ""),
+            "efforts": efforts, "missing": missing}
+
+
+class Model:
+    """A project's model connection resolved for one request (or one stage)."""
+
+    def __init__(self, conf: dict, stage: dict | None = None):
+        stage = stage or {}
+        self.name = (stage.get("model") or "").strip() or conf.get("model", "")
+        if not self.name:
+            raise NotConfigured("Модель не настроена: выберите её в «Проект → Модель».")
+        self.effort = stage.get("effort") if stage.get("effort") in EFFORTS else conf.get("effort", "")
+        known = next((m for m in conf.get("models") or [] if m["id"] == self.name), None)
+        if known and known.get("efforts") is not None and self.effort not in known["efforts"]:
+            self.effort = ""          # the model does not take this effort level: its default
+        self.missing = set((known or {}).get("missing") or [])
+        self.api_key = conf.get("api_key", "")
+        self.base_url = conf.get("base_url", "")
+        self.prices = conf.get("prices") or {}
+
+    @property
+    def client(self) -> anthropic.AsyncAnthropic:
+        return client_for(self.api_key, self.base_url)
+
+    @property
+    def features(self) -> set[str]:
+        """What the requests may use: everything the last check did not find missing."""
+        f = set(FEATURES)
+        if "context_management" in self.missing:
+            f.discard("context_editing")      # old screenshots are cut out by the studio instead
+        if "structured_outputs" in self.missing:
+            f.discard("structured")           # the JSON schema goes into the prompt instead
+        return f
+
+    @property
+    def params(self) -> dict:
+        """Parameters shared by every request.
+
+        fallbacks="default": if the safety classifiers decline a request, the
+        API re-runs it on the provider's fallback model instead of failing.
+        """
+        p = {"model": self.name, "fallbacks": "default"}
+        if self.effort:
+            p["output_config"] = {"effort": self.effort}
+        return p
+
+    def provider(self) -> AnthropicProvider:
+        if OFFLINE and not self.base_url:
+            raise NotConfigured("Режим без интернета (TESTGEN_OFFLINE): укажите в «Проект → Модель» адрес API "
+                                "во внутренней сети")
+        return AnthropicProvider(self.client, self.features)
+
+
+def model(project_id: str, stage: dict | None = None) -> Model:
+    """The model for a request of the project; `stage` is a pipeline stage config,
+    its "model" / "effort" override the project's."""
+    from . import projects      # projects imports this module
+    return Model(projects.llm_settings(project_id), stage)
+
+
+async def check(conf: dict) -> list[dict]:
+    """The models the connection offers (model_info dicts). A gateway without the
+    Models API is checked with a one-word request to the chosen model instead."""
+    c = client_for(conf.get("api_key", ""), conf.get("base_url", ""))
+    try:
+        return [model_info(m) async for m in c.models.list(limit=100)]
+    except anthropic.NotFoundError:
+        if not conf.get("model"):
+            raise
+    await c.messages.create(model=conf["model"], max_tokens=16,
+                            messages=[{"role": "user", "content": "ping"}])
+    return [{"id": conf["model"], "name": conf["model"], "efforts": None, "missing": []}]
 
 
 # ---------- usage ----------
@@ -98,61 +190,49 @@ class Usage:
     def __init__(self, limit: float = 0, currency: str = "USD", name: str = ""):
         self.requests = 0
         self.by_model: dict[str, dict[str, int]] = {}
-        self.provider_of: dict[str, str] = {}
+        self.prices: dict[str, list[float]] = {}   # model -> $ per million tokens: input, output
         self.limit, self.currency, self.name = float(limit or 0), currency, name
         self.on_warn: Callable[[str], None] | None = None
         self.warned = False
 
-    def add(self, model: str, usage, provider: str = "") -> None:
+    def add(self, model: str, usage, prices: dict | None = None) -> None:
         if usage is None:
             return
         self.requests += 1
-        model = model or MODEL
-        m = self.by_model.setdefault(model, dict.fromkeys(FIELDS, 0))
-        self.provider_of.setdefault(model, provider or "anthropic")
+        self.prices.update(prices or {})
+        m = self.by_model.setdefault(model or "?", dict.fromkeys(FIELDS, 0))
         for f in FIELDS:
             m[f] += _num(usage, f)
 
     def merge(self, other: "Usage") -> None:
         self.requests += other.requests
+        self.prices.update(other.prices)
         for model, counts in other.by_model.items():
             m = self.by_model.setdefault(model, dict.fromkeys(FIELDS, 0))
-            self.provider_of.setdefault(model, other.provider_of.get(model, "anthropic"))
             for f in FIELDS:
                 m[f] += counts[f]
 
     def totals(self) -> dict[str, int]:
         return {f: sum(m[f] for m in self.by_model.values()) for f in FIELDS}
 
-    def costs(self) -> dict[str, float] | None:
-        """Cost by currency, or None if a model's price is unknown."""
-        out: dict[str, float] = {}
+    def cost(self, currency: str = "USD") -> float | None:
+        """Estimated cost, or None if a model's price is not set in the project."""
+        total = 0.0
         for model, m in self.by_model.items():
-            c = cost_of(self.provider_of.get(model, "anthropic"), model, m)
+            c = cost_of(self.prices, model, m)
             if c is None:
                 return None
-            out[c[1]] = out.get(c[1], 0.0) + c[0]
-        return {k: round(v, 4) for k, v in out.items()}
-
-    def cost(self, currency: str = "USD") -> float | None:
-        costs = self.costs()
-        return None if costs is None else convert(costs, currency)
+            total += c
+        return convert(total, currency)
 
     def spent(self, currency: str) -> float:
         """Spent in `currency`, models with an unknown price counting as free."""
-        out: dict[str, float] = {}
-        for model, m in self.by_model.items():
-            c = cost_of(self.provider_of.get(model, "anthropic"), model, m)
-            if c:
-                out[c[1]] = out.get(c[1], 0.0) + c[0]
-        return convert(out, currency)
+        return convert(sum(cost_of(self.prices, model, m) or 0.0 for model, m in self.by_model.items()), currency)
 
     def as_dict(self) -> dict:
         t = self.totals()
         prompt = t["input_tokens"] + t["cache_creation_input_tokens"] + t["cache_read_input_tokens"]
-        costs = self.costs()
-        return t | {"requests": self.requests, "cost_usd": None if costs is None else convert(costs, "USD"),
-                    "cost_rub": None if costs is None else convert(costs, "RUB"), "costs": costs,
+        return t | {"requests": self.requests, "cost_usd": self.cost("USD"), "cost_rub": self.cost("RUB"),
                     "cache": PROMPT_CACHE, "models": sorted(self.by_model),
                     "cache_hit": round(t["cache_read_input_tokens"] / prompt, 3) if prompt else 0.0}
 
@@ -170,30 +250,18 @@ class Usage:
                              f"лимита{' ' + self.name if self.name else ''} (80%)")
 
 
-def cost_of(provider: str, model: str, m: dict) -> tuple[float, str] | None:
-    p = providers.price(provider, model)
-    if not p:
+def cost_of(prices: dict, model: str, m: dict) -> float | None:
+    """$ for the counts of a model (cache writes cost 1.25x input, reads 0.1x), None without a price."""
+    price = next((p for k, p in prices.items() if model == k or model.startswith(k + "-")), None)
+    if not price:
         return None
-    inp, out, currency = p
-    anthropic_cache = (providers.provider_cfg(provider) or {"kind": "anthropic"}).get("kind") == "anthropic"
-    write = 1.25 if anthropic_cache else 1.0
-    read = 0.1 if anthropic_cache else 1.0
-    total = (m["input_tokens"] * inp + m["cache_creation_input_tokens"] * inp * write
-             + m["cache_read_input_tokens"] * inp * read + m["output_tokens"] * out) / 1e6
-    return total, currency
+    inp, out = price
+    return (m["input_tokens"] * inp + m["cache_creation_input_tokens"] * inp * 1.25
+            + m["cache_read_input_tokens"] * inp * 0.1 + m["output_tokens"] * out) / 1e6
 
 
-def convert(costs: dict[str, float], currency: str) -> float:
-    rate = providers.usd_rub()
-    total = 0.0
-    for cur, v in costs.items():
-        if cur == currency:
-            total += v
-        elif cur == "USD" and currency == "RUB":
-            total += v * rate
-        elif cur == "RUB" and currency == "USD":
-            total += v / rate
-    return round(total, 4)
+def convert(usd: float, currency: str) -> float:
+    return round(usd * usd_rub() if currency == "RUB" else usd, 4)
 
 
 _scopes: contextvars.ContextVar[tuple[Usage, ...]] = contextvars.ContextVar("usage", default=())
@@ -213,18 +281,18 @@ def usage_scope(limit: float = 0, currency: str = "USD", name: str = "", on_warn
         _scopes.reset(token)
 
 
-def track(resp, usage: Usage | None = None, project_id: str = "", stage: str = "") -> None:
-    """Add an answer (a providers Reply, or an SDK response) to the usages and the ledger."""
-    provider = getattr(resp, "provider", "") or "anthropic"
+def track(resp, usage: Usage | None = None, prices: dict | None = None, project_id: str = "",
+          stage: str = "") -> None:
+    """Add an answer (a Reply, or an SDK response) to the usages and the project's ledger."""
     model = getattr(resp, "model", "") or ""
     u_raw = getattr(resp, "usage", None)
     for u in {id(x): x for x in (usage, *_scopes.get()) if x is not None}.values():
-        u.add(model, u_raw, provider)
+        u.add(model, u_raw, prices)
         u.after()
     if project_id and u_raw is not None:
-        ledger_add(project_id, stage or "other", provider, model or MODEL, u_raw)
+        ledger_add(project_id, stage or "other", model or "?", u_raw)
     from . import monitoring
-    monitoring.LLM.labels(stage or "other", provider, model or MODEL).inc()
+    monitoring.LLM.labels(stage or "other", model or "?").inc()
 
 
 # ---------- project ledger and monthly budget ----------
@@ -241,52 +309,55 @@ def ledger(pid: str, month: str = "") -> dict:
         return {"stages": {}, "requests": 0}
 
 
-def ledger_add(pid: str, stage: str, provider: str, model: str, usage) -> None:
+def ledger_add(pid: str, stage: str, model: str, usage) -> None:
     if not re.fullmatch(r"[a-z0-9]{4,32}", pid or ""):
         return
     f = _ledger_file(pid)
     with fs.lock(f):             # workers and instances spend on the same project
         d = ledger(pid)
         d["requests"] = d.get("requests", 0) + 1
-        key = f"{provider}/{model}"
-        m = d["stages"].setdefault(stage, {}).setdefault(key, dict.fromkeys(FIELDS, 0) | {"requests": 0})
+        m = d["stages"].setdefault(stage, {}).setdefault(model, dict.fromkeys(FIELDS, 0) | {"requests": 0})
         for fld in FIELDS:
             m[fld] += _num(usage, fld)
         m["requests"] += 1
         fs.write_json(f, d, indent=1)
 
 
+def _prices(pid: str) -> dict:
+    from . import projects
+    p = projects.get(pid) if pid else None
+    return ((p or {}).get("llm") or {}).get("prices") or {}
+
+
 def ledger_usage(pid: str, month: str = "") -> Usage:
     u = Usage()
+    u.prices.update(_prices(pid))
     for stage in ledger(pid, month)["stages"].values():
-        for key, m in stage.items():
-            provider, _, model = key.partition("/")
-            counts = {f: m[f] for f in FIELDS}
-            u.by_model.setdefault(model, dict.fromkeys(FIELDS, 0))
-            u.provider_of.setdefault(model, provider)
+        for model, m in stage.items():
+            counts = u.by_model.setdefault(model, dict.fromkeys(FIELDS, 0))
             for f in FIELDS:
-                u.by_model[model][f] += counts[f]
+                counts[f] += m[f]
             u.requests += m.get("requests", 0)
     return u
 
 
 def ledger_report(pid: str, month: str = "") -> dict:
     """The month's spending by stage and model, for the project settings."""
+    prices = _prices(pid)
     rows = []
     for stage, models in ledger(pid, month)["stages"].items():
-        for key, m in models.items():
-            provider, _, model = key.partition("/")
-            c = cost_of(provider, model, m)
-            rows.append({"stage": stage, "provider": provider, "model": model, "requests": m.get("requests", 0),
-                         "tokens": sum(m[f] for f in FIELDS), "cost": round(c[0], 4) if c else None,
-                         "currency": c[1] if c else ""})
+        for model, m in models.items():
+            c = cost_of(prices, model, m)
+            rows.append({"stage": stage, "model": model, "requests": m.get("requests", 0),
+                         "tokens": sum(m[f] for f in FIELDS), "cost": round(c, 4) if c is not None else None,
+                         "currency": "USD" if c is not None else ""})
     total = ledger_usage(pid, month)
     return {"month": month or datetime.date.today().strftime("%Y-%m"), "rows": rows,
             "total_usd": total.spent("USD"), "total_rub": total.spent("RUB"), "requests": total.requests}
 
 
 def _project_budget(pid: str) -> dict:
-    from . import projects      # projects imports this module
+    from . import projects
     p = projects.get(pid) if pid else None
     return (p or {}).get("pipeline", {}).get("budget") or {}
 
@@ -322,80 +393,57 @@ def _check(usage: Usage | None, project_id: str) -> None:
 
 # ---------- requests ----------
 
-def _request(stage: dict | None, model: str, **kw) -> Request:
-    stage = stage or {}
-    effort = stage.get("effort") if stage.get("effort") in EFFORTS else EFFORT
-    return Request(model=model, effort=effort, stage=stage, **kw)
-
-
 async def chat(stage: dict | None, *, system: str, messages: list[dict], tools: list[dict] | None = None,
                max_tokens: int = 16000, one_tool: bool = True, cache: bool = True, cache_all: bool = False,
                context: str = "", keep_images: int = 0, usage: Usage | None = None, project_id: str = "",
                stage_name: str = "") -> Reply:
-    """One answer of the stage's model (then of the fallback chain, if it fails)."""
+    """One answer of the project's model (the stage may override it)."""
+    m = model(project_id, stage)
     _check(usage, project_id)
-    last: ProviderError | None = None
-    for pid, model in providers.chain(stage):
-        req = _request(stage, model, system=system, messages=messages, tools=tools or [], max_tokens=max_tokens,
-                       one_tool=one_tool, cache=cache and PROMPT_CACHE, cache_all=cache_all, context=context,
-                       keep_images=keep_images)
-        try:
-            reply = await providers.get(pid, anthropic_client).chat(req)
-        except ProviderError as e:
-            last = e
-            if not e.retryable:
-                raise
-            continue
-        track(reply, usage, project_id, stage_name)
-        return reply
-    raise last or ProviderError("Нет доступной модели")
+    req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
+                  tools=tools or [], max_tokens=max_tokens, one_tool=one_tool, cache=cache and PROMPT_CACHE,
+                  cache_all=cache_all, context=context, keep_images=keep_images)
+    reply = await m.provider().chat(req)
+    track(reply, usage, m.prices, project_id, stage_name)
+    return reply
 
 
 async def parse(stage: dict | None, *, system: str, messages: list[dict], schema, max_tokens: int = 4000,
                 context: str = "", usage: Usage | None = None, project_id: str = "", stage_name: str = "") -> Reply:
-    """An answer as `schema` (reply.parsed; None if the model declined). Providers without
-    server-side structured output get the schema in the prompt; an answer that does not
+    """An answer as `schema` (reply.parsed; None if the model declined). A model without
+    server-side structured output gets the schema in the prompt; an answer that does not
     validate is sent back with the error once."""
+    m = model(project_id, stage)
     _check(usage, project_id)
-    last: ProviderError | None = None
-    for pid, model in providers.chain(stage):
-        prov = providers.get(pid, anthropic_client)
-        req = _request(stage, model, system=system, messages=messages, max_tokens=max_tokens,
-                       cache=PROMPT_CACHE, context=context)
-        try:
-            if getattr(prov, "structured", False):
-                reply = await prov.parse(req, schema)
-                track(reply, usage, project_id, stage_name)
-                if reply.parsed is None and reply.stop != "refusal":
-                    reply.parsed, _ = validate(schema, reply.text)
-                return reply
-            req.system = system + schema_instruction(schema)
-            reply = await prov.chat(req)
-            track(reply, usage, project_id, stage_name)
-            parsed, error = validate(schema, reply.text)
-            if parsed is None and reply.stop not in ("refusal", "max_tokens"):
-                req.messages = messages + [{"role": "assistant", "content": reply.text or "(empty)"},
-                                           {"role": "user", "content": f"The answer is not valid: {error}\n"
-                                                                       "Answer again with the JSON object only."}]
-                reply = await prov.chat(req)
-                track(reply, usage, project_id, stage_name)
-                parsed, _ = validate(schema, reply.text)
-            reply.parsed = parsed
-            return reply
-        except ProviderError as e:
-            last = e
-            if not e.retryable:
-                raise
-    raise last or ProviderError("Нет доступной модели")
+    prov = m.provider()
+    req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
+                  max_tokens=max_tokens, cache=PROMPT_CACHE, context=context)
+    if prov.structured:
+        reply = await prov.parse(req, schema)
+        track(reply, usage, m.prices, project_id, stage_name)
+        if reply.parsed is None and reply.stop != "refusal":
+            reply.parsed, _ = validate(schema, reply.text)
+        return reply
+    req.system = system + schema_instruction(schema)
+    reply = await prov.chat(req)
+    track(reply, usage, m.prices, project_id, stage_name)
+    parsed, error = validate(schema, reply.text)
+    if parsed is None and reply.stop not in ("refusal", "max_tokens"):
+        req.messages = messages + [{"role": "assistant", "content": reply.text or "(empty)"},
+                                   {"role": "user", "content": f"The answer is not valid: {error}\n"
+                                                               "Answer again with the JSON object only."}]
+        reply = await prov.chat(req)
+        track(reply, usage, m.prices, project_id, stage_name)
+        parsed, _ = validate(schema, reply.text)
+    reply.parsed = parsed
+    return reply
 
 
 def is_api_error(e: Exception) -> bool:
-    return isinstance(e, ProviderError) or isinstance(e, anthropic.APIError) or (
-        isinstance(e, TypeError) and "authentication" in str(e))
+    return isinstance(e, ProviderError) or is_error(e)
 
 
 def api_error_text(e: Exception) -> str:
     if isinstance(e, ProviderError):
         return str(e)
-    from .providers.anthropic import error_text
     return error_text(e)

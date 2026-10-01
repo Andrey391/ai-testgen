@@ -1,6 +1,6 @@
-"""The test-authoring agent (CoTester-style "Auto-Pilot").
+"""The test-authoring agent ("Auto-Pilot").
 
-Claude sees the live page (screenshot + list of interactive elements), and
+The LLM sees the live page (screenshot + list of interactive elements), and
 proposes ONE browser action at a time as a tool call. Each executed action is
 recorded as a test step. In guarded mode every proposed step waits for the
 human to press Continue / Reject; in autopilot mode steps run back to back.
@@ -12,14 +12,12 @@ weak assertions found by mutation testing (mutations.py).
 With the built-in engine the XHR/fetch traffic of the session is recorded
 (traffic.py) and saved with the test, for API tests and mocks.
 
-Any model of llm.py drives it. For models weaker than Claude (providers.profile):
+The project's model drives it (llm.py). For a weaker model the "authoring" stage offers:
 - a compact system prompt plus example turns (the "authoring-examples" skill);
 - text mode: the element list is the main input and a screenshot is sent only when
-  the agent calls `look` ("on_request"), or never for a model without vision;
-- repair: an unknown tool, broken JSON arguments or a ref that is not on the page
-  are sent back as an error and asked again, at most MAX_REPAIRS times per step;
-- Auto-Pilot only when the model's benchmark success reaches the project's threshold,
-  otherwise a person confirms every step.
+  the agent calls `look` ("on_request"), or never for a model without vision.
+Whatever the model, an unknown tool, broken JSON arguments or a ref that is not on the
+page are sent back as an error and asked again, at most MAX_REPAIRS times per step.
 """
 from __future__ import annotations
 
@@ -31,7 +29,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import fs, llm, mailbox, mcp_hub, projects, providers, skills, storage, traffic
+from . import fs, llm, mailbox, mcp_hub, projects, skills, storage, traffic
 from .browser import BrowserSession, describe_element
 from .mcp_browser import McpBrowser
 from .providers.base import check_call
@@ -59,7 +57,7 @@ The user gives you a web application and a test scenario in plain language. You 
 - When the scenario is fully covered and its expected result is asserted, call finish with status "passed" and a short summary. Keep any text outside tool calls to one short sentence.
 - Tools whose names contain "__" come from the project's connected systems (Jira, Confluence, test management...). They are read-only helpers for context, e.g. to read the requirements of an issue; they are not test steps. Use them only when the scenario needs that information."""
 
-# For models weaker than Claude: fewer words, numbered rules; examples come from a skill.
+# For weaker models: fewer words, numbered rules; examples come from a skill.
 SYSTEM_PROMPT_COMPACT = """You are a QA engineer. You write an end-to-end UI test by driving a real web browser with the tools: exactly ONE tool call per turn. Every call becomes a step of the test.
 
 Rules:
@@ -259,7 +257,7 @@ def has_assertion(steps: list[dict]) -> bool:
 
 
 class StudioSession:
-    """One authoring session: a browser, a conversation with Claude, the steps.
+    """One authoring session: a browser, a conversation with the LLM, the steps.
 
     `project` is the project dict: its pipeline "authoring" stage sets the browser
     engine (built-in Playwright or Playwright MCP), skills, extra MCP tools,
@@ -279,14 +277,13 @@ class StudioSession:
         self.name, self.url, self.scenario = name, url, scenario
         self.base_steps, self.task = copy.deepcopy(base_steps or []), task
         self.headless = headless
-        # The model decides how the agent works: prompt size, screenshots, Auto-Pilot.
-        self.profile = providers.profile(self.cfg)
-        compact = (self.cfg.get("prompt") or "auto") == "compact" or (
-            (self.cfg.get("prompt") or "auto") == "auto" and self.profile["prompt"] == "compact")
-        shots = self.cfg.get("screenshots") or "auto"
-        self.screenshots = self.profile["screenshots"] if shots == "auto" else shots
-        if not self.profile["vision"]:
-            self.screenshots = "never"
+        # A weaker model gets a compact prompt with examples and screenshots on request (the stage settings).
+        compact = self.cfg.get("prompt") == "compact"
+        self.screenshots = self.cfg.get("screenshots") or "always"
+        try:
+            self.model = llm.model(self.project_id, self.cfg).name
+        except llm.NotConfigured:
+            self.model = ""
         chosen = list(self.cfg["skills"]) + ([EXAMPLES_SKILL] if compact and EXAMPLES_SKILL not in self.cfg["skills"]
                                              else [])
         self.system = ((SYSTEM_PROMPT_COMPACT if compact else SYSTEM_PROMPT)
@@ -311,16 +308,16 @@ class StudioSession:
         self.use_login_state = use_login_state
         self.logged_in = False
         self.project = project
-        # {"username", "password"} for the app under test; the password never goes to Claude.
+        # {"username", "password"} for the app under test; the password never goes to the LLM.
         self.credentials = {k: v for k, v in (credentials or {}).items() if v}
         self.autopilot = False
         self.status = "starting"   # starting|thinking|awaiting_approval|executing|idle|done|error
         self.steps: list[dict] = []
         self.chat: list[dict] = []          # what the UI shows
-        self.messages: list[dict] = []      # Claude API history
+        self.messages: list[dict] = []      # LLM conversation history
         self.pending: dict | None = None    # proposed tool call awaiting approval
         self.unanswered: list[dict] = []    # tool_results not yet sent back
-        self.notes: list[str] = []          # manual actions to tell Claude about
+        self.notes: list[str] = []          # manual actions to tell the LLM about
         self.summary = ""
         self.finish_status = ""             # passed|failed|blocked from the agent's finish
         self.screenshot = ""
@@ -331,7 +328,7 @@ class StudioSession:
         budget = project["pipeline"].get("budget") or {}
         self.usage = llm.Usage(budget.get("session") or 0, budget.get("currency") or "USD", "сессии")
         self.usage.on_warn = lambda text: self._say("system", text)
-        self.edits = 0                      # steps a person rejected or changed (bench metric)
+        self.edits = 0                      # steps a person rejected or changed
         self.started = None
         self.lock = asyncio.Lock()
         self._auto_task: asyncio.Task | None = None
@@ -348,9 +345,7 @@ class StudioSession:
             "pending": self.pending and {k: self.pending[k] for k in ("name", "input", "step")},
             "page_url": self.page_url, "has_credentials": bool(self.credentials),
             "usage": self.usage.as_dict(), "traffic": len(getattr(self.bs, "traffic", None) or []),
-            "model": {"provider": self.profile["provider"], "title": self.profile["title"],
-                      "name": self.profile["model"], "screenshots": self.screenshots},
-            "autopilot_allowed": self.autopilot_allowed()[0],
+            "model": {"name": self.model, "screenshots": self.screenshots},
         }
 
     def to_test(self) -> dict:
@@ -359,24 +354,8 @@ class StudioSession:
                 "name": self.name, "url": self.url, "scenario": self.scenario, "summary": self.summary,
                 "engine": self.engine, "steps": recorded_steps(self.steps),
                 "authoring_usage": self.usage.as_dict(),
-                "authoring_stats": {"model": f"{self.profile['provider']}/{self.profile['model']}",
-                                    "edits": self.edits,
+                "authoring_stats": {"model": self.model, "edits": self.edits,
                                     "seconds": round(time.monotonic() - self.started, 1) if self.started else None}}
-
-    def autopilot_allowed(self) -> tuple[bool, str]:
-        """Claude always; another model only with a benchmark success rate at the project's threshold."""
-        if self.profile["kind"] == "anthropic":
-            return True, ""
-        need = float(self.cfg.get("autopilot_min_success") or 0)
-        if need <= 0:
-            return True, ""
-        bench = self.profile.get("bench") or {}
-        rate = bench.get("success")
-        if rate is not None and rate * 100 >= need:
-            return True, ""
-        got = f"{rate * 100:.0f}%" if rate is not None else "нет замера"
-        return False, (f"Auto-Pilot недоступен для модели {self.profile['model']}: доля успешных тестов на "
-                       f"бенчмарке — {got}, нужно не меньше {need:.0f}%. Шаги подтверждает человек.")
 
     def save(self, status: str = "") -> tuple[dict, list[str]]:
         """Save the recorded test -> (test, warnings). A re-save keeps the test's id and what
@@ -543,13 +522,6 @@ class StudioSession:
                               + await self._page_state())
 
     def set_autopilot(self, on: bool) -> None:
-        if on:
-            allowed, why = self.autopilot_allowed()
-            if not allowed:
-                self.autopilot = False
-                if not any(m["text"] == why for m in self.chat):
-                    self._say("system", why)
-                return
         self.autopilot = on
         if on and (self._auto_task is None or self._auto_task.done()):
             self._auto_task = asyncio.create_task(self._autopilot_loop())
@@ -814,7 +786,7 @@ class StudioSession:
                 return
             self.status = "thinking"
             try:
-                # Tools + rules + skills are cached for the whole session (Claude); old screenshots
+                # Tools + rules + skills are cached for the whole session; old screenshots
                 # and snapshots are dropped: they are useless once the page moved on.
                 reply = await llm.chat(self.cfg, system=self.system,
                                        tools=self.tools + (self.toolbox.tools if self.toolbox else []),
@@ -832,7 +804,7 @@ class StudioSession:
             self.messages.append({"role": "assistant", "content": reply.content})
             if reply.stop == "refusal":
                 self.status = "error"
-                self._say("system", "The model declined this request.")
+                self._say("system", "ИИ отклонил этот запрос.")
                 return
 
             if reply.text:

@@ -92,6 +92,7 @@ def test_two_instances_three_workers(cluster, stand, tmp_path):
     assert shot.status_code == 200 and shot.content[:2] == b"\xff\xd8"
 
     # A Studio session lives in instance A; B passes requests about it there.
+    httpx.put(f"{b}/api/projects/{p['id']}/llm", json={"model": "test-model"}).raise_for_status()
     sess = httpx.post(f"{a}/api/sessions", json={"project_id": p["id"], "url": f"{stand.url}/form.html",
                                                  "scenario": "Открыть форму", "name": "Кластер"}).json()["id"]
     state = _wait(lambda: (x := httpx.get(f"{b}/api/sessions/{sess}").json()).get("id") == sess and x, 60, "session")
