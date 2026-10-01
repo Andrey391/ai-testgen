@@ -15,25 +15,39 @@ step and the "log in" step is the same address. Exported tests carry the same
 generator (exporters.py embeds the source of `DataValues` and `generate`), so
 they behave like the studio's own runs. TESTGEN_FAKER_LOCALE picks the Faker
 locale (en_US by default).
+
+Besides test data, BrowserSession.expand substitutes:
+
+    {{username}}, {{password}}   the login of the application (never shown to the model)
+    {{totp}}                     the current one-time code of the login's TOTP secret (2FA)
+    {{vars.name}}                a value saved in this run: from the response of a `before`
+                                 request (api_request "save") or a code read from an e-mail
+    {{params.name}}              a parameter of a module (a test used as a step, use_module)
 """
 from __future__ import annotations
 
+import base64
 import datetime
+import hashlib
+import hmac
 import os
 import random
 import re
+import struct
 import time
 
 FIELDS = {"email", "name", "first_name", "last_name", "phone", "company", "city", "address", "postcode",
           "user_name", "word", "sentence"}
-# Credentials plus test data: everything BrowserSession.expand substitutes.
-PLACEHOLDER = re.compile(r"\{\{(username|password|unique|today|faker\.[a-z_]+)\}\}")
-CREDENTIALS = ("username", "password")
+# Credentials, test data, run variables and module parameters: everything BrowserSession.expand substitutes.
+PLACEHOLDER = re.compile(r"\{\{(username|password|totp|unique|today|faker\.[a-z_]+|vars\.[A-Za-z_]\w*"
+                         r"|params\.[A-Za-z_]\w*)\}\}")
+CREDENTIALS = ("username", "password", "totp")
 
 
 def keys(value: str) -> list[str]:
-    """Test data placeholders used in a value (credentials not included)."""
-    return [k for k in PLACEHOLDER.findall(value or "") if k not in CREDENTIALS]
+    """Test data placeholders used in a value (credentials, variables and parameters not included)."""
+    return [k for k in PLACEHOLDER.findall(value or "") if k not in CREDENTIALS
+            and not k.startswith(("vars.", "params."))]
 
 
 class DataValues(dict):
@@ -62,3 +76,13 @@ def generate(key, known):
     if field == "address":
         return fake.street_address()
     return str(getattr(fake, field)())
+
+
+def totp(secret, at=None, digits=6, period=30):
+    """RFC 6238 one-time code (SHA-1) of a base32 secret, as authenticator apps show it."""
+    key = base64.b32decode(re.sub(r"[\s-]", "", str(secret)).upper() + "=" * (-len(re.sub(r"[\s-]", "", str(secret))) % 8))
+    counter = int((time.time() if at is None else at) // period)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 10 ** digits
+    return str(code).zfill(digits)

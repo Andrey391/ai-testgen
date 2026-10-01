@@ -21,7 +21,8 @@ import os
 import re
 from pathlib import Path
 
-from . import projects
+from . import fs, projects
+from .paths import OFFLINE
 
 AXE_VERSION = "4.13.0"
 AXE_URLS = [f"https://cdn.jsdelivr.net/npm/axe-core@{AXE_VERSION}/axe.min.js",
@@ -53,6 +54,9 @@ async def axe_source() -> str:
     if cache.exists():
         _axe = cache.read_text("utf-8")
         return _axe
+    if OFFLINE:
+        raise RuntimeError("Режим без интернета (TESTGEN_OFFLINE): укажите путь к axe.min.js в TESTGEN_AXE_JS "
+                           f"(axe-core {AXE_VERSION}; в Docker-образе студии он уже есть)")
     import httpx
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         for url in AXE_URLS:
@@ -151,11 +155,10 @@ async def screenshot(bs, step: dict, loc=None) -> dict:
     if run_dir:
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / f"{prefix}-actual.png").write_bytes(png)
-    if not base.exists():
-        base.parent.mkdir(parents=True, exist_ok=True)
-        base.write_bytes(png)
+    if not fs.is_file(base):
+        fs.write_bytes(base, png)
         return {"visual": {"baseline_created": True, "actual": f"{prefix}-actual.png" if run_dir else ""}}
-    ratio, diff = await compare(bs, base.read_bytes(), png)
+    ratio, diff = await compare(bs, fs.read_bytes(base), png)
     threshold = float(o.get("visual_threshold") or DEFAULT_VISUAL_THRESHOLD)
     info = {"ratio": round(ratio, 5), "threshold": threshold,
             "actual": f"{prefix}-actual.png" if run_dir else "", "diff": ""}

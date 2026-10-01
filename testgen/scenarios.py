@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from . import llm, skills
+from . import llm, projects, skills
 
 ScenarioType = Literal["positive", "negative", "edge", "boundary", "accessibility", "security"]
 Priority = Literal["high", "medium", "low"]
@@ -74,22 +74,15 @@ def _context(requirements: str, url: str, cfg: dict) -> str:
     return text
 
 
-async def _parse(cfg: dict, system: str, context: str, task: str, fmt: type[BaseModel]):
-    resp = await llm.client().beta.messages.parse(
-        **llm.common_params(cfg),
-        max_tokens=16000,
-        betas=[llm.FALLBACK_BETA],
-        # The requirements are the same in every request of one generation: cache them.
-        system=[{"type": "text", "text": system},
-                {"type": "text", "text": context, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": task}],
-        output_format=fmt,
-    )
-    if resp.stop_reason == "max_tokens":
+async def _parse(cfg: dict, system: str, context: str, task: str, fmt: type[BaseModel], project_id: str = ""):
+    # The requirements are the same in every request of one generation: they are cached separately.
+    reply = await llm.parse(cfg, system=system, context=context, messages=[{"role": "user", "content": task}],
+                            schema=fmt, max_tokens=16000, project_id=project_id, stage_name="scenarios")
+    if reply.stop == "max_tokens":
         raise RuntimeError("Ответ модели не поместился в лимит: разделите требования на части.")
-    if resp.stop_reason == "refusal" or resp.parsed_output is None:
+    if reply.stop == "refusal" or reply.parsed is None:
         raise RuntimeError("Модель не смогла составить сценарии по этим требованиям.")
-    return resp.parsed_output
+    return reply.parsed
 
 
 async def generate(requirements: str, url: str = "", project: dict | None = None,
@@ -97,10 +90,12 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
     """`project` (optional) supplies the "scenarios" stage settings: skills, scenario
     types to cover, model and effort. `log(text)` (optional) reports progress."""
     cfg = project["pipeline"]["scenarios"] if project else {}
-    system = SYSTEM + (skills.prompt(project["id"], cfg.get("skills", [])) if project else "")
+    system = SYSTEM + projects.language_rule(project) + (skills.prompt(project["id"], cfg.get("skills", []))
+                                                         if project else "")
     context = _context(requirements, url, cfg)
 
-    plan: ScenarioPlan = await _parse(cfg, system, context, PLAN_TASK, ScenarioPlan)
+    pid = project["id"] if project else ""
+    plan: ScenarioPlan = await _parse(cfg, system, context, PLAN_TASK, ScenarioPlan, pid)
     if log:
         log(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
     if not plan.scenarios:
@@ -116,7 +111,7 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
                 f"Write out in full only scenarios {start + 1}–{start + len(part)} of this plan, "
                 "in the same order, keeping their titles, types and priorities.")
         async with gate:
-            batch: ScenarioBatch = await _parse(cfg, system, context, task, ScenarioBatch)
+            batch: ScenarioBatch = await _parse(cfg, system, context, task, ScenarioBatch, pid)
         # The plan is authoritative for what the scenario is; the batch adds the details.
         out = [full.model_copy(update={"title": planned.title, "type": planned.type,
                                        "priority": planned.priority})

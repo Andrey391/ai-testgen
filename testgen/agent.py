@@ -11,22 +11,35 @@ weak assertions found by mutation testing (mutations.py).
 
 With the built-in engine the XHR/fetch traffic of the session is recorded
 (traffic.py) and saved with the test, for API tests and mocks.
+
+Any model of llm.py drives it. For models weaker than Claude (providers.profile):
+- a compact system prompt plus example turns (the "authoring-examples" skill);
+- text mode: the element list is the main input and a screenshot is sent only when
+  the agent calls `look` ("on_request"), or never for a model without vision;
+- repair: an unknown tool, broken JSON arguments or a ref that is not on the page
+  are sent back as an error and asked again, at most MAX_REPAIRS times per step;
+- Auto-Pilot only when the model's benchmark success reaches the project's threshold,
+  otherwise a person confirms every step.
 """
 from __future__ import annotations
 
 import asyncio
 import copy
 import json
+import re
+import time
 import uuid
+from urllib.parse import urlparse
 
-import anthropic
-
-from . import llm, mcp_hub, projects, skills, storage, traffic
-from .browser import BrowserSession
+from . import fs, llm, mailbox, mcp_hub, projects, providers, skills, storage, traffic
+from .browser import BrowserSession, describe_element
 from .mcp_browser import McpBrowser
-from .steps import AUXILIARY_ASSERTIONS, needs_element, new_step, perform
+from .providers.base import check_call
+from .steps import AUXILIARY_ASSERTIONS, new_step
 
 MAX_HELPER_CALLS = 12   # connection tool calls in a row before the agent must act
+MAX_REPAIRS = 2         # invalid answers in a row before the agent stops and waits for a person
+KEEP_STATES = 4         # page states (screenshots, snapshots) kept in the conversation
 
 SYSTEM_PROMPT = """You are a QA engineer that authors end-to-end UI test cases by driving a real web browser.
 
@@ -45,6 +58,24 @@ The user gives you a web application and a test scenario in plain language. You 
 - If you are blocked (CAPTCHA, login you have no credentials for, the site is down), call finish with status "blocked" and explain. If the application does not behave as the scenario expects (a product bug), call finish with status "failed" and describe the bug.
 - When the scenario is fully covered and its expected result is asserted, call finish with status "passed" and a short summary. Keep any text outside tool calls to one short sentence.
 - Tools whose names contain "__" come from the project's connected systems (Jira, Confluence, test management...). They are read-only helpers for context, e.g. to read the requirements of an issue; they are not test steps. Use them only when the scenario needs that information."""
+
+# For models weaker than Claude: fewer words, numbered rules; examples come from a skill.
+SYSTEM_PROMPT_COMPACT = """You are a QA engineer. You write an end-to-end UI test by driving a real web browser with the tools: exactly ONE tool call per turn. Every call becomes a step of the test.
+
+Rules:
+1. Target elements only by `ref` (like e12) from the LATEST page state.
+2. Take the shortest path a real user would take. `description` is a short imperative step in the language of the scenario, e.g. "Click the 'Login' button".
+3. After each important change, check the result: assert_element_text or assert_text_present for messages and data, assert_value for fields, assert_count for lists, assert_url_contains for navigation.
+4. End with an assertion of the expected result, then call finish with status "passed".
+5. Login: type {{username}} and {{password}} literally. Data that must be new on every run: {{faker.email}}, {{faker.name}}, {{unique}}.
+6. Never pay, place orders, send messages or delete data: stop before it, assert, finish.
+7. Blocked (CAPTCHA, no access): finish with status "blocked". The application behaves wrongly: finish with status "failed".
+8. If a step fails, fix the cause (close a pop-up, pick another element) and try again.
+9. Tools with "__" in the name are read-only helpers of connected systems, not test steps."""
+
+LOOK_NOTE = ("\n- You get the page as a list of elements. Call `look` when you need to SEE the page (layout, "
+             "images, a result that is only visible). `look` is not a test step.")
+EXAMPLES_SKILL = "authoring-examples"
 
 
 def _tool(name: str, description: str, props: dict) -> dict:
@@ -107,12 +138,65 @@ TOOLS = [
                                "baseline image, which is captured on the first run. Use only when the scenario asks "
                                "for a visual check.", {"ref": {"type": "string", "description": "Element ref or ''."},
                                                        "description": _DESC}),
+    _tool("double_click", "Double-click an element.", {"ref": _REF, "description": _DESC}),
+    _tool("drag_to", "Drag an element and drop it onto another element.", {
+        "ref": _REF, "target_ref": {"type": "string", "description": "Ref of the element to drop onto."},
+        "description": _DESC}),
+    _tool("switch_tab", "Switch to another browser tab: 'last' (the newest), 'first', a number (1 = first) or "
+                        "text of its URL.", {"tab": {"type": "string"}, "description": _DESC}),
+    _tool("handle_dialog", "Prepare the answer to the NEXT browser dialog (alert / confirm / prompt) BEFORE the "
+                           "step that opens it: accept or dismiss, text for a prompt, text the dialog must contain.", {
+        "action": {"type": "string", "enum": ["accept", "dismiss"]},
+        "prompt_text": {"type": "string", "description": "Text to type into a prompt dialog, or ''."},
+        "expect": {"type": "string", "description": "Text the dialog message must contain, or ''."},
+        "description": _DESC}),
+    _tool("assert_download", "Assertion: the previous step downloaded a file whose name matches the pattern "
+                             "(e.g. 'report*.xlsx') and whose size is at least min_bytes.", {
+        "name": {"type": "string"}, "min_bytes": {"type": "integer"}, "description": _DESC}),
     _tool("finish", "End test authoring.", {
         "status": {"type": "string", "enum": ["passed", "failed", "blocked"]},
         "summary": {"type": "string"}}),
 ]
+UPLOAD_TOOL = _tool("upload_file", "Choose a file in a file input: one of the project's test files listed in the "
+                                   "task.", {"ref": _REF, "file": {"type": "string"}, "description": _DESC})
+EMAIL_TOOL = _tool("read_email", "Wait for an e-mail in the project's test mailbox and save the code it contains "
+                                 "as {{vars.<save>}} for the next steps (2FA, confirmation codes).", {
+    "to": {"type": "string", "description": "Recipient address (may be a placeholder like {{faker.email}}), or ''."},
+    "subject": {"type": "string", "description": "Text of the subject, or ''."},
+    "pattern": {"type": "string", "description": "Regular expression of the code; its first group is saved. "
+                                                 "'' = a number of 4-8 digits."},
+    "save": {"type": "string", "description": "Variable name, e.g. 'code'."},
+    "description": _DESC})
+MODULE_TOOL = _tool("use_module", "Run a module of the project (a saved block of steps, e.g. log in or add an item "
+                                  "to the cart) as ONE step, with its parameters. Prefer modules to repeating their "
+                                  "steps.", {
+    "module": {"type": "string", "description": "Module id from the task."},
+    "params": {"type": "string", "description": "Parameters as a JSON object, e.g. {\"item\": \"Молоко\"}; '{}' "
+                                                "if none."},
+    "description": _DESC})
 # Need the built-in engine (the page itself, not an MCP server's view of it).
-BUILTIN_ONLY = {"assert_accessible", "assert_screenshot"}
+BUILTIN_ONLY = {"assert_accessible", "assert_screenshot", "handle_dialog", "assert_download", "upload_file",
+                "read_email", "use_module"}
+LOOK_TOOL = _tool("look", "Get a screenshot of the current page (not a test step).", {})
+FIND_TOOL = _tool("find_elements", "Find elements of the whole page (all frames, off-screen too) whose name, label, "
+                                   "placeholder or value contain the text; returns their refs. Not a test step.", {
+    "text": {"type": "string"}})
+# Tools that help the agent but are not recorded as steps.
+HELPERS = {"look", "find_elements"}
+
+
+def _json(d: dict) -> str:
+    return json.dumps({k: v for k, v in d.items() if v not in ("", None)}, ensure_ascii=False)
+
+
+def _params(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        v = json.loads(raw or "{}")
+        return v if isinstance(v, dict) else {}
+    except ValueError:
+        return {}
 
 
 def tool_to_step(name: str, inp: dict) -> dict:
@@ -124,6 +208,8 @@ def tool_to_step(name: str, inp: dict) -> dict:
         "press_key": inp.get("key", ""),
         "scroll": inp.get("direction", "down"),
         "wait": str(inp.get("seconds", 1)),
+        "upload_file": inp.get("file", ""),
+        "switch_tab": inp.get("tab", "last"),
         "assert_text_present": inp.get("text", ""),
         "assert_url_contains": inp.get("text", ""),
         "assert_element_text": inp.get("text", ""),
@@ -132,10 +218,32 @@ def tool_to_step(name: str, inp: dict) -> dict:
         "assert_enabled": str(bool(inp.get("enabled", True))).lower(),
         "assert_count": str(inp.get("count", "")),
     }.get(name, "")
+    if name == "handle_dialog":
+        value = _json({"action": inp.get("action", "accept"), "prompt_text": inp.get("prompt_text", ""),
+                       "expect": inp.get("expect", "")})
+    elif name == "assert_download":
+        value = _json({"name": inp.get("name") or "*", "min_bytes": int(inp.get("min_bytes") or 1)})
+    elif name == "read_email":
+        value = _json({"to": inp.get("to", ""), "subject": inp.get("subject", ""), "pattern": inp.get("pattern", ""),
+                       "save": inp.get("save") or "code"})
+    elif name == "use_module":
+        value = json.dumps({"module": inp.get("module", ""), "params": _params(inp.get("params"))}, ensure_ascii=False)
     step = new_step(name, inp.get("description", name), value,
                     press_enter=bool(inp.get("press_enter")))
     step["ref"] = inp.get("ref", "")
+    if inp.get("target_ref"):
+        step["target_ref"] = inp["target_ref"]
     return step
+
+
+def _origin(url: str) -> str:
+    u = urlparse(url or "")
+    return f"{u.scheme}://{u.netloc}" if u.netloc else ""
+
+
+def project_files(pid: str) -> list[str]:
+    """Files of the project for upload_file steps: data/projects/<id>/files/."""
+    return sorted(f.name for f in fs.glob(projects.path(pid) / "files", "*") if fs.is_file(f))
 
 
 def recorded_steps(steps: list[dict]) -> list[dict]:
@@ -160,7 +268,7 @@ class StudioSession:
 
     def __init__(self, project: dict, name: str, url: str, scenario: str, headless: bool = True,
                  credentials: dict | None = None, engine: str = "", base_steps: list[dict] | None = None,
-                 task: str = ""):
+                 task: str = "", use_login_state: bool = True):
         self.id = uuid.uuid4().hex[:10]
         self.project_id, self.project_name = project["id"], project["name"]
         self.cfg = project["pipeline"]["authoring"]
@@ -171,8 +279,38 @@ class StudioSession:
         self.name, self.url, self.scenario = name, url, scenario
         self.base_steps, self.task = copy.deepcopy(base_steps or []), task
         self.headless = headless
-        self.system = SYSTEM_PROMPT + skills.prompt(self.project_id, self.cfg["skills"])
-        self.tools = [t for t in TOOLS if self.engine == "builtin" or t["name"] not in BUILTIN_ONLY]
+        # The model decides how the agent works: prompt size, screenshots, Auto-Pilot.
+        self.profile = providers.profile(self.cfg)
+        compact = (self.cfg.get("prompt") or "auto") == "compact" or (
+            (self.cfg.get("prompt") or "auto") == "auto" and self.profile["prompt"] == "compact")
+        shots = self.cfg.get("screenshots") or "auto"
+        self.screenshots = self.profile["screenshots"] if shots == "auto" else shots
+        if not self.profile["vision"]:
+            self.screenshots = "never"
+        chosen = list(self.cfg["skills"]) + ([EXAMPLES_SKILL] if compact and EXAMPLES_SKILL not in self.cfg["skills"]
+                                             else [])
+        self.system = ((SYSTEM_PROMPT_COMPACT if compact else SYSTEM_PROMPT)
+                       + (LOOK_NOTE if self.screenshots == "on_request" else "")
+                       + projects.language_rule(project)
+                       + skills.prompt(self.project_id, chosen))
+        builtin = self.engine == "builtin"
+        # What the project offers the agent: test files, modules (tests used as steps), a test mailbox.
+        self.files = project_files(self.project_id)
+        self.modules = [t for t in storage.all_tests(self.project_id) if t.get("role") == "module"] if builtin else []
+        self.mailbox = bool((project.get("mailbox") or {}).get("kind"))
+        self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY]
+        if builtin:
+            self.tools += [FIND_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
+                ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else [])
+        if self.screenshots == "on_request":
+            self.tools.append(LOOK_TOOL)
+        self.repairs = 0                    # invalid answers in a row
+        self.device = self.cfg.get("device") or ""
+        # With a login test in the project the session starts logged in, like the tests will run
+        # (use_login_state=False: record from the logged-out state, e.g. a new login test).
+        self.use_login_state = use_login_state
+        self.logged_in = False
+        self.project = project
         # {"username", "password"} for the app under test; the password never goes to Claude.
         self.credentials = {k: v for k, v in (credentials or {}).items() if v}
         self.autopilot = False
@@ -190,7 +328,11 @@ class StudioSession:
         self.bs: BrowserSession | McpBrowser | None = None
         self.toolbox: mcp_hub.Toolbox | None = None
         self.test_id: str | None = None
-        self.usage = llm.Usage()
+        budget = project["pipeline"].get("budget") or {}
+        self.usage = llm.Usage(budget.get("session") or 0, budget.get("currency") or "USD", "сессии")
+        self.usage.on_warn = lambda text: self._say("system", text)
+        self.edits = 0                      # steps a person rejected or changed (bench metric)
+        self.started = None
         self.lock = asyncio.Lock()
         self._auto_task: asyncio.Task | None = None
 
@@ -206,6 +348,9 @@ class StudioSession:
             "pending": self.pending and {k: self.pending[k] for k in ("name", "input", "step")},
             "page_url": self.page_url, "has_credentials": bool(self.credentials),
             "usage": self.usage.as_dict(), "traffic": len(getattr(self.bs, "traffic", None) or []),
+            "model": {"provider": self.profile["provider"], "title": self.profile["title"],
+                      "name": self.profile["model"], "screenshots": self.screenshots},
+            "autopilot_allowed": self.autopilot_allowed()[0],
         }
 
     def to_test(self) -> dict:
@@ -213,18 +358,41 @@ class StudioSession:
         return {"id": self.test_id or uuid.uuid4().hex[:10], "project_id": self.project_id,
                 "name": self.name, "url": self.url, "scenario": self.scenario, "summary": self.summary,
                 "engine": self.engine, "steps": recorded_steps(self.steps),
-                "authoring_usage": self.usage.as_dict()}
+                "authoring_usage": self.usage.as_dict(),
+                "authoring_stats": {"model": f"{self.profile['provider']}/{self.profile['model']}",
+                                    "edits": self.edits,
+                                    "seconds": round(time.monotonic() - self.started, 1) if self.started else None}}
 
-    def save(self) -> tuple[dict, list[str]]:
+    def autopilot_allowed(self) -> tuple[bool, str]:
+        """Claude always; another model only with a benchmark success rate at the project's threshold."""
+        if self.profile["kind"] == "anthropic":
+            return True, ""
+        need = float(self.cfg.get("autopilot_min_success") or 0)
+        if need <= 0:
+            return True, ""
+        bench = self.profile.get("bench") or {}
+        rate = bench.get("success")
+        if rate is not None and rate * 100 >= need:
+            return True, ""
+        got = f"{rate * 100:.0f}%" if rate is not None else "нет замера"
+        return False, (f"Auto-Pilot недоступен для модели {self.profile['model']}: доля успешных тестов на "
+                       f"бенчмарке — {got}, нужно не меньше {need:.0f}%. Шаги подтверждает человек.")
+
+    def save(self, status: str = "") -> tuple[dict, list[str]]:
         """Save the recorded test -> (test, warnings). A re-save keeps the test's id and what
-        the studio attached to it (tags, quarantine, Zephyr key, last run...)."""
+        the studio attached to it (tags, quarantine, external keys, last run, status, comments...).
+        A new test is a draft: it joins the regression suite after a person's review (`status`
+        "ready" when the person saving it says so)."""
         t = self.to_test()
         old = storage.load(t["id"])
+        t["status"] = "draft"
         if old:
             for key in ("external", "last_run", "priority", "scenario_type", "source", "gherkin_scenario", "tags",
-                        "quarantine"):
+                        "quarantine", "role", "before", "after", "status", "comments", "review"):
                 if key in old:
                     t[key] = old[key]
+        if status in storage.STATUSES:
+            t["status"] = status
             ids = {s["id"] for s in t["steps"]}
             t["heal_proposals"] = [p for p in old.get("heal_proposals") or [] if p["step_id"] in ids]
             if old.get("verify") and [(s["id"], s.get("value")) for s in old["steps"]] == \
@@ -259,6 +427,7 @@ class StudioSession:
                      self.url)
 
     async def start(self) -> None:
+        self.started = time.monotonic()
         async with self.lock:
             if self.engine == "playwright-mcp":
                 conn = mcp_hub.find({"connections": self.connections}, "playwright",
@@ -268,9 +437,14 @@ class StudioSession:
                                            "подключения Playwright MCP")
                 self.bs = await McpBrowser.launch(self.project_id, conn, headless=self.headless)
             else:
-                self.bs = await BrowserSession.launch(headless=self.headless, record_traffic=True)
+                state = await self._login_state()
+                self.bs = await BrowserSession.launch(headless=self.headless, record_traffic=True, device=self.device,
+                                                      locale=self.run_cfg.get("locale", ""),
+                                                      timezone=self.run_cfg.get("timezone", ""), storage_state=state)
                 self.bs.options = {"a11y_impact": self.run_cfg["a11y_impact"],
-                                   "visual_threshold": self.run_cfg["visual_threshold"]}
+                                   "visual_threshold": self.run_cfg["visual_threshold"],
+                                   "project_id": self.project_id,
+                                   "base_url": self.project.get("base_url") or _origin(self.url), "own_vars": []}
             self.bs.credentials = self.credentials
             conns = [c for c in self.connections if c["id"] in self.cfg.get("tool_connections", [])
                      and c.get("enabled", True) and c["preset"] != "playwright"]
@@ -285,16 +459,53 @@ class StudioSession:
                                  + (f" | value: {s['value']}" if s.get("value") else "")
                                  for i, s in enumerate(self.steps))
                 text = (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
-                        f"{self._credentials_note()}The recorded test has been replayed in the browser:\n"
-                        f"{done}\n\n{self.task}\n\nCurrent page state:")
+                        f"{self._credentials_note()}{self._context_note()}The recorded test has been replayed in "
+                        f"the browser:\n{done}\n\n{self.task}\n\nCurrent page state:")
             else:
                 step = new_step("navigate", f"Open {self.url}", self.url, source="system")
                 await self._run_step(step)
                 self._say("user", self.scenario)
                 text = (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
-                        f"{self._credentials_note()}"
+                        f"{self._credentials_note()}{self._context_note()}"
                         "The browser has already opened the application. Current page state:")
             await self._think([{"type": "text", "text": text}] + await self._page_state())
+
+    async def _login_state(self) -> dict | None:
+        """The project's saved login (its login test), unless this session records a login or module."""
+        from . import pipeline      # the pipeline imports this module
+        if not self.use_login_state or not pipeline.uses_login_state(self.project, {"id": self.test_id or "",
+                                                                                     "role": ""}):
+            return None
+        try:
+            state = await pipeline.ensure_login_state(self.project, self.credentials or projects.app_credentials(
+                self.project_id), headless=True)
+        except Exception as e:
+            self._say("system", f"Не удалось войти тестом входа проекта: {llm.api_error_text(e)}")
+            return None
+        if state:
+            self.logged_in = True
+            self._say("system", "Сессия начата с сохранённым входом (тест входа проекта): шаги входа записывать "
+                                "не нужно.")
+        return state
+
+    def _context_note(self) -> str:
+        """What else the agent can use: login state, files, modules, the mailbox."""
+        parts = []
+        if self.logged_in:
+            parts.append("The browser is ALREADY LOGGED IN to the application (the project's login test ran before "
+                         "this session): do not record login steps.")
+        if self.files:
+            parts.append("Test files for upload_file: " + ", ".join(self.files) + ".")
+        if self.modules:
+            lines = []
+            for m in self.modules:
+                params = sorted({k[7:] for s in m["steps"] for k in re.findall(r"\{\{(params\.\w+)\}\}", s.get("value", ""))})
+                lines.append(f"- {m['id']}: «{m['name']}»" + (f", params: {', '.join(params)}" if params else ""))
+            parts.append("Modules of the project (use_module runs one as a single step):\n" + "\n".join(lines))
+        if self.mailbox:
+            parts.append("The project has a test mailbox: read_email waits for a letter and saves its code as "
+                         "{{vars.<name>}}.")
+        return "\n\n".join(parts) + ("\n\n" if parts else "")
 
     async def approve(self) -> None:
         async with self.lock:
@@ -313,6 +524,7 @@ class StudioSession:
                 return
             p = self.pending
             self.pending = None
+            self.edits += 1
             self._say("user", f"Rejected: {feedback}" if feedback else "Rejected")
             self.unanswered.append({
                 "type": "tool_result", "tool_use_id": p["id"], "is_error": True,
@@ -331,6 +543,13 @@ class StudioSession:
                               + await self._page_state())
 
     def set_autopilot(self, on: bool) -> None:
+        if on:
+            allowed, why = self.autopilot_allowed()
+            if not allowed:
+                self.autopilot = False
+                if not any(m["text"] == why for m in self.chat):
+                    self._say("system", why)
+                return
         self.autopilot = on
         if on and (self._auto_task is None or self._auto_task.done()):
             self._auto_task = asyncio.create_task(self._autopilot_loop())
@@ -342,12 +561,21 @@ class StudioSession:
             return step
 
     async def pick(self, x: float, y: float, action: str, value: str, description: str,
-                   source: str) -> dict:
-        """Element picker / recorder: act on the element at viewport point (x, y)."""
+                   source: str, target: tuple[float, float] | None = None) -> dict:
+        """Element picker / recorder: act on the element at viewport point (x, y); drag_to drops it
+        onto the element at `target`."""
         if not isinstance(self.bs, BrowserSession):
             raise ValueError("Element Picker и запись доступны только со встроенным движком Playwright")
         async with self.lock:
-            info = await self.bs.pick_at(x, y)
+            drop = None
+            if action == "drag_to":
+                if target is None:
+                    raise ValueError("Для перетаскивания укажите, куда бросить элемент")
+                info, drop = await self.bs.pick_at(x, y, target)
+                if not drop:
+                    raise ValueError("Нет элемента в месте, куда нужно перетащить")
+            else:
+                info = await self.bs.pick_at(x, y)
             if not info:
                 raise ValueError("No element at this point")
             ref = info["ref"]
@@ -357,8 +585,11 @@ class StudioSession:
             if not description:
                 description = {
                     "click": f"Click '{name}'",
+                    "double_click": f"Double-click '{name}'",
                     "fill": f"Enter '{value}' into '{name}'",
                     "hover": f"Hover over '{name}'",
+                    "upload_file": f"Upload '{value}' into '{name}'",
+                    "drag_to": f"Drag '{name}' onto '{(drop or {}).get('name') or 'the target'}'",
                     "select_option": f"Select '{value}' in '{name}'",
                     "assert_visible": f"Verify '{name}' is visible",
                     "assert_text_present": f"Verify text '{value}' is shown",
@@ -371,6 +602,8 @@ class StudioSession:
                 }.get(action, action)
             step = new_step(action, description, value, source=source)
             step["ref"] = ref if action != "assert_text_present" else ""
+            if drop:
+                step["target_ref"] = drop["ref"]
             await self._run_manual(step)
             return step
 
@@ -409,25 +642,24 @@ class StudioSession:
     # ---------- internals ----------
 
     async def _replay(self) -> None:
-        """Run the saved steps (base_steps) and record them as passed."""
+        """Run the saved steps (base_steps) and record them as passed (modules included, no healing)."""
+        from . import runner
         self.status = "executing"
-        for st in self.base_steps:
-            step = st | {"status": "pending", "error": ""}
-            self.bs.step_index = len(self.steps)
-            loc = None
-            if needs_element(step):
-                await self.bs.settle()
-                loc, _ = await self.bs.find(step["locator"], wait=5)
-                if loc is None:
-                    raise ValueError(f"Не удалось воспроизвести сохранённый тест: не найден элемент шага "
-                                     f"«{step['description']}»")
-            try:
-                await perform(self.bs, step, loc)
-            except Exception as e:
-                raise ValueError(f"Не удалось воспроизвести сохранённый тест на шаге «{step['description']}»: "
-                                 f"{str(e).splitlines()[0][:200]}")
+        steps = [st | {"status": "pending", "error": ""} for st in self.base_steps]
+        report = {"passed": True, "healed": 0, "proposals": []}
+        results: list[dict] = []
+        self.bs.follow_new_tabs = not any(s["action"] == "switch_tab" for s in steps)
+        await runner.run_steps(self.bs, {"id": self.test_id or "", "project_id": self.project_id, "steps": steps},
+                               steps, {"self_heal": False}, report, results, shots=False, heal_ok=False)
+        self.bs.follow_new_tabs = True
+        if not report["passed"]:
+            failed = results[-1]
+            raise ValueError(f"Не удалось воспроизвести сохранённый тест на шаге «{failed['description']}»: "
+                             f"{failed['error'][:200]}")
+        for step in steps:
             step["status"] = "passed"
             self.steps.append(step)
+        self.bs.new_tabs = 0
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
 
@@ -439,16 +671,19 @@ class StudioSession:
             parts.append(f"username (type {{{{username}}}}, its value is '{self.credentials['username']}')")
         if "password" in self.credentials:
             parts.append("password (type {{password}})")
+        if self.credentials.get("totp_secret"):
+            parts.append("the current one-time 2FA code (type {{totp}})")
         return ("Login credentials for this application are available: " + ", ".join(parts) +
                 ". Log in with them when the scenario or the site requires it.\n\n")
 
     def _mask(self, step: dict) -> None:
         """Recorded steps never contain real credentials, only placeholders."""
         password, username = self.credentials.get("password"), self.credentials.get("username")
-        if password:
-            step["value"] = (step.get("value") or "").replace(password, "{{password}}")
-            step["description"] = step["description"].replace(password, "***")
-            step["error"] = (step.get("error") or "").replace(password, "***")
+        for secret, placeholder in ((password, "{{password}}"), (self.credentials.get("totp_secret"), "***")):
+            if secret:
+                step["value"] = (step.get("value") or "").replace(secret, placeholder)
+                step["description"] = step["description"].replace(secret, "***")
+                step["error"] = (step.get("error") or "").replace(secret, "***")
         if username and step.get("value") == username:
             step["value"] = "{{username}}"
 
@@ -460,32 +695,92 @@ class StudioSession:
         text = await self.bs.describe()
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
-        if not self.screenshot:
+        if not self.screenshot or self.screenshots != "always":
             return [{"type": "text", "text": text}]
-        return [
-            {"type": "text", "text": text},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                         "data": self.screenshot}},
-        ]
+        return [{"type": "text", "text": text}, self._image()]
+
+    def _image(self) -> dict:
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": self.screenshot}}
+
+    async def _helper(self, name: str, inp: dict):
+        """A tool that informs the agent without becoming a step -> tool_result content."""
+        if name == "look":
+            self.screenshot = await self.bs.screenshot_b64()
+            if not self.screenshot:
+                return "No screenshot is available."
+            return [{"type": "text", "text": f"Screenshot of {self.bs.url}:"}, self._image()]
+        if name == "find_elements":
+            if not isinstance(self.bs, BrowserSession):
+                return "find_elements works with the built-in browser engine only."
+            found = self.bs.find_text(inp.get("text", ""))
+            if not found:
+                return f"No element of the page contains {inp.get('text', '')!r}."
+            return "Found (refs are valid until the next action):\n" + "\n".join(describe_element(e) for e in found)
+        return f"Unknown helper {name}"
+
+    def _invalid(self, call: dict) -> str:
+        """What is wrong with a proposed tool call ("" if nothing): unknown tool, bad arguments,
+        a ref that is not on the current page."""
+        problem = check_call(call, self.tools + (self.toolbox.tools if self.toolbox else []))
+        if problem:
+            return problem
+        for key in ("ref", "target_ref"):
+            ref = call["input"].get(key)
+            if ref and isinstance(self.bs, BrowserSession) and ref not in self.bs.elements:
+                return (f"There is no element with ref {ref!r} on the current page. Use a ref from the latest page "
+                        "state.")
+        if call["name"] == "upload_file" and call["input"].get("file") not in self.files:
+            return f"Unknown file {call['input'].get('file')!r}. Test files: {', '.join(self.files)}."
+        if call["name"] == "use_module" and call["input"].get("module") not in {m["id"] for m in self.modules}:
+            return "Unknown module id. Modules: " + ", ".join(f"{m['id']} ({m['name']})" for m in self.modules)
+        return ""
 
     async def _run_step(self, step: dict) -> None:
-        """Execute a step on the live page and record it."""
+        """Execute a step on the live page and record it. A tab opened by the step is followed
+        and recorded as a switch_tab step; a dialog nobody prepared for is reported to the agent."""
         self.status = "executing"
         self._mask(step)
-        if isinstance(self.bs, BrowserSession):
+        builtin = isinstance(self.bs, BrowserSession)
+        dialogs = len(self.bs.dialogs) if builtin else 0
+        if builtin:
             self.bs.step_index = len(self.steps)
+            self.bs.new_tabs = 0
         try:
-            await self.bs.execute(step)
+            if step["action"] == "use_module":
+                await self._run_module(step)
+            else:
+                await self.bs.execute(step)
             step["status"] = "passed"
         except Exception as e:
             step["status"] = "failed"
-            step["error"] = str(e).splitlines()[0][:300]
+            step["error"] = (self.bs.mask(str(e)) if builtin else str(e)).splitlines()[0][:300]
         # Assertions recorded without a value take the page's current one: mask it too.
         self._mask(step)
         step.pop("ref", None)
+        step.pop("target_ref", None)
         self.steps.append(step)
+        if builtin:
+            for d in self.bs.dialogs[dialogs:]:
+                if d["action"] == "dismissed":
+                    self.notes.append(f"A {d['type']} dialog appeared: {d['message'][:200]!r}. It was dismissed. If "
+                                      "the scenario needs to accept it, call handle_dialog and then repeat the step.")
+            if self.bs.new_tabs and step["status"] == "passed" and step["action"] != "switch_tab":
+                tab = new_step("switch_tab", "Перейти на открывшуюся вкладку", "last", source="system")
+                tab["status"] = "passed"
+                self.steps.append(tab)
+                self.bs.new_tabs = 0
+                self.notes.append("The step opened a new tab; the browser switched to it (recorded as a switch_tab "
+                                  "step).")
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
+
+    async def _run_module(self, step: dict) -> None:
+        """use_module while authoring: the module's steps run in place with its parameters."""
+        from . import runner
+        report = {"passed": True, "healed": 0, "proposals": []}
+        res = {"id": step["id"], "description": step["description"], "status": "passed", "error": ""}
+        await runner._module(self.bs, step, {"self_heal": False}, report, res, run_dir=None, prefix="", depth=0,
+                             stack=(self.test_id or "",), heal_ok=False)
 
     async def _execute_pending(self) -> None:
         p = self.pending
@@ -519,59 +814,62 @@ class StudioSession:
                 return
             self.status = "thinking"
             try:
-                resp = await llm.client().beta.messages.create(
-                    **llm.common_params(self.cfg),
-                    max_tokens=16000,
-                    # Breakpoint on the system prompt: tools + rules + skills are cached for the
-                    # whole session, even when context editing rewrites old turns.
-                    system=llm.system(self.system),
-                    tools=self.tools + (self.toolbox.tools if self.toolbox else []),
-                    tool_choice={"type": "auto", "disable_parallel_tool_use": True},
-                    messages=self.messages,
-                    **llm.auto_cache(),
-                    betas=[llm.FALLBACK_BETA, llm.CONTEXT_BETA],
-                    # Old screenshots/snapshots are useless once the page moved on.
-                    context_management={"edits": [{
-                        "type": "clear_tool_uses_20250919",
-                        "trigger": {"type": "input_tokens", "value": 40000},
-                        "keep": {"type": "tool_uses", "value": 4},
-                        "clear_at_least": {"type": "input_tokens", "value": 8000},
-                    }]},
-                )
-            except anthropic.APIError as e:
+                # Tools + rules + skills are cached for the whole session (Claude); old screenshots
+                # and snapshots are dropped: they are useless once the page moved on.
+                reply = await llm.chat(self.cfg, system=self.system,
+                                       tools=self.tools + (self.toolbox.tools if self.toolbox else []),
+                                       messages=self.messages, max_tokens=16000, one_tool=True, cache_all=True,
+                                       keep_images=KEEP_STATES, usage=self.usage, project_id=self.project_id,
+                                       stage_name="authoring")
+            except llm.ProviderError as e:
                 self.status = "error"
                 self.autopilot = False
                 self._say("system", llm.api_error_text(e))
                 # Put the unsent user turn back in the queue so Retry can resend it.
                 self.unanswered = self.messages.pop()["content"]
                 return
-            llm.track(resp, self.usage)
 
-            self.messages.append({"role": "assistant", "content": resp.content})
-            if resp.stop_reason == "refusal":
+            self.messages.append({"role": "assistant", "content": reply.content})
+            if reply.stop == "refusal":
                 self.status = "error"
                 self._say("system", "The model declined this request.")
                 return
 
-            for block in resp.content:
-                if block.type == "text":
-                    self._say("agent", block.text)
-            tool = next((b for b in resp.content if b.type == "tool_use"), None)
+            if reply.text:
+                self._say("agent", reply.text)
+            tool = next(iter(reply.tool_calls), None)
             if tool is None:
                 self.status = "idle"   # the agent is waiting for the user
                 return
-            inp = tool.input if isinstance(tool.input, dict) else json.loads(tool.input)
-            if self.toolbox and self.toolbox.owns(tool.name):
-                self._say("system", f"🔧 {tool.name.replace('__', ' → ', 1)}")
-                text, is_error = await self.toolbox.call(tool.name, inp)
-                self.unanswered.append({"type": "tool_result", "tool_use_id": tool.id,
+            tid, name, inp = tool["id"], tool["name"], tool.get("input")
+            problem = self._invalid(tool)
+            if problem:
+                self.repairs += 1
+                self.unanswered.append({"type": "tool_result", "tool_use_id": tid, "is_error": True,
+                                        "content": f"Invalid call, nothing was done: {problem}"})
+                if self.repairs > MAX_REPAIRS:
+                    self.status = "idle"
+                    self.autopilot = False
+                    self._say("system", f"Модель {MAX_REPAIRS + 1} раза подряд предложила некорректный шаг "
+                                        f"({problem}). Подскажите ей в чате или добавьте шаг вручную.")
+                    return
+                continue
+            self.repairs = 0
+            if self.toolbox and self.toolbox.owns(name):
+                self._say("system", f"🔧 {name.replace('__', ' → ', 1)}")
+                text, is_error = await self.toolbox.call(name, inp)
+                self.unanswered.append({"type": "tool_result", "tool_use_id": tid,
                                         "is_error": is_error, "content": text})
                 continue
-            if tool.name == "finish":
+            if name in HELPERS:
+                self.unanswered.append({"type": "tool_result", "tool_use_id": tid,
+                                        "content": await self._helper(name, inp)})
+                continue
+            if name == "finish":
                 if inp.get("status") == "passed" and not has_assertion(self.steps):
                     # A test without a passing assertion is green whatever the app does.
                     self.unanswered.append({
-                        "type": "tool_result", "tool_use_id": tool.id, "is_error": True,
+                        "type": "tool_result", "tool_use_id": tid, "is_error": True,
                         "content": "Not finished: the test has no passing assertion of the result yet. Add an "
                                    "assertion of the scenario's expected result, then call finish again.",
                     })
@@ -579,13 +877,13 @@ class StudioSession:
                 self.finish_status = inp.get("status", "")
                 self.summary = f"[{inp.get('status')}] {inp.get('summary', '')}"
                 self._say("agent", self.summary)
-                self.unanswered.append({"type": "tool_result", "tool_use_id": tool.id,
+                self.unanswered.append({"type": "tool_result", "tool_use_id": tid,
                                         "content": "Authoring finished."})
                 self.status = "done"
                 self.autopilot = False
                 return
-            step = tool_to_step(tool.name, inp)
-            self.pending = {"id": tool.id, "name": tool.name, "input": inp, "step": step}
+            step = tool_to_step(name, inp)
+            self.pending = {"id": tid, "name": name, "input": inp, "step": step}
             self.status = "awaiting_approval"
             return
         self.status = "idle"

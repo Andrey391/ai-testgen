@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse
 
-from . import projects
+from . import fs, projects
 
 SECRET_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key",
                   "x-auth-token", "x-csrf-token", "x-xsrf-token"}
@@ -166,28 +166,26 @@ def from_har(har: dict) -> list[dict]:
 def save(pid: str, tid: str, entries: list[dict], app_url: str = "") -> None:
     f = _file(pid, tid)
     if not entries:
-        f.unlink(missing_ok=True)
+        fs.unlink(f)
         return
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(to_har(entries, app_url), ensure_ascii=False, indent=1), "utf-8")
+    fs.write_json(f, to_har(entries, app_url), indent=1)
 
 
 def load(pid: str, tid: str) -> list[dict]:
-    f = _file(pid, tid)
-    return from_har(json.loads(f.read_text("utf-8"))) if f.exists() else []
+    har = fs.read_json(_file(pid, tid))
+    return from_har(har) if har else []
 
 
 def exists(pid: str, tid: str) -> bool:
-    return _file(pid, tid).exists()
+    return fs.is_file(_file(pid, tid))
 
 
 def load_har(pid: str, tid: str) -> dict | None:
-    f = _file(pid, tid)
-    return json.loads(f.read_text("utf-8")) if f.exists() else None
+    return fs.read_json(_file(pid, tid))
 
 
 def delete(pid: str, tid: str) -> None:
-    _file(pid, tid).unlink(missing_ok=True)
+    fs.unlink(_file(pid, tid))
 
 
 # ---------- mocks ----------

@@ -4,26 +4,35 @@ pytest bundle, and API tests from the traffic recorded while authoring.
 Exported UI tests keep the studio's robustness: an element step uses up to
 MAX_ALTERNATIVES of its locator candidates joined with `.or_()`, so a changed
 test id or text does not break the test while another candidate still matches.
+Elements inside iframes are reached with frame_locator().
 
 Everything that varies between machines comes from fixtures, defined in the file
 itself (single test) or in conftest.py (bundle):
     app_url              TESTGEN_BASE_URL, default: the recorded application URL
-    credentials          TESTGEN_USERNAME / TESTGEN_PASSWORD, never the real values
+    credentials          TESTGEN_USERNAME / TESTGEN_PASSWORD / TESTGEN_TOTP_SECRET, never the real values
     testdata             {{unique}}, {{faker.email}}... generated like in the studio (testdata.py)
     console_errors       for "no console errors" checks
     check_accessibility  axe-core, for accessibility checks
+    data                 the test's "before" requests (their saved values) and "after" cleanup
+With a login test in the project, the bundle's conftest.py logs in once per session
+(browser_context_args with storage_state); modules become helper functions; test
+files (upload_file) go to tests/fixtures/.
 """
 from __future__ import annotations
 
 import inspect
 import json
 import re
+from typing import Callable
 from urllib.parse import parse_qsl, urlparse
 
-from . import checks, testdata
+from . import checks, steps as steps_mod, testdata
 from .testdata import CREDENTIALS, PLACEHOLDER
 
 MAX_ALTERNATIVES = 4
+NO_ELEMENT = ("navigate", "press_key", "scroll", "wait", "assert_text_present", "assert_url_contains",
+              "assert_no_console_errors", "assert_accessible", "mock_route", "switch_tab", "handle_dialog",
+              "assert_download", "read_email", "use_module", "api_request", "assert_screenshot")
 
 
 def _py(s) -> str:
@@ -35,39 +44,77 @@ def _slug(s: str) -> str:
 
 
 def _val(s: str) -> str:
-    """Step value as a Python expression; credentials and test data come from fixtures."""
+    """Step value as a Python expression; credentials, test data, run variables and module
+    parameters come from fixtures and arguments."""
     parts = []
     for i, chunk in enumerate(PLACEHOLDER.split(s or "")):
         if i % 2:
-            parts.append(f"credentials[{chunk!r}]" if chunk in CREDENTIALS else f"testdata[{chunk!r}]")
+            if chunk in CREDENTIALS:
+                parts.append(f"credentials[{chunk!r}]")
+            elif chunk.startswith("vars."):
+                parts.append(f"str(data[{chunk[5:]!r}])")
+            elif chunk.startswith("params."):
+                parts.append(f"str(params[{chunk[7:]!r}])")
+            else:
+                parts.append(f"testdata[{chunk!r}]")
         elif chunk:
             parts.append(_py(chunk))
     return " + ".join(parts) or "''"
 
 
-def _one(c: dict) -> str:
+def _value_obj(v) -> str:
+    """A JSON value (request body) as Python code with placeholders resolved."""
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{k!r}: {_value_obj(x)}" for k, x in v.items()) + "}"
+    if isinstance(v, list):
+        return "[" + ", ".join(_value_obj(x) for x in v) + "]"
+    if isinstance(v, str):
+        return _val(v)
+    return repr(v)
+
+
+def _needs_of(value: str, needs: set[str]) -> None:
+    for key in PLACEHOLDER.findall(value or ""):
+        if key in CREDENTIALS:
+            needs.add("credentials")
+        elif key.startswith("vars."):
+            needs.add("data")
+        elif not key.startswith("params."):
+            needs.add("testdata")
+
+
+def _one(c: dict, root: str = "page") -> str:
     k = c["kind"]
     if k == "testid":
-        return f"page.get_by_test_id({_py(c['value'])})"
+        return f"{root}.get_by_test_id({_py(c['value'])})"
     if k == "role":
-        return f"page.get_by_role({_py(c['role'])}, name={_py(c['name'])}, exact=True)"
+        return f"{root}.get_by_role({_py(c['role'])}, name={_py(c['name'])}, exact=True)"
     if k == "label":
-        return f"page.get_by_label({_py(c['value'])}, exact=True)"
+        return f"{root}.get_by_label({_py(c['value'])}, exact=True)"
     if k == "placeholder":
-        return f"page.get_by_placeholder({_py(c['value'])}, exact=True)"
+        return f"{root}.get_by_placeholder({_py(c['value'])}, exact=True)"
     if k == "text":
-        return f"page.get_by_text({_py(c['value'])}, exact=True)"
-    return f"page.locator({_py(c['value'])})"
+        return f"{root}.get_by_text({_py(c['value'])}, exact=True)"
+    return f"{root}.locator({_py(c['value'])})"
+
+
+def _frame_root(frame: list[str] | None) -> str:
+    return "page" + "".join(f".frame_locator({_py(sel)})" for sel in frame or [])
 
 
 def _locator_expr(locator: list[dict], alternatives: bool = True) -> str:
-    """The step's locator; with `alternatives` the other candidates are fallbacks via .or_()."""
+    """The step's locator; with `alternatives` the other candidates are fallbacks via .or_().
+    Inside a frame the fallbacks are chained on the page and entered through the frame once."""
     if not locator:
         return "page.locator('body')"
-    exprs = [_one(c) for c in locator[:MAX_ALTERNATIVES if alternatives else 1]]
-    if len(exprs) == 1:
-        return exprs[0]
-    return "(" + exprs[0] + "".join(f"\n               .or_({e})" for e in exprs[1:]) + ")"
+    frame = locator[0].get("frame") or []
+    cands = [c for c in locator if (c.get("frame") or []) == frame][:MAX_ALTERNATIVES if alternatives else 1]
+    if len(cands) == 1:
+        return _one(cands[0], _frame_root(frame))
+    chain = _one(cands[0]) + "".join(f"\n               .or_({_one(c)})" for c in cands[1:])
+    if not frame:
+        return f"({chain})"
+    return f"{_frame_root(frame)}.locator(\n               {chain})"
 
 
 def _origin(url: str) -> str:
@@ -75,10 +122,21 @@ def _origin(url: str) -> str:
     return f"{u.scheme}://{u.netloc}" if u.netloc else ""
 
 
-# ---------- fixtures ----------
+def _url_expr(v: str, app_url: str, needs: set[str]) -> str:
+    if app_url and v.startswith(app_url):
+        needs.add("app_url")
+        rest = v[len(app_url):]
+        return "app_url" + (f" + {_val(rest)}" if rest else "")
+    if v.startswith("/"):
+        needs.add("app_url")
+        return f"app_url + {_val(v)}"
+    return _val(v)
+
+
+# ---------- helpers embedded into the exported code ----------
 
 def _fixture_app_url(default: str) -> str:
-    return f'''@pytest.fixture
+    return f'''@pytest.fixture(scope="session")
 def app_url() -> str:
     """The application under test; TESTGEN_BASE_URL points the tests at another stand."""
     return os.environ.get("TESTGEN_BASE_URL", {default!r}).rstrip("/")
@@ -87,15 +145,17 @@ def app_url() -> str:
 
 FIXTURE_CREDENTIALS = '''class _Credentials(dict):
     def __missing__(self, key):
+        if key == "totp":
+            return totp(self["totp_secret"])
         name = f"TESTGEN_{key.upper()}"
         if not os.environ.get(name):
             pytest.fail(f"Set the {name} environment variable (login for the application)")
         return os.environ[name]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def credentials() -> dict:
-    """Login for the application: TESTGEN_USERNAME / TESTGEN_PASSWORD."""
+    """Login for the application: TESTGEN_USERNAME / TESTGEN_PASSWORD (and TESTGEN_TOTP_SECRET for 2FA)."""
     return _Credentials()
 '''
 
@@ -147,8 +207,90 @@ def check_accessibility(page):
     return check
 '''
 
+HELPER_SWITCH_TAB = '''def _switch_tab(page, which: str = "last"):
+    """The tab to go on with: "last", "first", a number (1 = first) or text of its URL."""
+    page.wait_for_timeout(300)
+    pages = [p for p in page.context.pages if not p.is_closed()]
+    if which == "last":
+        target = pages[-1]
+    elif which == "first":
+        target = pages[0]
+    elif which.isdigit():
+        target = pages[int(which) - 1]
+    else:
+        target = next(p for p in pages if which in p.url)
+    target.bring_to_front()
+    return target
+'''
+
+HELPER_DIALOG = '''def _answer_dialog(dialog, action: str, prompt_text: str, seen: list) -> None:
+    seen.append(dialog.message)
+    if action == "accept":
+        dialog.accept(prompt_text) if dialog.type == "prompt" else dialog.accept()
+    else:
+        dialog.dismiss()
+'''
+
+HELPER_API = '''def _api(page, method: str, url: str, expect=None, **kwargs):
+    """A request through the page's context (its cookies): the test's data preparation."""
+    r = page.request.fetch(url, method=method, **kwargs)
+    ok = r.status == expect if expect else 200 <= r.status < 300
+    assert ok, f"{method} {url} -> {r.status}"
+    return r
+'''
+
+HELPER_EMAIL = '''def _read_email(to: str = "", subject: str = "", pattern: str = r"\\b(\\d{4,8})\\b", timeout: float = 60) -> str:
+    """A code from the newest matching letter of the test mailbox: Mailpit (TESTGEN_MAILPIT_URL) or IMAP
+    (TESTGEN_IMAP_HOST, TESTGEN_IMAP_USER, TESTGEN_IMAP_PASSWORD)."""
+    import email as email_lib, html, imaplib, time as time_lib, urllib.parse, urllib.request
+    deadline = time_lib.monotonic() + timeout
+    while True:
+        texts = []
+        if os.environ.get("TESTGEN_MAILPIT_URL"):
+            base = os.environ["TESTGEN_MAILPIT_URL"].rstrip("/")
+            query = " ".join(filter(None, [f'to:"{to}"' if to else "", f'subject:"{subject}"' if subject else ""]))
+            found = json.load(urllib.request.urlopen(f"{base}/api/v1/search?" + urllib.parse.urlencode({"query": query or "*"})))
+            for m in (found.get("messages") or [])[:5]:
+                body = json.load(urllib.request.urlopen(f"{base}/api/v1/message/{m['ID']}"))
+                texts.append((body.get("Text") or "") + html.unescape(re.sub(r"<[^>]+>", " ", body.get("HTML") or "")))
+        else:
+            box = imaplib.IMAP4_SSL(os.environ["TESTGEN_IMAP_HOST"])
+            box.login(os.environ["TESTGEN_IMAP_USER"], os.environ["TESTGEN_IMAP_PASSWORD"])
+            box.select("INBOX", readonly=True)
+            ids = box.search(None, *(["TO", f'"{to}"'] if to else ["ALL"]))[1][0].split()[-5:]
+            for i in reversed(ids):
+                msg = email_lib.message_from_bytes(box.fetch(i, "(BODY.PEEK[])")[1][0][1])
+                if subject and subject.lower() not in str(msg.get("Subject", "")).lower():
+                    continue
+                for part in msg.walk():
+                    if part.get_content_type() in ("text/plain", "text/html"):
+                        texts.append((part.get_payload(decode=True) or b"").decode("utf-8", "replace"))
+            box.logout()
+        for text in texts:
+            m = re.search(pattern, text)
+            if m:
+                return m.group(1) if m.groups() else m.group(0)
+        assert time_lib.monotonic() < deadline, f"No e-mail with a code for {to or subject}"
+        time_lib.sleep(2)
+'''
+
 FIXTURE_IMPORTS = {"testdata": ["datetime", "os", "random", "time"], "check_accessibility": ["os", "urllib.request"],
-                   "credentials": ["os"], "app_url": ["os"], "console_errors": []}
+                   "credentials": ["os", "base64", "hashlib", "hmac", "re", "struct", "time"], "app_url": ["os"],
+                   "console_errors": [], "data": ["json"], "read_email": ["json", "os", "re"],
+                   "files": ["pathlib"]}
+
+
+class _Ctx:
+    """What the exported code needs besides the test body: fixtures, helpers, modules, files."""
+
+    def __init__(self, app_url: str, a11y_impact: str, lookup: Callable[[str], dict | None] | None = None,
+                 testit: bool = False):
+        self.app_url, self.a11y = app_url, a11y_impact
+        self.lookup = lookup or (lambda _id: None)
+        self.testit = testit            # testit-adapter-pytest decorators and steps: results go to Test IT
+        self.helpers: set[str] = set()
+        self.modules: dict[str, tuple[str, str]] = {}     # module test id -> (function name, code)
+        self.files: set[str] = set()
 
 
 def _fixtures_code(names: set[str], app_url: str) -> str:
@@ -156,6 +298,7 @@ def _fixtures_code(names: set[str], app_url: str) -> str:
     if "app_url" in names:
         parts.append(_fixture_app_url(app_url))
     if "credentials" in names:
+        parts.append(inspect.getsource(testdata.totp).strip() + "\n")
         parts.append(FIXTURE_CREDENTIALS)
     if "testdata" in names:
         parts.append(_fixture_testdata())
@@ -166,69 +309,128 @@ def _fixtures_code(names: set[str], app_url: str) -> str:
     return "\n\n".join(parts)
 
 
+def _helpers_code(ctx: _Ctx) -> str:
+    parts = []
+    if "switch_tab" in ctx.helpers:
+        parts.append(HELPER_SWITCH_TAB)
+    if "dialog" in ctx.helpers:
+        parts.append(HELPER_DIALOG)
+    if "api" in ctx.helpers:
+        parts.append(HELPER_API)
+        parts.append(inspect.getsource(steps_mod.json_path).replace("def json_path", "def _json_path") + "\n")
+    if "email" in ctx.helpers:
+        parts.append(HELPER_EMAIL)
+    if "files" in ctx.helpers:
+        parts.append('FILES = pathlib.Path(__file__).parent / "fixtures"     # files for upload steps\n')
+    return "\n\n".join(parts)
+
+
 # ---------- UI tests ----------
 
-def _body(test: dict, app_url: str, a11y_impact: str = "serious") -> tuple[list[str], set[str]]:
-    """Lines of the test function body and the fixtures it needs."""
-    out, needs = [], set()
-    for s in test["steps"]:
+def _body(steps: list[dict], ctx: _Ctx, needs: set[str], indent: str = "    ", module: bool = False) -> list[str]:
+    """Lines of a test (or module) body; `needs` collects the fixtures it uses."""
+    out: list[str] = []
+    pending_dialog_expect = ""
+    app_url = ctx.app_url
+    for i, s in enumerate(steps):
         a, v = s["action"], s.get("value", "")
-        for key in PLACEHOLDER.findall(v or ""):
-            needs.add("credentials" if key in CREDENTIALS else "testdata")
-        out.append(f"    # {s['description']}")
-        element = a not in ("navigate", "press_key", "scroll", "wait", "assert_text_present", "assert_url_contains",
-                            "assert_no_console_errors", "assert_accessible", "mock_route") \
-            and not (a == "assert_screenshot")
-        if element:
+        if a not in ("handle_dialog", "assert_download", "api_request", "read_email", "use_module", "mock_route"):
+            _needs_of(v, needs)
+        lines: list[str] = [f"# {s['description']}"]
+        if a not in NO_ELEMENT:
             alternatives = a != "assert_count"   # .or_() would add up the counts of the alternatives
-            out.append(f"    element = {_locator_expr(s.get('locator', []), alternatives)}")
+            lines.append(f"element = {_locator_expr(s.get('locator', []), alternatives)}")
         if a == "navigate":
-            if app_url and v.startswith(app_url):
-                needs.add("app_url")
-                out.append(f"    page.goto(app_url + {_py(v[len(app_url):])})")
-            else:
-                out.append(f"    page.goto({_val(v)})")
+            lines.append(f"page.goto({_url_expr(v, app_url, needs)})")
         elif a == "click":
-            out.append("    element.first.click()")
+            lines.append("element.first.click()")
+        elif a == "double_click":
+            lines.append("element.first.dblclick()")
         elif a == "fill":
-            out.append(f"    element.first.fill({_val(v)})")
+            lines.append(f"element.first.fill({_val(v)})")
             if s.get("press_enter"):
-                out.append("    element.first.press('Enter')")
+                lines.append("element.first.press('Enter')")
         elif a == "select_option":
-            out.append(f"    element.first.select_option(label={_val(v)})")
+            lines.append(f"element.first.select_option(label={_val(v)})")
         elif a == "hover":
-            out.append("    element.first.hover()")
+            lines.append("element.first.hover()")
+        elif a == "upload_file":
+            ctx.helpers.add("files")
+            ctx.files.add(v)
+            needs.add("files")
+            lines.append(f"element.first.set_input_files(FILES / {_py(v)})")
+        elif a == "drag_to":
+            lines.append(f"element.first.drag_to({_locator_expr(s.get('target') or [])}.first)")
         elif a == "press_key":
-            out.append(f"    page.keyboard.press({_py(v)})")
+            lines.append(f"page.keyboard.press({_py(v)})")
         elif a == "scroll":
-            out.append(f"    page.mouse.wheel(0, {-700 if v == 'up' else 700})")
+            lines.append(f"page.mouse.wheel(0, {-700 if v == 'up' else 700})")
         elif a == "wait":
-            out.append(f"    page.wait_for_timeout({int(float(v or 1) * 1000)})")
+            lines.append(f"page.wait_for_timeout({int(float(v or 1) * 1000)})")
+        elif a == "switch_tab":
+            ctx.helpers.add("switch_tab")
+            lines.append(f"page = _switch_tab(page, {_py(v or 'last')})")
+        elif a == "handle_dialog":
+            d = json.loads(v or "{}")
+            ctx.helpers.add("dialog")
+            needs.add("dialogs")
+            _needs_of(d.get("prompt_text") or "", needs)
+            lines.append(f"page.once('dialog', lambda dialog: _answer_dialog(dialog, {_py(d.get('action', 'accept'))}, "
+                         f"{_val(d.get('prompt_text') or '')}, dialogs))")
+            pending_dialog_expect = d.get("expect") or ""
+            out += [indent + ln if ln else "" for ln in lines]
+            continue
         elif a == "assert_visible":
-            out.append("    expect(element.first).to_be_visible()")
+            lines.append("expect(element.first).to_be_visible()")
         elif a == "assert_text_present":
-            out.append(f"    expect(page.get_by_text({_val(v)}).first).to_be_visible()")
+            lines.append(f"expect(page.get_by_text({_val(v)}).first).to_be_visible()")
         elif a == "assert_url_contains":
-            out.append(f"    expect(page).to_have_url(re.compile(re.escape({_val(v)})))")
+            lines.append(f"expect(page).to_have_url(re.compile(re.escape({_val(v)})))")
+            needs.add("re")
         elif a == "assert_value":
-            out.append(f"    expect(element.first).to_have_value({_val(v)})")
+            lines.append(f"expect(element.first).to_have_value({_val(v)})")
         elif a == "assert_checked":
-            out.append(f"    expect(element.first).to_be_checked(checked={_flag(v)})")
+            lines.append(f"expect(element.first).to_be_checked(checked={_flag(v)})")
         elif a == "assert_enabled":
-            out.append(f"    expect(element.first).to_be_enabled(enabled={_flag(v)})")
+            lines.append(f"expect(element.first).to_be_enabled(enabled={_flag(v)})")
         elif a == "assert_count":
-            out.append(f"    expect(element).to_have_count({int(v or 0)})")
+            lines.append(f"expect(element).to_have_count({int(v or 0)})")
         elif a == "assert_element_text":
-            out.append(f"    expect(element.first).to_contain_text({_val(v)})")
+            lines.append(f"expect(element.first).to_contain_text({_val(v)})")
         elif a == "assert_no_console_errors":
             needs.add("console_errors")
-            out.append("    new_errors, checked = console_errors[checked:], len(console_errors)")
-            out.append('    assert not new_errors, f"Console errors: {new_errors}"')
+            lines.append("new_errors, checked = console_errors[checked:], len(console_errors)")
+            lines.append('assert not new_errors, f"Console errors: {new_errors}"')
         elif a == "assert_accessible":
             needs.add("check_accessibility")
-            out.append(f"    check_accessibility({a11y_impact!r})")
+            lines.append(f"check_accessibility({ctx.a11y!r})")
         elif a == "assert_screenshot":
-            out.append("    # Visual check against a baseline image: runs in AI Test Generator only.")
+            lines.append("# Visual check against a baseline image: runs in AI Test Generator only.")
+        elif a == "assert_download":
+            d = json.loads(v or "{}")
+            lines.append("download = download_info.value")
+            lines.append(f"assert fnmatch.fnmatch(download.suggested_filename.lower(), {_py((d.get('name') or '*').lower())}), "
+                         "download.suggested_filename")
+            if d.get("min_bytes"):
+                lines.append(f"assert os.path.getsize(download.path()) >= {int(d['min_bytes'])}")
+            needs.add("fnmatch")
+        elif a == "read_email":
+            d = json.loads(v or "{}")
+            ctx.helpers.add("email")
+            needs.add("data")
+            _needs_of((d.get("to") or "") + (d.get("subject") or ""), needs)
+            lines.append(f"data[{_py(d.get('save') or 'code')}] = _read_email({_val(d.get('to') or '')}, "
+                         f"{_val(d.get('subject') or '')}"
+                         + (f", {_py(d['pattern'])}" if d.get("pattern") else "") + ")")
+        elif a == "use_module":
+            d = json.loads(v or "{}")
+            fn = _module_function(d.get("module", ""), ctx, needs)
+            args = ", ".join(f"{k}={_val(str(x))}" for k, x in (d.get("params") or {}).items())
+            for x in (d.get("params") or {}).values():
+                _needs_of(str(x), needs)
+            needs.update({"app_url", "credentials", "testdata", "data"})
+            lines.append(f"page = {fn}(page, app_url, credentials, testdata, data{', ' + args if args else ''})"
+                         if fn else "# (the module was deleted)")
         elif a == "mock_route":
             spec = json.loads(v or "{}")
             fulfill = (f"route.fulfill(status={int(spec.get('status') or 200)}, "
@@ -236,83 +438,286 @@ def _body(test: dict, app_url: str, a11y_impact: str = "serious") -> tuple[list[
                        f"body={_py(spec.get('body') or '')})")
             method = (spec.get("method") or "").upper()
             handler = f"{fulfill} if route.request.method == {method!r} else route.fallback()" if method else fulfill
-            out.append(f"    page.route({_py(spec.get('url', '**'))}, lambda route: {handler})")
-    if "console_errors" in needs:
-        out.insert(0, "    checked = 0")
-    return out, needs
+            lines.append(f"page.route({_py(spec.get('url', '**'))}, lambda route: {handler})")
+        if i + 1 < len(steps) and steps[i + 1]["action"] == "assert_download":
+            # The download is caught around the step that starts it.
+            lines = [lines[0], "with page.expect_download() as download_info:"] + ["    " + ln for ln in lines[1:]]
+        if pending_dialog_expect and a != "handle_dialog":
+            lines.append(f"assert dialogs and {_py(pending_dialog_expect)} in dialogs[-1], f\"Dialog: {{dialogs}}\"")
+            pending_dialog_expect = ""
+        if ctx.testit and not module and len(lines) > 1:
+            lines = [lines[0], f"with testit.step({_py(s['description'][:250])}):"] + ["    " + ln for ln in lines[1:]]
+        out += [indent + ln for ln in lines]
+    return out
 
 
 def _flag(v: str) -> bool:
     return str(v).strip().lower() not in ("false", "0", "no", "off", "нет")
 
 
-def _test_function(test: dict, app_url: str, a11y_impact: str) -> tuple[str, set[str]]:
-    body, needs = _body(test, app_url, a11y_impact)
-    args = ", ".join(["page: Page"] + sorted(needs))
+def _module_function(module_id: str, ctx: _Ctx, needs: set[str]) -> str:
+    """A module (a test used as a step) becomes a helper function; its name is returned."""
+    if module_id in ctx.modules:
+        return ctx.modules[module_id][0]
+    m = ctx.lookup(module_id)
+    if not m:
+        return ""
+    name = f"module_{_slug(m['name'])}"
+    ctx.modules[module_id] = (name, "")       # recursion guard
+    inner: set[str] = set()
+    body = _body(m["steps"], ctx, inner, module=True)
+    prelude = ["    checked = 0"] if "console_errors" in inner else []
+    prelude += ["    dialogs = []"] if "dialogs" in inner else []
+    code = "\n".join([f"def {name}(page, app_url, credentials, testdata, data, **params):",
+                      f'    """Модуль «{m["name"]}»."""'] + prelude + body + ["    return page"]) + "\n"
+    ctx.modules[module_id] = (name, code)
+    needs.update(inner - {"console_errors", "check_accessibility", "dialogs"})
+    return name
+
+
+def _data_fixture(test: dict, ctx: _Ctx, needs: set[str]) -> str:
+    """The test's before / after requests as a pytest fixture with yield: after always runs."""
+    before, after = test.get("before") or [], test.get("after") or []
+    if not before and not after:
+        return ""
+    ctx.helpers.add("api")
+    inner: set[str] = {"app_url"}
+
+    def call(step: dict) -> tuple[str, dict]:
+        s = json.loads(step.get("value") or "{}")
+        for text in (s.get("url") or "", json.dumps(s.get("body") or "", ensure_ascii=False),
+                     json.dumps(s.get("headers") or {}, ensure_ascii=False)):
+            _needs_of(text, inner)
+        url = _url_expr(s.get("url") or "/", ctx.app_url, inner)
+        if not url.startswith("app_url"):
+            url = f"app_url + {url}" if not (s.get("url") or "").startswith("http") else url
+        kw = []
+        if s.get("headers"):
+            kw.append(f"headers={_value_obj(s['headers'])}")
+        if s.get("body") not in (None, ""):
+            kw.append(f"data={_value_obj(s['body'])}")
+        if s.get("expect_status"):
+            kw.append(f"expect={int(s['expect_status'])}")
+        return f"_api(page, {_py((s.get('method') or 'GET').upper())}, {url}{', ' + ', '.join(kw) if kw else ''})", s
+
+    calls = [call(step) for step in before + after]      # collects the fixtures the requests use
+    args = ", ".join(["page", "app_url"] + sorted(inner & {"credentials", "testdata"}))
+    lines = ["@pytest.fixture", f"def data({args}):",
+             '    """Подготовка данных (before) и очистка (after): очистка выполняется всегда."""', "    data = {}"]
+    del calls
+    for step in before:
+        expr, s = call(step)
+        lines.append(f"    # {step.get('description', '')}")
+        if s.get("save"):
+            lines.append(f"    r = {expr}")
+            lines += [f"    data[{_py(k)}] = _json_path(r.json(), {_py(p)})" for k, p in s["save"].items()]
+        else:
+            lines.append(f"    {expr}")
+    lines.append("    yield data")
+    if after:
+        lines.append("    errors = []")
+        for step in after:
+            expr, _ = call(step)
+            lines += [f"    # {step.get('description', '')}", "    try:", f"        {expr}",
+                      "    except Exception as e:", "        errors.append(e)"]
+        lines.append('    assert not errors, f"Cleanup failed: {errors}"')
+    needs.update(inner | {"data_fixture"})
+    return "\n".join(lines) + "\n"
+
+
+def _test_function(test: dict, ctx: _Ctx) -> tuple[str, set[str], str]:
+    """(the test function, fixtures it needs, its data fixture)."""
+    needs: set[str] = set()
+    data_fixture = _data_fixture(test, ctx, needs)
+    body = _body(test["steps"], ctx, needs)
+    prelude = []
+    if "console_errors" in needs:
+        prelude.append("    checked = 0")
+    if "dialogs" in needs:
+        prelude.append("    dialogs = []")
+    if "data" in needs and "data_fixture" not in needs:
+        prelude.append("    data = {}")
+    fixtures = sorted(needs & {"app_url", "credentials", "testdata", "console_errors", "check_accessibility"}
+                      | ({"data"} if "data_fixture" in needs else set()))
+    args = ", ".join(["page: Page"] + fixtures)
     head = [f"def test_{_slug(test['name'])}({args}) -> None:",
             f'    """{test["name"]}"""' if '"""' not in test["name"] else ""]
-    return "\n".join([h for h in head if h] + (body or ["    pass"])) + "\n", needs
+    if ctx.testit:
+        # testit-adapter-pytest: the autotest is matched by externalId, linked to its manual case.
+        work_item = ((test.get("external") or {}).get("testit") or {}).get("work_item_id")
+        head = ([f"@testit.externalId({_py(test.get('id') or _slug(test['name']))})",
+                 f"@testit.displayName({_py(test.get('display_name') or test['name'])})",
+                 f"@testit.title({_py(test.get('display_name') or test['name'])})"]
+                + ([f"@testit.workItemIds({_py(str(work_item))})"] if work_item else [])
+                + ([f"@testit.labels({', '.join(_py(t) for t in test.get('tags') or [])})"] if test.get("tags") else [])
+                + head)
+        needs.add("testit")
+    return "\n".join([h for h in head if h] + prelude + (body or ["    pass"])) + "\n", needs, data_fixture
 
 
-def _header(title: str, scenario: str = "") -> list[str]:
-    return ['"""Generated by AI Test Generator.', title] + ([f"Scenario: {scenario}"] if scenario else []) + [
+def _header(title: str, scenario: str = "", files: set[str] | None = None) -> list[str]:
+    lines = ['"""Generated by AI Test Generator.', title] + ([f"Scenario: {scenario}"] if scenario else []) + [
         "", "Run: pip install pytest pytest-playwright faker && pytest <this file>",
-        "Environment: TESTGEN_BASE_URL (application), TESTGEN_USERNAME / TESTGEN_PASSWORD (login).", '"""']
+        "Environment: TESTGEN_BASE_URL (application), TESTGEN_USERNAME / TESTGEN_PASSWORD (login)."]
+    if files:
+        lines.append("Files for upload steps go to fixtures/ next to this file: " + ", ".join(sorted(files)) + ".")
+    return lines + ['"""']
 
 
 def _imports(needs: set[str], code: str) -> list[str]:
     mods = {"os"} if re.search(r"\bos\.", code) else set()
-    if re.search(r"\bre\.", code):
-        mods.add("re")
+    for m in ("re", "json", "fnmatch"):
+        if re.search(rf"\b{m}\.", code):
+            mods.add(m)
     for n in needs:
         mods.update(FIXTURE_IMPORTS.get(n, []))
+    if "_read_email" in code:
+        mods.update(FIXTURE_IMPORTS["read_email"])
+    if "FILES = " in code:
+        mods.add("pathlib")
+    if "_json_path" in code:
+        mods.add("re")
     lines = [f"import {m}" for m in sorted(mods)]
-    return lines + ["", "import pytest", "from playwright.sync_api import Page, expect"]
+    return lines + ["", "import pytest"] + (["import testit"] if "testit." in code else []) + \
+        ["from playwright.sync_api import Page, expect"]
 
 
-def to_playwright(test: dict, a11y_impact: str = "serious") -> str:
-    """A self-contained pytest-playwright file for one test."""
+def _context_args(run_cfg: dict | None) -> dict:
+    run_cfg = run_cfg or {}
+    out = {}
+    if run_cfg.get("locale"):
+        out["locale"] = run_cfg["locale"]
+    if run_cfg.get("timezone"):
+        out["timezone_id"] = run_cfg["timezone"]
+    return out
+
+
+def _login_block(login: dict | None, ctx: _Ctx, run_cfg: dict | None) -> tuple[str, set[str]]:
+    """Log in once per session: the login test's steps, then storage_state for every test's context."""
+    extra = _context_args(run_cfg)
+    if not login:
+        if not extra:
+            return "", set()
+        return ('@pytest.fixture(scope="session")\ndef browser_context_args(browser_context_args):\n'
+                f"    return {{**browser_context_args, **{extra!r}}}\n"), set()
+    needs: set[str] = set()
+    body = _body(login["steps"], ctx, needs)
+    fn = ["def _login(page, app_url, credentials, testdata, data):",
+          f'    """Вход: шаги теста «{login["name"]}»."""'] + \
+        (["    checked = 0"] if "console_errors" in needs else []) + \
+        (["    dialogs = []"] if "dialogs" in needs else []) + body
+    fixture = f'''
+
+@pytest.fixture(scope="session")
+def browser_context_args(browser_context_args, browser, app_url, credentials, tmp_path_factory):
+    """Log in once per session (the login test), then every test starts logged in."""
+    args = {{**browser_context_args, **{extra!r}}}
+    context = browser.new_context(**args)
+    _login(context.new_page(), app_url, credentials, DataValues(), {{}})
+    path = tmp_path_factory.mktemp("login") / "state.json"
+    context.storage_state(path=str(path))
+    context.close()
+    return {{**args, "storage_state": str(path)}}
+'''
+    return "\n".join(fn) + "\n" + fixture, needs | {"app_url", "credentials", "testdata"}
+
+
+def _login_override(run_cfg: dict | None) -> str:
+    return ('@pytest.fixture\ndef browser_context_args():\n    """The login test itself starts logged out."""\n'
+            f"    return {_context_args(run_cfg)!r}\n")
+
+
+def to_playwright(test: dict, a11y_impact: str = "serious", lookup: Callable[[str], dict | None] | None = None,
+                  login: dict | None = None, run_cfg: dict | None = None, testit: bool = False) -> str:
+    """A self-contained pytest-playwright file for one test. `lookup(test_id)` finds modules;
+    `login`: the project's login test (log in once); `run_cfg`: locale and time zone;
+    `testit`: decorators of testit-adapter-pytest (pytest --testit sends results to Test IT)."""
     app_url = _origin(test.get("url", ""))
-    fn, needs = _test_function(test, app_url, a11y_impact)
-    fixtures = _fixtures_code(needs, app_url)
-    code = fixtures + fn
+    ctx = _Ctx(app_url, a11y_impact, lookup, testit)
+    is_login = login is not None and login.get("id") == test.get("id")
+    login_code, login_needs = _login_block(None if is_login else login, ctx, run_cfg)
+    fn, needs, data_fixture = _test_function(test, ctx)
+    all_needs = needs | login_needs
+    modules = "\n\n".join(code for _, code in ctx.modules.values())
+    fixtures = _fixtures_code(all_needs, app_url)
+    helpers = _helpers_code(ctx)
+    blocks = [b for b in (fixtures, helpers, modules, login_code, _login_override(run_cfg) if is_login else "",
+                          data_fixture) if b]
+    code = "\n\n".join(blocks + [fn])
     scenario = (test.get("scenario") or "").replace('"""', "'''")
-    out = _header(f"Test: {test['name']}", scenario) + _imports(needs, code) + ["", ""]
-    if fixtures:
-        out += [fixtures, ""]
-    out.append(fn)
+    out = _header(f"Test: {test['name']}", scenario, ctx.files) + _imports(all_needs, code) + ["", ""]
+    out.append("\n\n".join(blocks) + ("\n\n" if blocks else "") + fn)
     return "\n".join(out)
 
 
-def conftest(app_url: str) -> str:
-    names = {"app_url", "credentials", "testdata", "console_errors", "check_accessibility"}
-    code = _fixtures_code(names, app_url)
-    return "\n".join(['"""Fixtures shared by the exported tests (AI Test Generator)."""']
-                     + [ln for ln in _imports(names, code) if "playwright" not in ln] + ["", "", code])
+def conftest(app_url: str, login_code: str = "", needs: set[str] | None = None) -> str:
+    names = {"app_url", "credentials", "testdata", "console_errors", "check_accessibility"} | (needs or set())
+    code = _fixtures_code(names, app_url) + ("\n\n" + login_code if login_code else "")
+    imports = [ln for ln in _imports(names, code) if "playwright" not in ln]
+    if "expect(" in code:
+        imports.append("from playwright.sync_api import expect")
+    return "\n".join(['"""Fixtures shared by the exported tests (AI Test Generator)."""'] + imports + ["", "", code])
 
 
-def bundle(project: dict, tests: list[dict], a11y_impact: str = "serious") -> dict[str, str]:
-    """The project's tests as a pytest project: path -> text."""
+def bundle(project: dict, tests: list[dict], a11y_impact: str = "serious",
+           lookup: Callable[[str], dict | None] | None = None, login: dict | None = None,
+           files: Callable[[str], bytes | None] | None = None, testit: bool = False) -> dict[str, str | bytes]:
+    """The project's tests as a pytest project: path -> text (bytes for test files). `testit`: with
+    testit-adapter-pytest decorators and its connection_config.ini (no token inside)."""
     app_url = _origin(project.get("base_url", "")) or _origin(next((t.get("url", "") for t in tests), ""))
-    files = {"conftest.py": conftest(app_url),
-             "pytest.ini": "[pytest]\ntestpaths = tests\n",
-             "requirements.txt": "pytest\npytest-playwright\nfaker\nhttpx\n",
-             "README.md": _readme(project, tests, app_url)}
+    run_cfg = (project.get("pipeline") or {}).get("run") or {}
+    login = login if run_cfg.get("login_once", True) else None
+    ctx = _Ctx(app_url, a11y_impact, lookup)
+    login_code, login_needs = _login_block(login, ctx, run_cfg)
+    shared_helpers = ""
+    out: dict[str, str | bytes] = {"pytest.ini": "[pytest]\ntestpaths = tests\n",
+                                   "requirements.txt": "pytest\npytest-playwright\nfaker\nhttpx\n"
+                                   + ("testit-adapter-pytest\n" if testit else ""),
+                                   "README.md": _readme(project, tests, app_url, login, testit)}
+    if testit:
+        conn = next((c for c in project.get("connections", []) if c.get("preset") == "testit"), None)
+        f = (conn or {}).get("fields") or {}
+        out["connection_config.ini"] = ("[testit]\n# The token is not stored here: set TMS_PRIVATE_TOKEN in CI.\n"
+                                        f"url = {f.get('site', 'https://testit.example.com')}\n"
+                                        f"projectId = {f.get('project_id', '<project uuid>')}\n"
+                                        f"configurationId = {f.get('configuration_id', '<configuration uuid>')}\n"
+                                        "adapterMode = 2\n")
     used: set[str] = set()
     for t in tests:
         name = _slug(t["name"])
         while name in used:
             name += "_"
         used.add(name)
-        fn, needs = _test_function(t | {"name": name}, app_url, a11y_impact)
+        tctx = _Ctx(app_url, a11y_impact, lookup, testit)
+        fn, needs, data_fixture = _test_function(t | {"name": name, "display_name": t["name"]}, tctx)
+        modules = "\n\n".join(code for _, code in tctx.modules.values())
+        helpers = _helpers_code(tctx)
+        ctx.files |= tctx.files
+        is_login = login is not None and login.get("id") == t.get("id")
+        blocks = [b for b in (helpers, modules, _login_override(run_cfg) if is_login else "", data_fixture) if b]
+        code = "\n\n".join(blocks + [fn])
         scenario = (t.get("scenario") or "").replace('"""', "'''")
-        files[f"tests/test_{name}.py"] = "\n".join(
-            _header(f"Test: {t['name']}", scenario) + _imports(needs, fn) + ["", "", fn])
-        files[f"features/{name}.feature"] = to_gherkin(t | {"project": project.get("name", "")})
-    return files
+        out[f"tests/test_{name}.py"] = "\n".join(
+            _header(f"Test: {t['name']}", scenario) + _imports(needs, code) + ["", ""]
+            + ["\n\n".join(blocks) + ("\n\n" if blocks else "") + fn])
+        out[f"features/{name}.feature"] = to_gherkin(t | {"project": project.get("name", "")}, project.get("language", ""))
+    shared_helpers = _helpers_code(ctx) if login else ""
+    login_all = "\n\n".join(b for b in (shared_helpers, "\n\n".join(c for _, c in ctx.modules.values()), login_code) if b)
+    out["conftest.py"] = conftest(app_url, login_all, login_needs)
+    for f in sorted(ctx.files):
+        data = files(f) if files else None
+        if data is not None:
+            out[f"tests/fixtures/{f}"] = data
+    return out
 
 
-def _readme(project: dict, tests: list[dict], app_url: str) -> str:
+def _readme(project: dict, tests: list[dict], app_url: str, login: dict | None = None, testit: bool = False) -> str:
+    extra = ("\nResults to Test IT (testit-adapter-pytest): `TMS_PRIVATE_TOKEN=... pytest --testit` "
+             "(url, project and configuration are in connection_config.ini).\n") if testit else ""
+    return _readme_text(project, tests, app_url, login) + extra
+
+
+def _readme_text(project: dict, tests: list[dict], app_url: str, login: dict | None = None) -> str:
     return f"""# {project.get('name', 'Tests')}: exported UI tests
 
 Generated by AI Test Generator: {len(tests)} tests (pytest + Playwright) and their Gherkin features.
@@ -325,24 +730,37 @@ TESTGEN_BASE_URL={app_url or 'https://your-stand'} TESTGEN_USERNAME=... TESTGEN_
 
 - `TESTGEN_BASE_URL` - the application under test (default: {app_url or 'the recorded URL'});
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` - its login, only for tests that log in;
+- `TESTGEN_TOTP_SECRET` - the 2FA secret, for tests that type a one-time code;
+- `TESTGEN_MAILPIT_URL` or `TESTGEN_IMAP_HOST` / `TESTGEN_IMAP_USER` / `TESTGEN_IMAP_PASSWORD` - the test mailbox;
 - `TESTGEN_FAKER_LOCALE` - locale of generated test data (default en_US).
-
+{f"{chr(10)}The session logs in once with the steps of «{login['name']}» (conftest.py), every test starts logged in.{chr(10)}" if login else ""}
+Other browsers and devices: `pytest --browser firefox --browser webkit`, `pytest --device "iPhone 13"`.
 Element locators have fallbacks (`.or_()`), but the studio's AI self-healing and visual checks
 work only in studio runs (`python -m testgen.run`).
 """
 
 
-def to_gherkin(test: dict) -> str:
-    lines = [f"Feature: {test.get('project', 'Web application')}", "",
-             f"  Scenario: {test['name']}"]
+GHERKIN = {"en": {"feature": "Feature", "scenario": "Scenario", "Given": "Given", "When": "When", "Then": "Then",
+                  "And": "And"},
+           "ru": {"feature": "Функция", "scenario": "Сценарий", "Given": "Дано", "When": "Когда", "Then": "Тогда",
+                  "And": "И"}}
+
+
+def to_gherkin(test: dict, language: str = "") -> str:
+    """Gherkin; `language` "ru" writes Russian keywords (# language: ru), as Cucumber supports."""
+    lang = language or test.get("language") or ""
+    k = GHERKIN.get(lang, GHERKIN["en"])
+    lines = [f"{k['feature']}: {test.get('project', 'Web application')}", "",
+             f"  {k['scenario']}: {test['name']}"]
     if test.get("scenario"):
         lines.insert(1, f"  {test['scenario']}")
     prev = None
-    for i, s in enumerate(x for x in test["steps"] if x["action"] != "mock_route"):
-        kind = "Given" if i == 0 else "Then" if s["action"].startswith("assert") else "When"
-        lines.append(f"    {'And' if kind == prev else kind} {s['description']}")
+    for i, s in enumerate(x for x in (test.get("before") or []) + test["steps"] if x["action"] != "mock_route"):
+        kind = "Given" if i == 0 or s["action"] == "api_request" else \
+            "Then" if s["action"].startswith("assert") else "When"
+        lines.append(f"    {k['And'] if kind == prev else k[kind]} {s['description']}")
         prev = kind
-    return "\n".join(lines) + "\n"
+    return ("# language: ru\n" if lang == "ru" else "") + "\n".join(lines) + "\n"
 
 
 # ---------- API tests from recorded traffic ----------

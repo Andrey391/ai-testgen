@@ -1,0 +1,7 @@
+apiVersion: v2
+name: ai-testgen
+description: AI Test Generator for a team - web instances, workers with browsers, PostgreSQL and S3 outside the chart
+type: application
+version: 0.5.0
+appVersion: "0.5.0"
+keywords: [testing, playwright, ai]

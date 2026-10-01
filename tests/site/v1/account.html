@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Личный кабинет</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main><h1>Личный кабинет</h1><div id="hello" role="status">Загрузка…</div></main>
+<script>
+fetch('/api/me').then(r => {
+  if (r.status === 401) { location.href = 'login.html'; return null; }
+  return r.json();
+}).then(d => { if (d) document.getElementById('hello').textContent = 'Здравствуйте, ' + d.user; });
+</script>
+</body>
+</html>

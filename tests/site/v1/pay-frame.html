@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Платёжная форма</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <label for="card">Номер карты</label>
+  <input id="card" data-testid="card" autocomplete="off">
+  <div><button id="pay-btn" data-testid="pay-btn">Оплатить</button></div>
+  <div id="result" role="status"></div>
+</main>
+<script>
+document.getElementById('pay-btn').addEventListener('click', () => {
+  const card = document.getElementById('card').value.replace(/\s+/g, '');
+  document.getElementById('result').textContent = card.length >= 16 ? 'Платёж на проверке: **** ' + card.slice(-4) : 'Неверный номер карты';
+});
+</script>
+</body>
+</html>

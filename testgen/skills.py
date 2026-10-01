@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import projects
+from . import fs, projects
 
 BUILTIN = Path(__file__).resolve().parent / "skills"
 STAGES = ("scenarios", "authoring", "run", "publish", "any")
@@ -48,7 +48,7 @@ def _file(pid: str | None, name: str) -> Path | None:
         return None
     if pid:
         f = _project_dir(pid) / f"{name}.md"
-        if f.exists():
+        if fs.is_file(f):
             return f
     f = BUILTIN / f"{name}.md"
     return f if f.exists() else None
@@ -58,7 +58,7 @@ def get(pid: str | None, name: str) -> dict | None:
     f = _file(pid, name)
     if not f:
         return None
-    text = f.read_text("utf-8")
+    text = fs.read_text(f)
     s = parse(text)
     s["name"] = name
     s["text"] = text
@@ -69,7 +69,7 @@ def get(pid: str | None, name: str) -> dict | None:
 
 def list_skills(pid: str) -> list[dict]:
     names = {f.stem for f in BUILTIN.glob("*.md")}
-    names |= {f.stem for f in _project_dir(pid).glob("*.md")} if _project_dir(pid).exists() else set()
+    names |= {f.stem for f in fs.glob(_project_dir(pid), "*.md")}
     out = [get(pid, n) for n in sorted(names) if _NAME.fullmatch(n)]
     return [{k: v for k, v in s.items() if k not in ("text", "body")} for s in out if s]
 
@@ -84,19 +84,14 @@ def save(pid: str, name: str, text: str) -> dict:
     if not s["body"]:
         raise ValueError("Пустой скилл")
     text = render(name, s["description"], s["stage"], s["body"])
-    d = _project_dir(pid)
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{name}.md").write_text(text, "utf-8")
+    fs.write_text(_project_dir(pid) / f"{name}.md", text)
     return get(pid, name)
 
 
 def delete(pid: str, name: str) -> bool:
     """Delete a project skill; for an overridden built-in this restores the original."""
     f = _project_dir(pid) / f"{name}.md" if _NAME.fullmatch(name or "") else None
-    if f and f.exists():
-        f.unlink()
-        return True
-    return False
+    return bool(f) and fs.unlink(f)
 
 
 def prompt(pid: str, names: list[str]) -> str:

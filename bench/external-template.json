@@ -1,0 +1,14 @@
+{
+  "approach": "QA-инженер вручную (pytest + Playwright)",
+  "about": "Результаты другого подхода на тех же сценариях bench/sites.json, для python -m testgen.bench compare. Заполните summary по своим замерам: first_try, catches_defect, survives_v2, mutation_score — доли от 0 до 1; edits — правок на тест; minutes — медиана минут до готового теста; cost_usd — стоимость теста (для ручного написания: минуты × ставка). Отдельный файл на подход: вручную, Playwright Test Agents в Claude Code, студия.",
+  "summary": {
+    "scenarios": 20,
+    "first_try": null,
+    "catches_defect": null,
+    "mutation_score": null,
+    "survives_v2": null,
+    "edits": null,
+    "minutes": null,
+    "cost_usd": null
+  }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Вход с 2FA</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <h1>Вход с подтверждением</h1>
+  <form id="step1">
+    <label for="u">Логин</label><input id="u" autocomplete="off">
+    <label for="p">Пароль</label><input id="p" type="password">
+    <div><button type="submit">Далее</button></div>
+  </form>
+  <form id="step2" hidden>
+    <label for="code">Код из приложения</label><input id="code" autocomplete="off">
+    <div><button type="submit">Подтвердить</button></div>
+  </form>
+  <div id="msg" role="alert"></div>
+</main>
+<script>
+const post = (url, body) => fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify(body)}).then(r => r.json());
+const $ = id => document.getElementById(id);
+$('step1').addEventListener('submit', async e => {
+  e.preventDefault();
+  const d = await post('/api/login', {username: $('u').value, password: $('p').value});
+  if (!d.ok) { $('msg').textContent = 'Неверный логин или пароль'; return; }
+  $('step1').hidden = true; $('step2').hidden = false;
+});
+$('step2').addEventListener('submit', async e => {
+  e.preventDefault();
+  const d = await post('/api/otp', {code: $('code').value});
+  $('msg').textContent = d.ok ? 'Вход подтверждён' : 'Неверный код';
+});
+</script>
+</body>
+</html>

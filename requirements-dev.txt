@@ -1,3 +1,7 @@
-# The studio's own tests: pytest; exported tests are run with pytest-playwright.
+# The studio's own tests: pytest (browser tests in parallel with pytest-xdist); exported tests are run
+# with pytest-playwright.
 pytest>=8
+pytest-xdist>=3
 pytest-playwright
+# The shared-storage tests: a local S3 (TESTGEN_TEST_S3=moto, tests/test_scale.py).
+moto[server]>=5

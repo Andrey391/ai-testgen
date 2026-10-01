@@ -1,0 +1,51 @@
+# The studio in a closed network: no calls to the internet, the model runs next to it.
+#
+#   1. Put the model weights into ./models (on a machine with internet):
+#        huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct --local-dir ./models/Qwen2.5-VL-7B-Instruct
+#   2. docker compose up -d
+#   3. The first start prints the password of the studio user "admin": docker compose logs studio
+#
+# GPU and model size (docs/offline.md): 7B - one 24 GB GPU (L4, A10, RTX 4090); 32B - one 80 GB GPU
+# (A100/H100) or two 48 GB; 72B - four 80 GB GPUs. The agent needs a model with tool calling;
+# a vision model (Qwen2.5-VL, Qwen3-VL) can also look at screenshots.
+services:
+  studio:
+    build: .
+    image: ai-testgen:latest
+    ports:
+      - "8765:8765"
+    environment:
+      TESTGEN_OFFLINE: "on"                       # no CDN, no npx downloads, no Anthropic API
+      TESTGEN_LOCAL_LLM_URL: "http://vllm:8000/v1"
+      TESTGEN_LOCAL_LLM_MODEL: "Qwen2.5-VL-7B-Instruct"
+      TESTGEN_LLM_PROVIDER: "local"               # the default for every stage
+      TESTGEN_SIGNUP: "off"
+    volumes:
+      - ./deploy/data:/data
+      - ./deploy/secrets:/secrets
+    depends_on:
+      - vllm
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model=/models/Qwen2.5-VL-7B-Instruct
+      - --served-model-name=Qwen2.5-VL-7B-Instruct
+      - --max-model-len=32768
+      - --enable-auto-tool-choice
+      - --tool-call-parser=hermes
+      - --limit-mm-per-prompt={"image":4}
+    environment:
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ./models:/models:ro
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
