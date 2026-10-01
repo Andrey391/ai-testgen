@@ -137,6 +137,8 @@ def build(backend: Backend | None = None) -> FastMCP:
         url = url or p.get("base_url", "")
         if not url:
             raise ValueError("Не указан URL приложения (в вызове или в настройках проекта)")
+        if not p["llm"]["model"]:
+            raise ValueError("Модель не настроена: выберите её в студии, «Проект → Модель»")
         a = p["pipeline"]["authoring"]
         s = StudioSession(p, (name or scenario)[:80], url if "://" in url else "https://" + url, scenario,
                           headless=a["headless"], credentials=projects.app_credentials(p["id"]))

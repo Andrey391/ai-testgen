@@ -6,8 +6,10 @@
 
 Tests, settings and history come from the data folder (TESTGEN_DATA_DIR, by
 default ./data), the application login from the project / test settings or
-TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis need
-ANTHROPIC_API_KEY and TESTGEN_MODEL; without them a broken locator simply fails the step.
+TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis use the
+project's model (Project -> Model in the studio) and its API key, or ANTHROPIC_API_KEY
+when the secrets folder is not there; without a model a broken locator simply fails
+the step.
 
 Exit code: 0 - all tests passed (flaky ones and failures in quarantine do not
 count), 1 - failures, 2 - bad arguments or setup.

@@ -82,9 +82,10 @@ async def _agent(project: dict, conn: dict, stage_cfg: dict, skill_names: list[s
             raise PublishError(f"У подключения «{conn['name']}» нет подходящих инструментов")
         system = SYSTEM + skills.prompt(project["id"], skill_names)
         messages = [{"role": "user", "content": task}]
+        model = llm.model(project["id"], stage_cfg)
         for _ in range(MAX_TURNS):
-            resp = await llm.client().beta.messages.create(
-                **llm.common_params(stage_cfg),
+            resp = await model.client.beta.messages.create(
+                **model.params,
                 max_tokens=16000,
                 system=system,
                 tools=toolbox.tools + [DONE_TOOL],
@@ -92,6 +93,7 @@ async def _agent(project: dict, conn: dict, stage_cfg: dict, skill_names: list[s
                 cache_control={"type": "ephemeral"},
                 betas=[llm.FALLBACK_BETA],
             )
+            model.track(resp)
             messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason == "refusal":
                 raise PublishError("Модель отказалась выполнять публикацию")
@@ -111,7 +113,7 @@ async def _agent(project: dict, conn: dict, stage_cfg: dict, skill_names: list[s
                                 "is_error": is_error})
             messages.append({"role": "user", "content": results})
         raise PublishError("Публикация не завершилась за отведённое число шагов")
-    except (anthropic.APIError, llm.ModelNotConfigured) as e:
+    except (anthropic.APIError, llm.NotConfigured) as e:
         raise PublishError(llm.api_error_text(e))
     finally:
         await toolbox.close()

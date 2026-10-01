@@ -10,7 +10,8 @@ data/projects/<id>/suites/*.json  suite runs: all or tagged tests (suite.py)
 data/projects/<id>/baselines/     visual check baselines (checks.py)
 data/projects/<id>/traffic/*.har  requests recorded while authoring (traffic.py)
 data/projects/<id>/explore/       site maps built by the Planner (explorer.py)
-secrets/projects/<id>/            tokens of MCP connections, login for the app under test
+secrets/projects/<id>/            tokens of MCP connections, login for the app under test,
+                                  API key of the model connection (llm.json)
 """
 from __future__ import annotations
 
@@ -33,8 +34,13 @@ ROOT = DATA / "projects"
 
 SCENARIO_TYPES = ["positive", "negative", "edge", "boundary", "accessibility", "security"]
 
+# The model connection (llm.py): no model is built in, the project chooses one.
+# "effort" empty = the model's own default; "prices": model -> [$ input, $ output]
+# per million tokens, for cost estimates; "models" / "check": the last connection check.
+DEFAULT_LLM = {"model": "", "effort": "", "base_url": "", "prices": {}, "models": [], "check": None}
+
 # The generation process. Every stage can be switched off or tuned; "skills" are
-# names from skills.py, "model" / "effort" empty = global defaults.
+# names from skills.py, "model" / "effort" empty = the project's model settings.
 DEFAULT_PIPELINE = {
     "requirements": {
         "connection": "",          # Atlassian connection id; empty = the first one
@@ -155,12 +161,34 @@ def normalize_pipeline(p: dict | None) -> dict:
     return out
 
 
+def normalize_llm(d: dict | None) -> dict:
+    out = copy.deepcopy(DEFAULT_LLM)
+    d = d or {}
+    out["model"] = str(d.get("model") or "").strip()
+    out["effort"] = d.get("effort") if d.get("effort") in EFFORTS else ""
+    url = str(d.get("base_url") or "").strip().rstrip("/")
+    out["base_url"] = url if re.match(r"https?://", url) else ""
+    for model, price in (d.get("prices") or {}).items():
+        try:
+            inp, outp = (max(0.0, float(x)) for x in price)
+        except (TypeError, ValueError):
+            continue
+        if str(model).strip() and (inp or outp):
+            out["prices"][str(model).strip()] = [inp, outp]
+    if isinstance(d.get("models"), list):
+        out["models"] = [m for m in d["models"] if isinstance(m, dict) and m.get("id")]
+    if isinstance(d.get("check"), dict):
+        out["check"] = d["check"]
+    return out
+
+
 def _read(pid: str) -> dict | None:
     f = path(pid) / "project.json"
     if not f.exists():
         return None
     p = json.loads(f.read_text("utf-8"))
     p["pipeline"] = normalize_pipeline(p.get("pipeline"))
+    p["llm"] = normalize_llm(p.get("llm"))
     p.setdefault("connections", [])
     return p
 
@@ -188,7 +216,7 @@ def create(name: str, description: str = "", base_url: str = "") -> dict:
         raise ValueError("Проект с таким названием уже есть")
     return save({"id": uuid.uuid4().hex[:10], "name": name, "description": description.strip(),
                  "base_url": base_url.strip(), "created": time.time(), "connections": [],
-                 "pipeline": normalize_pipeline(None)})
+                 "pipeline": normalize_pipeline(None), "llm": normalize_llm(None)})
 
 
 def update(pid: str, patch: dict) -> dict:
@@ -241,6 +269,44 @@ def set_app_credentials(pid: str, username: str, password: str = "") -> None:
         vault.save(secrets_kind(pid), "app", c)
     else:
         vault.delete(secrets_kind(pid), "app")
+
+
+# ---------- model connection ----------
+
+def llm_key(pid: str) -> str:
+    return (vault.load(secrets_kind(pid), "llm") or {}).get("api_key", "")
+
+
+def llm_settings(pid: str) -> dict:
+    """Settings for llm.Model: project.json "llm" plus the API key (empty = ANTHROPIC_API_KEY)."""
+    p = get(pid) if pid else None
+    if not p:
+        return normalize_llm(None) | {"api_key": ""}
+    return p["llm"] | {"api_key": llm_key(pid)}
+
+
+def update_llm(pid: str, patch: dict, api_key: str = "") -> dict:
+    """`patch`: model / effort / base_url / prices; `api_key` empty keeps the saved one.
+    A new key or address makes the last check stale."""
+    p = get(pid)
+    if not p:
+        raise KeyError(pid)
+    cur = p["llm"]
+    new = normalize_llm(cur | {k: v for k, v in patch.items() if k in ("model", "effort", "base_url", "prices")})
+    if api_key:
+        vault.save(secrets_kind(pid), "llm", {"api_key": api_key.strip()})
+    if api_key or new["base_url"] != cur["base_url"]:
+        new["check"], new["models"] = None, []
+    p["llm"] = new
+    return save(p)
+
+
+def clear_llm_key(pid: str) -> None:
+    vault.delete(secrets_kind(pid), "llm")
+    p = get(pid)
+    if p:
+        p["llm"]["check"], p["llm"]["models"] = None, []
+        save(p)
 
 
 # ---------- first start ----------

@@ -1,7 +1,8 @@
 """A scripted stand-in for the LLM API: tests run without API calls or costs.
 
 `FakeClient(script)`: every `beta.messages.create/parse` call is recorded in
-`calls` and answered by `script(kind, kwargs)` with a `Resp`. Helpers build the
+`calls` and answered by `script(kind, kwargs)` with a `Resp`; `models.list()` returns
+`model_list` (Models API entries as dicts). Helpers build the
 usual answers: a tool call, a parsed structured output.
 """
 from __future__ import annotations
@@ -54,6 +55,12 @@ class FakeClient:
         self.calls: list[tuple[str, dict]] = []
         self.script = script or (lambda kind, kw: text("ok"))
         self.beta = SimpleNamespace(messages=FakeMessages(self))
+        self.model_list: list[dict] = []
+        self.models = SimpleNamespace(list=self._models)
+
+    async def _models(self, **kw):
+        for m in self.model_list:
+            yield SimpleNamespace(to_dict=lambda m=m: m)
 
 
 def _texts(content) -> list[str]:

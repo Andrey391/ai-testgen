@@ -73,13 +73,15 @@ Cursor, `.cursor/mcp.json`:
       "command": "C:\\Users\\me\\AppData\\Local\\aitestgen\\venv\\Scripts\\python.exe",
       "args": ["-m", "testgen.mcp_server"],
       "cwd": "C:\\path\\to\\ai-testgen",
-      "env": {"TESTGEN_TOKEN": "tg_…", "ANTHROPIC_API_KEY": "sk-ant-…", "TESTGEN_MODEL": "<id модели>"}
+      "env": {"TESTGEN_TOKEN": "tg_…", "ANTHROPIC_API_KEY": "sk-ant-…"}
     }
   }
 }
 ```
 
 `TESTGEN_STUDIO_URL` (необязательно) — адрес студии для ссылок на trace в ответах.
+Модель берётся из настроек проекта («Проект → Модель»); `ANTHROPIC_API_KEY` нужен, только если
+у проекта не сохранён свой ключ.
 
 ## Пример
 

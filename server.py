@@ -11,7 +11,6 @@ import io
 import json
 import os
 import shutil
-import sys
 import threading
 import time
 import zipfile
@@ -143,7 +142,7 @@ async def logout():
 async def me(request: Request):
     return {"user": request.state.user, "auth_enabled": auth.ENABLED, "signup": auth.SIGNUP,
             "is_admin": bool(request.state.user) and auth.is_admin(request.state.user),
-            "model_set": bool(llm.MODEL), "effort": llm.EFFORT, "prompt_cache": llm.PROMPT_CACHE,
+            "efforts": llm.EFFORTS, "prompt_cache": llm.PROMPT_CACHE,
             "mcp_url": f"{request.base_url}".rstrip("/") + "/mcp"}
 
 
@@ -179,7 +178,15 @@ def project(pid: str) -> dict:
 def _project_view(p: dict) -> dict:
     c = projects.app_credentials(p["id"])
     return p | {"connections": [mcp_hub.public_view(p["id"], x) for x in p["connections"]],
-                "app_username": c.get("username", ""), "app_has_password": bool(c.get("password"))}
+                "app_username": c.get("username", ""), "app_has_password": bool(c.get("password")),
+                "llm": p["llm"] | {"key_set": bool(projects.llm_key(p["id"])),
+                                   "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+
+
+def _require_model(p: dict) -> None:
+    """Fail before starting a browser when the project has no model to drive it."""
+    if not p["llm"]["model"]:
+        raise HTTPException(400, "Модель не настроена: выберите её в «Проект → Модель».")
 
 
 class ProjectBody(BaseModel):
@@ -198,6 +205,8 @@ async def list_projects():
         conns = [mcp_hub.public_view(item["id"], c) for c in p["connections"]]
         out.append(item | {"connections": [{k: c[k] for k in ("id", "name", "preset", "title", "enabled",
                                                                 "missing", "check")} for c in conns],
+                           "model": p.get("llm", {}).get("model", ""),
+                           "model_check": p.get("llm", {}).get("check"),
                            "has_app_login": bool(projects.app_credentials(item["id"]).get("username"))})
     return out
 
@@ -229,6 +238,53 @@ async def delete_project(pid: str, request: Request):
     require_admin(request)
     project(pid)
     return {"ok": projects.delete(pid)}
+
+
+class LlmBody(BaseModel):
+    model: str | None = None
+    effort: str | None = None
+    base_url: str | None = None
+    prices: dict[str, list[float]] | None = None
+    api_key: str = ""    # empty = keep the saved one
+
+
+@app.put("/api/projects/{pid}/llm")
+async def update_llm(pid: str, body: LlmBody, request: Request):
+    """The project's model connection. The API address decides where requests (and the
+    key) go, so only an administrator changes it."""
+    p = project(pid)
+    patch = body.model_dump(exclude_none=True, exclude={"api_key"})
+    if "base_url" in patch and patch["base_url"].strip().rstrip("/") != p["llm"]["base_url"]:
+        require_admin(request)
+    return _project_view(projects.update_llm(pid, patch, body.api_key))
+
+
+@app.delete("/api/projects/{pid}/llm/key")
+async def clear_llm_key(pid: str):
+    project(pid)
+    projects.clear_llm_key(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/llm/test")
+async def test_llm(pid: str):
+    """Check the connection and list the models it offers; remembered in the project."""
+    project(pid)
+    conf = projects.llm_settings(pid)
+    try:
+        models = await call(asyncio.wait_for(llm.check(conf), 60))
+        result = {"ok": True, "models": len(models)}
+    except Exception as e:
+        models, result = [], {"ok": False, "error": "Нет ответа от API" if isinstance(e, asyncio.TimeoutError)
+                              else llm.api_error_text(e)}
+    p = projects.get(pid)
+    p["llm"]["check"] = result | {"at": time.time()}
+    if result["ok"]:
+        p["llm"]["models"] = models
+    projects.save(p)
+    if not result["ok"]:
+        raise HTTPException(400, result["error"])
+    return {"models": models}
 
 
 class Credentials(BaseModel):
@@ -484,6 +540,8 @@ async def create_session(body: NewSession):
     if not any(creds.values()):
         creds = projects.app_credentials(p["id"])
     engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
+    if body.scenario.strip() or body.autopilot:
+        _require_model(p)
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
                       engine=engine)
     _start_session(s, body.autopilot)
@@ -841,6 +899,7 @@ async def strengthen(tid: str, request: Request):
     if not v.get("weak"):
         raise HTTPException(400, "Сначала проверьте тест мутациями: усиливать нечего")
     p = project(t["project_id"])
+    _require_model(p)
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=True,
                       credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v))
     s.test_id = tid
@@ -958,6 +1017,7 @@ class ReqBody(BaseModel):
 @app.post("/api/scenarios")
 async def gen_scenarios(body: ReqBody):
     p = project(body.project_id)
+    _require_model(p)
     try:
         res = await call(scenarios.generate(body.requirements, body.url, project=p))
     except Exception as e:
@@ -993,6 +1053,7 @@ async def start_job(pid: str, body: JobBody, request: Request):
     p = project(pid)
     if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore:
         raise HTTPException(400, "Укажите ссылки на требования, текст или включите исследование сайта")
+    _require_model(p)
     job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore)
     pipeline.JOBS[job.id] = job
     job.save()
@@ -1046,8 +1107,6 @@ app.mount("/", MCP_APP)
 
 
 if __name__ == "__main__":
-    if not llm.MODEL:
-        sys.exit(llm.MODEL_HINT + ".")
     auth.ensure_admin()
-    print(f"AI Test Generator: http://127.0.0.1:{PORT}")
+    print(f"AI Test Generator: http://127.0.0.1:{PORT}  (the model is set per project: Project -> Model)")
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

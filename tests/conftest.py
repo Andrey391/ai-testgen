@@ -15,10 +15,8 @@ from pathlib import Path
 _TMP = Path(tempfile.mkdtemp(prefix="testgen-tests-"))
 os.environ["TESTGEN_DATA_DIR"] = str(_TMP / "data")
 os.environ["TESTGEN_SECRETS_DIR"] = str(_TMP / "secrets")
-# A neutral model name and its price: the studio has no built-in models or prices.
-os.environ["TESTGEN_MODEL"] = "test-model"
-os.environ["TESTGEN_PRICES"] = '{"test-model": [5, 25]}'
-for var in ("TESTGEN_USERNAME", "TESTGEN_PASSWORD", "TESTGEN_PROMPT_CACHE", "TESTGEN_BASE_URL"):
+for var in ("TESTGEN_USERNAME", "TESTGEN_PASSWORD", "TESTGEN_PROMPT_CACHE", "TESTGEN_BASE_URL",
+            "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
     os.environ.pop(var, None)
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(Path(__file__).resolve().parent)]
@@ -43,10 +41,14 @@ def stand(_stand):
     return _stand
 
 
+MODEL = "test-model"
+
+
 @pytest.fixture
 def fake_llm(monkeypatch):
     client = FakeClient()
-    monkeypatch.setattr(llm, "_client", client)
+    monkeypatch.setattr(llm, "make_client", lambda api_key, base_url: client)
+    monkeypatch.setattr(llm, "_clients", {})
     return client
 
 
@@ -54,6 +56,7 @@ def fake_llm(monkeypatch):
 def project(stand):
     p = projects.create(f"Стенд {uuid.uuid4().hex[:6]}", base_url=stand.url)
     projects.set_app_credentials(p["id"], USERNAME, PASSWORD)
+    projects.update_llm(p["id"], {"model": MODEL, "effort": "medium", "prices": {MODEL: [5, 25]}})
     return projects.get(p["id"])
 
 

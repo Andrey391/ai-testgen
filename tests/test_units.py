@@ -1,6 +1,9 @@
 """Pure-Python units: pipeline settings, test data placeholders, masking, tags, flakiness."""
 from __future__ import annotations
 
+import json
+import uuid
+
 import pytest
 
 from testgen import projects, runs, storage, testdata, traffic
@@ -91,16 +94,51 @@ def test_usage_scopes_nest():
     from types import SimpleNamespace
 
     from testgen import llm
-    resp = SimpleNamespace(model="test-model", usage=SimpleNamespace(
+    resp = SimpleNamespace(model="some-model", usage=SimpleNamespace(
         input_tokens=1000, output_tokens=100, cache_creation_input_tokens=0, cache_read_input_tokens=9000))
+    prices = {"some-model": [5, 25]}
     own = llm.Usage()
     with llm.usage_scope() as job:
         with llm.usage_scope() as run:
-            llm.track(resp, own)
+            llm.track(resp, own, prices)
         llm.track(resp)
     assert (own.requests, run.requests, job.requests) == (1, 1, 2)
     d = run.as_dict()
     assert d["cache_hit"] == 0.9 and d["cost_usd"] == round((1000 * 5 + 9000 * 0.5 + 100 * 25) / 1e6, 4)
+    assert job.as_dict()["cost_usd"] == round(2 * (1000 * 5 + 9000 * 0.5 + 100 * 25) / 1e6, 4)
+    other = llm.Usage()
+    llm.track(resp, other)
+    assert other.as_dict()["cost_usd"] is None          # no price entered for the model
+
+
+def test_model_comes_from_the_project_settings():
+    from types import SimpleNamespace
+
+    from testgen import llm, projects
+    p = projects.create(f"Модель {uuid.uuid4().hex[:6]}")
+    with pytest.raises(llm.NotConfigured):
+        llm.model(p["id"])
+    projects.update_llm(p["id"], {"model": "model-a", "effort": "high", "base_url": "https://gw.example/"},
+                        api_key="sk-test")
+    assert projects.llm_key(p["id"]) == "sk-test"
+    assert "sk-test" not in json.dumps(projects.get(p["id"]))      # the key stays in secrets/
+    m = llm.model(p["id"])
+    assert m.params == {"model": "model-a", "fallbacks": "default", "output_config": {"effort": "high"}}
+    assert (m.api_key, m.base_url) == ("sk-test", "https://gw.example")
+    # A stage overrides the model and effort.
+    assert llm.model(p["id"], {"model": "model-b", "effort": "low"}).params["model"] == "model-b"
+    # Effort the model does not take (from the last connection check) is left to the model.
+    info = llm.model_info(SimpleNamespace(to_dict=lambda: {"id": "model-a", "display_name": "A", "capabilities": {
+        "effort": {"supported": False}, "structured_outputs": {"supported": True},
+        "image_input": {"supported": True}, "context_management": {"supported": False}}}))
+    assert info["efforts"] == [] and info["missing"] == ["context_management"]
+    pr = projects.get(p["id"])
+    pr["llm"]["models"] = [info]
+    projects.save(pr)
+    assert "output_config" not in llm.model(p["id"]).params
+    # A new key or address makes the check stale.
+    projects.update_llm(p["id"], {"base_url": ""})
+    assert projects.get(p["id"])["llm"]["models"] == []
 
 
 def test_har_roundtrip():

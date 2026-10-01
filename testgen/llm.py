@@ -1,4 +1,12 @@
-"""Shared LLM client settings, prompt caching and token accounting.
+"""Model connection of a project, prompt caching and token accounting.
+
+Model connection. The studio is not tied to any model: each project chooses its
+own in "Проект → Модель" (project.json "llm": model, effort, API address, prices;
+the API key in secrets/projects/<id>/llm.json, or ANTHROPIC_API_KEY on the server
+when the project has none). Pipeline stages may override the model and effort.
+Every request goes through `model(project_id, stage)`: its `client` and `params`
+make the request, `track()` counts the response. Without a model the project's
+LLM features fail with `NotConfigured`.
 
 Prompt caching. Requests render as tools -> system -> messages. `system()` puts a
 cache breakpoint on the system prompt, so the tools, the rules and the skills
@@ -11,27 +19,17 @@ TESTGEN_PROMPT_CACHE=off switches caching off, to measure the difference.
 
 Token accounting. `track(resp)` adds a response's usage to a `Usage`: the one
 given, or the one opened with `usage_scope()` around a piece of work (a test
-run, a pipeline job). `Usage.cost()` estimates dollars when TESTGEN_PRICES gives
-the price of every model used.
-
-Nothing here names a model or a price: the model comes from TESTGEN_MODEL (or a
-project stage's settings), prices from TESTGEN_PRICES.
+run, a pipeline job). `Usage.cost()` estimates dollars from the prices entered
+in the project settings.
 """
 from __future__ import annotations
 
 import contextlib
 import contextvars
-import json
 import os
-from pathlib import Path
 
 import anthropic
 
-# No built-in default: the model is chosen by whoever deploys the studio.
-MODEL = os.environ.get("TESTGEN_MODEL", "").strip()
-# Browser driving is a latency-sensitive loop of many small decisions;
-# "medium" keeps each step fast. Raise to "high" for tricky apps.
-EFFORT = os.environ.get("TESTGEN_EFFORT", "medium")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PROMPT_CACHE = os.environ.get("TESTGEN_PROMPT_CACHE", "on").lower() not in ("off", "0", "false", "no")
 
@@ -41,62 +39,101 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CONTEXT_BETA = "context-management-2025-06-27"
 CLEAR_TOOL_USES = "clear_tool_uses_20250919"
 
-MODEL_HINT = ("Не задана модель: укажите TESTGEN_MODEL (или модель этапа в «Проект → "
-              "Процесс генерации»)")
+
+# Capabilities the studio relies on: structured output (scenarios, healing, analysis),
+# screenshots, context editing (the authoring agent).
+NEEDED = {"structured_outputs": "структурированный ответ", "image_input": "изображения",
+          "context_management": "context editing"}
 
 
-class ModelNotConfigured(Exception):
-    """Neither TESTGEN_MODEL nor the stage's settings name a model."""
-
-    def __init__(self):
-        super().__init__(MODEL_HINT)
+class NotConfigured(Exception):
+    """The project has no model chosen."""
 
 
-def _load_prices() -> dict[str, tuple[float, float]]:
-    """TESTGEN_PRICES: JSON {"<model>": [input, output]} in $ per million tokens,
-    inline or a path to a .json file. Empty -> costs are not estimated."""
-    raw = os.environ.get("TESTGEN_PRICES", "").strip()
-    if not raw:
-        return {}
+def make_client(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
+    """Empty values fall back to the SDK's environment (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL)."""
+    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None)
+
+
+_clients: dict[tuple[str, str], anthropic.AsyncAnthropic] = {}
+
+
+def client_for(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
+    key = (api_key, base_url)
+    if key not in _clients:
+        _clients[key] = make_client(api_key, base_url)
+    return _clients[key]
+
+
+def model_info(m) -> dict:
+    """A Models API entry -> {id, name, efforts, missing}. `efforts`: supported effort
+    levels, None if the API did not say; `missing`: capabilities from NEEDED it lacks."""
+    d = m.to_dict() if hasattr(m, "to_dict") else dict(m)
+    caps = d.get("capabilities") or {}
+    eff = caps.get("effort")
+    efforts = None
+    if isinstance(eff, dict):
+        efforts = [e for e in EFFORTS if eff.get("supported") and (eff.get(e) or {}).get("supported")]
+    missing = [k for k in NEEDED if isinstance(caps.get(k), dict) and caps[k].get("supported") is False]
+    return {"id": d.get("id", ""), "name": d.get("display_name") or d.get("id", ""),
+            "efforts": efforts, "missing": missing}
+
+
+class Model:
+    """A project's model connection resolved for one request (or one stage)."""
+
+    def __init__(self, conf: dict, stage: dict | None = None):
+        stage = stage or {}
+        self.name = (stage.get("model") or "").strip() or conf.get("model", "")
+        if not self.name:
+            raise NotConfigured("Модель не настроена: выберите её в «Проект → Модель».")
+        self.effort = stage.get("effort") if stage.get("effort") in EFFORTS else conf.get("effort", "")
+        known = next((m for m in conf.get("models") or [] if m["id"] == self.name), None)
+        if known and known.get("efforts") is not None and self.effort not in known["efforts"]:
+            self.effort = ""          # the model does not take this effort level: its default
+        self.api_key = conf.get("api_key", "")
+        self.base_url = conf.get("base_url", "")
+        self.prices = conf.get("prices") or {}
+
+    @property
+    def client(self) -> anthropic.AsyncAnthropic:
+        return client_for(self.api_key, self.base_url)
+
+    @property
+    def params(self) -> dict:
+        """Parameters shared by every request.
+
+        fallbacks="default": if the safety classifiers decline a request, the
+        API re-runs it on the provider's fallback model instead of failing.
+        """
+        p = {"model": self.name, "fallbacks": "default"}
+        if self.effort:
+            p["output_config"] = {"effort": self.effort}
+        return p
+
+    def track(self, resp, usage: "Usage | None" = None) -> None:
+        track(resp, usage, self.prices)
+
+
+def model(project_id: str, stage: dict | None = None) -> Model:
+    """The model for a request of the project; `stage` is a pipeline stage config,
+    its "model" / "effort" override the project's."""
+    from . import projects
+    return Model(projects.llm_settings(project_id), stage)
+
+
+async def check(conf: dict) -> list[dict]:
+    """The models the connection offers (model_info dicts). A gateway without the
+    Models API is checked with a one-word request to the chosen model instead."""
+    c = client_for(conf.get("api_key", ""), conf.get("base_url", ""))
     try:
-        data = json.loads(raw if raw.startswith("{") else Path(raw).read_text("utf-8"))
-        return {str(k): (float(v[0]), float(v[1])) for k, v in data.items()}
-    except (OSError, ValueError, TypeError, IndexError, AttributeError) as e:
-        raise SystemExit(f"TESTGEN_PRICES: ожидается JSON {{\"модель\": [вход, выход]}} или путь к нему ({e})")
-
-
-# $ per million tokens: input, output. Cache writes cost 1.25x input, reads 0.1x.
-PRICES = _load_prices()
-
-_client: anthropic.AsyncAnthropic | None = None
-
-
-def client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic()
-    return _client
-
-
-def common_params(stage: dict | None = None) -> dict:
-    """Parameters shared by every request.
-
-    `stage` is a pipeline stage config from the project: its "model" / "effort"
-    override the global defaults when set.
-
-    fallbacks="default": if the safety classifiers decline a request, the
-    API re-runs it on the provider's fallback model instead of failing.
-    """
-    stage = stage or {}
-    effort = stage.get("effort") if stage.get("effort") in EFFORTS else EFFORT
-    model = (stage.get("model") or "").strip() or MODEL
-    if not model:
-        raise ModelNotConfigured()
-    return {
-        "model": model,
-        "output_config": {"effort": effort},
-        "fallbacks": "default",
-    }
+        return [model_info(m) async for m in c.models.list(limit=100)]
+    except anthropic.NotFoundError:
+        if not conf.get("model"):
+            raise
+    await c.messages.create(model=conf["model"], max_tokens=16,
+                            messages=[{"role": "user", "content": "ping"}])
+    return [{"id": conf["model"], "name": conf["model"], "efforts": None, "missing": []}]
 
 
 def system(text: str) -> str | list[dict]:
@@ -117,17 +154,20 @@ class Usage:
     def __init__(self):
         self.requests = 0
         self.by_model: dict[str, dict[str, int]] = {}
+        self.prices: dict[str, list[float]] = {}   # model -> $ per million tokens: input, output
 
-    def add(self, model: str, usage) -> None:
+    def add(self, model: str, usage, prices: dict | None = None) -> None:
         if usage is None:
             return
         self.requests += 1
-        m = self.by_model.setdefault(model or MODEL, dict.fromkeys(self.FIELDS, 0))
+        self.prices.update(prices or {})
+        m = self.by_model.setdefault(model or "?", dict.fromkeys(self.FIELDS, 0))
         for f in self.FIELDS:
             m[f] += getattr(usage, f, None) or 0
 
     def merge(self, other: "Usage") -> None:
         self.requests += other.requests
+        self.prices.update(other.prices)
         for model, counts in other.by_model.items():
             m = self.by_model.setdefault(model, dict.fromkeys(self.FIELDS, 0))
             for f in self.FIELDS:
@@ -137,10 +177,11 @@ class Usage:
         return {f: sum(m[f] for m in self.by_model.values()) for f in self.FIELDS}
 
     def cost(self) -> float | None:
-        """Estimated $, or None if a model's price is not in TESTGEN_PRICES."""
+        """Estimated $ (cache writes cost 1.25x input, reads 0.1x), or None if a model's
+        price is not set in the project."""
         total = 0.0
         for model, m in self.by_model.items():
-            price = next((p for k, p in PRICES.items() if model == k or model.startswith(k + "-")), None)
+            price = next((p for k, p in self.prices.items() if model == k or model.startswith(k + "-")), None)
             if not price:
                 return None
             inp, out = price
@@ -170,22 +211,24 @@ def usage_scope():
         _scopes.reset(token)
 
 
-def track(resp, usage: Usage | None = None) -> None:
+def track(resp, usage: Usage | None = None, prices: dict | None = None) -> None:
     for u in {id(x): x for x in (usage, *_scopes.get()) if x is not None}.values():
-        u.add(getattr(resp, "model", "") or "", getattr(resp, "usage", None))
+        u.add(getattr(resp, "model", "") or "", getattr(resp, "usage", None), prices)
 
 
 def is_api_error(e: Exception) -> bool:
-    """The LLM is unavailable: an API error, no credentials or no model configured."""
-    return (isinstance(e, (anthropic.APIError, ModelNotConfigured))
-            or (isinstance(e, TypeError) and "authentication" in str(e)))
+    return isinstance(e, (anthropic.APIError, NotConfigured)) or (isinstance(e, TypeError)
+                                                                  and "authentication" in str(e))
+
+
+NO_KEY = "Claude API: неверный или не заданный API-ключ (укажите его в «Проект → Модель»)."
 
 
 def api_error_text(e: Exception) -> str:
-    if isinstance(e, ModelNotConfigured):
-        return MODEL_HINT + "."
+    if isinstance(e, NotConfigured):
+        return str(e)
     if isinstance(e, anthropic.AuthenticationError):
-        return "API ИИ: неверный или отсутствующий ключ (задайте ANTHROPIC_API_KEY)."
+        return NO_KEY
     if isinstance(e, anthropic.RateLimitError):
         return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
@@ -194,5 +237,5 @@ def api_error_text(e: Exception) -> str:
         return "API ИИ: ошибка сети."
     if isinstance(e, TypeError) and "authentication" in str(e):
         # The SDK raises this before sending anything when no credentials are set.
-        return "API ИИ: неверный или отсутствующий ключ (задайте ANTHROPIC_API_KEY)."
+        return NO_KEY
     return f"{type(e).__name__}: {e}"

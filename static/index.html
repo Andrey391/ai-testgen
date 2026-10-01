@@ -237,17 +237,24 @@ img.shot{max-width:420px}
     </div>
 
     <div data-wz="2" class="hidden">
-      <div class="card">
-        <h3>Подключения к ресурсам</h3>
-        <div class="muted">Подключите системы, с которыми работает команда: заполните поля и нажмите «Сохранить и проверить» — студия запустит MCP-сервер и покажет его инструменты. Токены хранятся на сервере и не показываются в интерфейсе. Без подключений работают файлы .md, текст требований и встроенный Playwright; любой ресурс можно добавить позже в «Проект → Подключения».</div>
-      </div>
-      <div id="wzSlots"></div>
+      <div id="wzModel"></div>
       <div class="card row" style="margin-top:12px">
         <button class="btn" data-wzgo="1">← Назад</button><span class="grow"></span>
         <button class="btn primary" data-wzgo="3">Далее →</button></div>
     </div>
 
     <div data-wz="3" class="hidden">
+      <div class="card">
+        <h3>Подключения к ресурсам</h3>
+        <div class="muted">Подключите системы, с которыми работает команда: заполните поля и нажмите «Сохранить и проверить» — студия запустит MCP-сервер и покажет его инструменты. Токены хранятся на сервере и не показываются в интерфейсе. Без подключений работают файлы .md, текст требований и встроенный Playwright; любой ресурс можно добавить позже в «Проект → Подключения».</div>
+      </div>
+      <div id="wzSlots"></div>
+      <div class="card row" style="margin-top:12px">
+        <button class="btn" data-wzgo="2">← Назад</button><span class="grow"></span>
+        <button class="btn primary" data-wzgo="4">Далее →</button></div>
+    </div>
+
+    <div data-wz="4" class="hidden">
       <div class="card">
         <h3>Как проект использует ресурсы</h3>
         <div class="muted">Привязка подключений к этапам процесса генерации. Остальные параметры этапов (скиллы, модель, лимиты) — в «Проект → Процесс генерации».</div>
@@ -270,7 +277,7 @@ img.shot{max-width:420px}
         <div class="hint" id="wzWarn"></div>
       </div>
       <div class="card row" style="margin-top:12px">
-        <button class="btn" data-wzgo="2">← Назад</button><span class="err grow" id="wz3Err"></span>
+        <button class="btn" data-wzgo="3">← Назад</button><span class="err grow" id="wz3Err"></span>
         <button class="btn primary" id="wzFinish">Готово — к требованиям</button></div>
     </div>
   </div>
@@ -485,6 +492,7 @@ img.shot{max-width:420px}
   <div class="settings">
     <div class="subnav">
       <button data-sub="general" class="on">Общие</button>
+      <button data-sub="model">Модель</button>
       <button data-sub="conns">Подключения (MCP)</button>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
@@ -519,6 +527,9 @@ img.shot{max-width:420px}
         </div>
       </div>
 
+      <!-- Model -->
+      <div data-subpanel="model" class="hidden"><div id="modelBox"></div></div>
+
       <!-- Connections -->
       <div data-subpanel="conns" class="hidden">
         <div class="card">
@@ -536,7 +547,7 @@ img.shot{max-width:420px}
       <div data-subpanel="process" class="hidden">
         <div class="card">
           <h3>Процесс генерации тест-кейсов</h3>
-          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — значения по умолчанию студии (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — как в «Проект → Модель» (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
         </div>
 
         <div class="card stage">
@@ -573,7 +584,7 @@ img.shot{max-width:420px}
           <label>Скиллы</label>
           <div class="checks" data-list="scenarios.skills" data-kind="skills" data-stage="scenarios"></div>
           <div class="grid2">
-            <div><label>Модель</label><input data-p="scenarios.model" class="modelIn"></div>
+            <div><label>Модель</label><input data-p="scenarios.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="scenarios.effort" class="effortSel"></select></div>
           </div>
         </div>
@@ -599,7 +610,7 @@ img.shot{max-width:420px}
           <label>Скиллы</label>
           <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
           <div class="grid2">
-            <div><label>Модель</label><input data-p="authoring.model" class="modelIn"></div>
+            <div><label>Модель</label><input data-p="authoring.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="authoring.effort" class="effortSel"></select></div>
           </div>
         </div>
@@ -642,7 +653,7 @@ img.shot{max-width:420px}
           <label>Скиллы</label>
           <div class="checks" data-list="run.skills" data-kind="skills" data-stage="run"></div>
           <div class="grid2">
-            <div><label>Модель</label><input data-p="run.model" class="modelIn"></div>
+            <div><label>Модель</label><input data-p="run.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="run.effort" class="effortSel"></select></div>
           </div>
         </div>
@@ -675,7 +686,7 @@ img.shot{max-width:420px}
           <label>Скиллы отправки результата прогона</label>
           <div class="checks" data-list="publish.run_skills" data-kind="skills" data-stage="publish"></div>
           <div class="grid2">
-            <div><label>Модель</label><input data-p="publish.model" class="modelIn"></div>
+            <div><label>Модель</label><input data-p="publish.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="publish.effort" class="effortSel"></select></div>
           </div>
         </div>
@@ -734,6 +745,8 @@ img.shot{max-width:420px}
 </section>
 </main>
 
+<datalist id="llmModels"></datalist>
+
 <script>
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -777,10 +790,6 @@ async function loggedIn(me) {
   $('#whoami').textContent = me.user + (me.is_admin && me.auth_enabled ? ' (админ)' : '');
   $('#whoami').classList.toggle('hidden', !me.auth_enabled);
   $('#logoutBtn').classList.toggle('hidden', !me.auth_enabled);
-  $('#defModel').textContent = (me.model_set ? 'модель задана в TESTGEN_MODEL' : 'модель не задана — укажите её здесь или в TESTGEN_MODEL') + `, effort ${me.effort}`;
-  $$('.modelIn').forEach(i => i.placeholder = me.model_set ? 'по умолчанию студии' : 'не задана');
-  $$('.effortSel').forEach(s => s.innerHTML = `<option value="">по умолчанию (${esc(me.effort)})</option>` +
-    ['low', 'medium', 'high', 'xhigh', 'max'].map(e => `<option>${e}</option>`).join(''));
   try { PRESETS = await api('GET', '/api/mcp/presets'); } catch {}
   $('#connPreset').innerHTML = PRESETS.filter(p => !p.admin_only || ME.is_admin)
     .map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
@@ -1579,10 +1588,10 @@ async function renderHome() {
       <div class="row"><b class="grow">${esc(p.name)}</b><span class="muted" style="font-size:12px">тестов: ${p.tests}</span></div>
       ${p.description ? `<div class="hint" style="margin:0">${esc(p.description)}</div>` : ''}
       <div class="muted" style="font-size:12px">${p.base_url ? esc(p.base_url) : 'URL приложения не задан'}${p.has_app_login ? ' · логин задан' : ''}</div>
-      <div class="chips">${chips}</div>
+      <div class="chips">${modelChip(p.model, p.model_check)}${chips}</div>
       <div class="row" style="margin-top:auto;padding-top:6px">
         <button class="btn primary small" onclick="openProject('${p.id}')">Открыть</button>
-        <button class="btn small" onclick="openWizard('${p.id}')">Настроить подключения</button></div></div>`;
+        <button class="btn small" onclick="openWizard('${p.id}')">Настроить</button></div></div>`;
   }).join('') || '<div class="card muted">Проектов пока нет.</div>';
 }
 async function openProject(pid) {
@@ -1594,7 +1603,7 @@ $('#wzClose').onclick = () => { if (PID) showTab('home'); };
 
 async function openWizard(pid) {
   if (pid && pid !== PID) await switchProject(pid);
-  WIZ = {pid, step: pid ? 2 : 1, suggestPublish: false};
+  WIZ = {pid, step: !pid ? 1 : PROJ.llm.model ? 3 : 2, suggestPublish: false};
   $('#homeList').classList.add('hidden'); $('#wizard').classList.remove('hidden');
   $('#wzClose').classList.toggle('hidden', !PROJECTS.length);
   $('#wzName').value = pid ? PROJ.name : ''; $('#wzDesc').value = pid ? PROJ.description || '' : '';
@@ -1609,12 +1618,13 @@ function renderWizard() {
   const w = WIZ;
   $('#wzTitle').textContent = w.pid ? `Настройка проекта «${PROJ.name}»` : 'Новый проект';
   $('#wz1Next').textContent = w.pid ? 'Сохранить и продолжить →' : 'Создать проект →';
-  $('#wzSteps').innerHTML = [[1, 'Приложение'], [2, 'Подключения к ресурсам'], [3, 'Привязка к процессу']].map(([n, t]) =>
+  $('#wzSteps').innerHTML = [[1, 'Приложение'], [2, 'Модель ИИ'], [3, 'Подключения к ресурсам'], [4, 'Привязка к процессу']].map(([n, t]) =>
     `<button data-wzgo="${n}" class="${n === w.step ? 'cur' : n < w.step || w.pid ? 'done' : ''}" ${!w.pid && n > 1 ? 'disabled' : ''}>${n}. ${t}</button>`
   ).join('<span class="muted">→</span>');
   $$('[data-wz]').forEach(x => x.classList.toggle('hidden', +x.dataset.wz !== w.step));
-  if (w.step === 2) renderSlots();
-  if (w.step === 3) fillWizardProcess();
+  if (w.step === 2) renderModel();
+  if (w.step === 3) renderSlots();
+  if (w.step === 4) fillWizardProcess();
 }
 document.addEventListener('click', e => {
   const go = e.target.closest('[data-wzgo]');
@@ -1705,7 +1715,7 @@ function wizardWarn() {
   const ids = [$('#wzReq').value, $('#wzEngine').value, $('#wzPub').value,
     ...$$('#wzTools input:checked').map(i => i.value)].filter(Boolean);
   const bad = PROJ.connections.filter(c => ids.includes(c.id) && !(c.enabled && c.check?.ok));
-  $('#wzWarn').innerHTML = bad.length ? `<span class="err">Не проверены или выключены: ${bad.map(c => esc(c.name)).join(', ')}.</span> Вернитесь к шагу 2 и нажмите «Сохранить и проверить».` : '';
+  $('#wzWarn').innerHTML = bad.length ? `<span class="err">Не проверены или выключены: ${bad.map(c => esc(c.name)).join(', ')}.</span> Вернитесь к шагу 3 и нажмите «Сохранить и проверить».` : '';
 }
 ['#wzReq', '#wzEngine', '#wzPub', '#wzTools'].forEach(s => $(s).addEventListener('change', wizardWarn));
 
@@ -1744,7 +1754,7 @@ function loadSettings() {
   $('#pPass').placeholder = PROJ.app_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
   $('#pMsg').textContent = $('#pcMsg').textContent = $('#procMsg').textContent = '';
   $('#dangerBox').classList.toggle('hidden', !ME.is_admin);
-  renderConnections(); fillProcess(); renderSkillList();
+  renderModel(); renderConnections(); fillProcess(); renderSkillList();
 }
 $('#pSave').onclick = async () => {
   try {
@@ -1767,6 +1777,129 @@ $('#pDelete').onclick = async () => {
     showTab('home'); if (!PID) openWizard(null);
   } catch (e) { alert(e.message); }
 };
+
+// model connection (the same card in the settings and in the wizard; the studio has no built-in model)
+const CAPS = {structured_outputs: 'структурированный ответ', image_input: 'изображения', context_management: 'context editing'};
+function llmState(model, check) {
+  if (!model) return ['модель не выбрана', 'warn'];
+  if (check?.ok) return ['работает', 'ok'];
+  if (check) return ['ошибка проверки', 'bad'];
+  return ['не проверено', 'off'];
+}
+function modelChip(model, check) {
+  const [state, cls] = llmState(model, check);
+  return `<span class="badge ${cls}" title="${esc(state)}">${model ? 'модель: ' + esc(model) : esc(state)}</span>`;
+}
+// Models whose price matters: the project's, the stages' overrides and those already priced.
+function pricedModels(cur) {
+  const p = PROJ.pipeline;
+  return [...new Set([cur, ...['scenarios', 'authoring', 'run', 'publish'].map(s => p[s].model),
+                      ...Object.keys(PROJ.llm.prices)].filter(Boolean))];
+}
+function priceRows(card) {
+  const box = card.querySelector('[data-prices]'), cur = card.querySelector('[data-l="model"]').value.trim();
+  const typed = {};   // keep what was typed but not saved yet
+  box.querySelectorAll('[data-price]').forEach(r => typed[r.dataset.price] = [r.querySelector('[data-in]').value, r.querySelector('[data-out]').value]);
+  box.innerHTML = pricedModels(cur).map(m => {
+    const [i, o] = typed[m] || PROJ.llm.prices[m] || ['', ''];
+    return `<div class="row" data-price="${esc(m)}"><code class="grow">${esc(m)}</code>
+      <label class="inline">вход <input type="number" min="0" step="0.01" data-in value="${esc(i)}" style="width:90px"></label>
+      <label class="inline">выход <input type="number" min="0" step="0.01" data-out value="${esc(o)}" style="width:90px"></label></div>`;
+  }).join('') || '<span class="muted">Сначала выберите модель.</span>';
+}
+function effortOptions(model, cur) {
+  const known = PROJ.llm.models.find(m => m.id === model);
+  const levels = known && known.efforts ? known.efforts : ME.efforts;
+  return '<option value="">по умолчанию модели</option>' + levels.map(e => `<option ${e === cur ? 'selected' : ''}>${e}</option>`).join('')
+    + (cur && !levels.includes(cur) ? `<option selected value="${cur}">${cur} — модель не поддерживает</option>` : '');
+}
+function modelHint(card) {
+  const m = card.querySelector('[data-l="model"]').value.trim(), L = PROJ.llm;
+  const known = L.models.find(x => x.id === m);
+  let h = '';
+  if (m && L.models.length && !known) h = `<span class="err">Модели «${esc(m)}» нет в списке, который вернул API.</span>`;
+  else if (known?.missing.length) h = `<span class="err">Модель не поддерживает: ${known.missing.map(k => CAPS[k] || k).join(', ')} — часть этапов работать не будет.</span>`;
+  else if (known && known.efforts === null) h = 'API не сообщил, какие уровни effort поддерживает модель.';
+  card.querySelector('[data-l-hint]').innerHTML = h;
+}
+function renderModel() {
+  const L = PROJ.llm, [state, cls] = llmState(L.model, L.check);
+  $('#llmModels').innerHTML = L.models.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+  const keyPh = L.key_set ? 'сохранён — введите новый, чтобы заменить'
+    : L.env_key ? 'не задан — используется ANTHROPIC_API_KEY сервера' : 'sk-ant-…';
+  const html = `<div class="card" data-llm>
+    <div class="row"><h3 class="grow" style="margin:0">Модель ИИ</h3>
+      <span class="badge ${cls}" title="${esc(L.check?.error || (L.check?.at ? 'проверено ' + fmtTime(L.check.at) : ''))}">${esc(state)}</span></div>
+    <div class="muted">Студия не привязана к конкретной модели: проект выбирает свою. Её используют все этапы — сценарии, агент, самолечение, анализ падений, публикация; в «Процессе генерации» этап может взять другую модель. Запросы идут в Claude API (Anthropic Messages API) или совместимый шлюз. Ключ хранится на сервере и не показывается в интерфейсе.</div>
+    <div class="grid2">
+      <div><label>API-ключ${L.key_set ? ` · <a href="#" onclick="clearLlmKey();return false">очистить</a>` : ''}</label>
+        <input data-l="api_key" type="password" autocomplete="new-password" placeholder="${esc(keyPh)}"></div>
+      <div><label>Адрес API</label><input data-l="base_url" value="${esc(L.base_url)}" placeholder="по умолчанию — api.anthropic.com" ${ME.is_admin ? '' : 'disabled'}>
+        ${ME.is_admin ? '' : '<div class="hint" style="margin:0">Меняет только администратор: туда уходит ключ.</div>'}</div>
+    </div>
+    <div class="grid2">
+      <div><label>Модель *</label><input data-l="model" list="llmModels" value="${esc(L.model)}" placeholder="идентификатор модели; список — после проверки"></div>
+      <div><label>Effort по умолчанию</label><select data-l="effort">${effortOptions(L.model, L.effort)}</select></div>
+    </div>
+    <div class="hint" data-l-hint></div>
+    <details class="opt"><summary>Цены для оценки стоимости, $ за 1M токенов</summary>
+      <div class="hint" style="margin-top:0">Без цены расход показывается в токенах. Запись в кэш считается как 1,25 входа, чтение — 0,1.</div>
+      <div data-prices></div></details>
+    <div class="row" style="margin-top:10px"><span class="muted grow" data-msg></span>
+      <button class="btn primary" onclick="saveModel(this)">Сохранить и проверить</button></div>
+    <div class="tools" data-models></div></div>`;
+  // The settings tab and the wizard step each hold a copy.
+  $('#modelBox').innerHTML = $('#wzModel').innerHTML = html;
+  $$('[data-llm]').forEach(card => {
+    const model = card.querySelector('[data-l="model"]');
+    model.addEventListener('input', () => {
+      card.querySelector('[data-l="effort"]').innerHTML = effortOptions(model.value.trim(), card.querySelector('[data-l="effort"]').value);
+      modelHint(card); priceRows(card); renderModelList(card);
+    });
+    priceRows(card); modelHint(card); renderModelList(card);
+  });
+}
+function renderModelList(card) {
+  const cur = card.querySelector('[data-l="model"]').value.trim();
+  card.querySelector('[data-models]').innerHTML = PROJ.llm.models.map(m => `<div>
+      <a href="#" onclick="pickModel(this, '${esc(m.id)}');return false"><code>${esc(m.id)}</code></a>
+      ${m.id === cur ? '<span class="badge ok">выбрана</span>' : ''}<span class="muted">${esc(m.name)}</span>
+      ${m.efforts?.length ? `<span class="badge off">effort: ${m.efforts.join(', ')}</span>` : ''}
+      ${m.missing.length ? `<span class="badge warn">нет: ${m.missing.map(k => CAPS[k] || k).join(', ')}</span>` : ''}</div>`).join('');
+}
+function pickModel(link, id) {
+  const model = link.closest('[data-llm]').querySelector('[data-l="model"]');
+  model.value = id; model.dispatchEvent(new Event('input'));
+}
+async function saveModel(btn) {
+  const card = btn.closest('[data-llm]'), msg = card.querySelector('[data-msg]');
+  const val = k => card.querySelector(`[data-l="${k}"]`).value.trim();
+  const prices = {};
+  card.querySelectorAll('[data-price]').forEach(r => {
+    const i = r.querySelector('[data-in]').value, o = r.querySelector('[data-out]').value;
+    if (i !== '' || o !== '') prices[r.dataset.price] = [+i || 0, +o || 0];
+  });
+  const body = {model: val('model'), effort: val('effort'), prices, api_key: val('api_key')};
+  if (ME.is_admin) body.base_url = val('base_url');
+  btn.disabled = true; msg.textContent = 'Проверка подключения…';
+  let error = '';
+  try {
+    PROJ = await api('PUT', `/api/projects/${PID}/llm`, body);
+    try { await api('POST', `/api/projects/${PID}/llm/test`); } catch (e) { error = e.message; }
+    await refreshProject();
+  } catch (e) { error = e.message; }
+  finally { btn.disabled = false; }
+  renderModel(); fillProcess();
+  const L = PROJ.llm, m = ($$('[data-llm]').find(e => e.offsetParent) || $('[data-llm]')).querySelector('[data-msg]');
+  m.innerHTML = error ? `<span class="err">${esc(error)}</span>`
+    : !L.model ? `<span class="ok">Подключение работает</span> · выберите модель из списка (моделей: ${L.models.length})`
+    : `<span class="ok">Сохранено, подключение работает</span> · моделей доступно: ${L.models.length}`;
+}
+async function clearLlmKey() {
+  if (!confirm('Удалить сохранённый API-ключ?')) return;
+  await api('DELETE', `/api/projects/${PID}/llm/key`);
+  await refreshProject(); renderModel();
+}
 
 // connections (the same card is used in the settings and in the new project wizard)
 function presetOf(c) { return PRESETS.find(p => p.id === c.preset) || {fields: []}; }
@@ -1883,6 +2016,11 @@ function connOptions(kind) {
     .map(c => `<option value="${c.id}">${esc(c.name)}${c.enabled ? '' : ' (выключено)'}</option>`).join('');
 }
 function fillProcess() {
+  const L = PROJ.llm;
+  $('#defModel').textContent = L.model ? `${L.model}, effort ${L.effort || 'модели'}` : 'модель не выбрана';
+  $$('.modelIn').forEach(i => i.placeholder = L.model || 'модель не выбрана');
+  $$('.effortSel').forEach(s => s.innerHTML = `<option value="">как в проекте (${esc(L.effort || 'по умолчанию модели')})</option>` +
+    ME.efforts.map(e => `<option>${e}</option>`).join(''));
   $$('[data-conn]').forEach(s => s.innerHTML = connOptions(s.dataset.conn));
   $$('[data-list]').forEach(box => {
     const cur = getPath(PROJ.pipeline, box.dataset.list) || [];
