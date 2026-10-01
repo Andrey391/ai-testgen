@@ -519,8 +519,9 @@ class StudioSession:
                 return
             self.status = "thinking"
             try:
-                resp = await llm.client().beta.messages.create(
-                    **llm.common_params(self.cfg),
+                model = llm.model(self.project_id, self.cfg)
+                resp = await model.client.beta.messages.create(
+                    **model.params,
                     max_tokens=16000,
                     # Breakpoint on the system prompt: tools + rules + skills are cached for the
                     # whole session, even when context editing rewrites old turns.
@@ -538,14 +539,14 @@ class StudioSession:
                         "clear_at_least": {"type": "input_tokens", "value": 8000},
                     }]},
                 )
-            except anthropic.APIError as e:
+            except (anthropic.APIError, llm.NotConfigured) as e:
                 self.status = "error"
                 self.autopilot = False
                 self._say("system", llm.api_error_text(e))
                 # Put the unsent user turn back in the queue so Retry can resend it.
                 self.unanswered = self.messages.pop()["content"]
                 return
-            llm.track(resp, self.usage)
+            model.track(resp, self.usage)
 
             self.messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason == "refusal":

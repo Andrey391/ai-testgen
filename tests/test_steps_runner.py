@@ -115,12 +115,12 @@ def test_trace_only_for_failures_by_default(stand, tmp_path):
     assert rep["passed"] and rep["trace"] == "" and not (tmp_path / "trace.zip").exists()
 
 
-def _list_add_test(stand):
+def _list_add_test(stand, project):
     async def script(r):
         await r.do("fill", "Что купить", "Молоко")
         await r.do("click", "Добавить")
         await r.do("assert_element_text", "Всего: 3")
-    return {"id": "heal1", "project_id": "", "name": "add", "steps": arun(record(f"{stand.url}/list.html", script))}
+    return {"id": "heal1", "project_id": project["id"], "name": "add", "steps": arun(record(f"{stand.url}/list.html", script))}
 
 
 def _healer(fake_llm, name="Добавить пункт"):
@@ -131,8 +131,8 @@ def _healer(fake_llm, name="Добавить пункт"):
     fake_llm.script = script
 
 
-def test_heal_review_mode_proposes_without_changing_the_test(stand, fake_llm, tmp_path):
-    test = _list_add_test(stand)
+def test_heal_review_mode_proposes_without_changing_the_test(stand, project, fake_llm, tmp_path):
+    test = _list_add_test(stand, project)
     old = json.dumps(test["steps"])
     stand.reset("v2")
     _healer(fake_llm)
@@ -146,8 +146,8 @@ def test_heal_review_mode_proposes_without_changing_the_test(stand, fake_llm, tm
     assert fake_llm.calls[0][1]["system"][0]["cache_control"] == {"type": "ephemeral"}
 
 
-def test_heal_auto_mode_rewrites_and_rejected_locator_is_not_reused(stand, fake_llm):
-    test = _list_add_test(stand)
+def test_heal_auto_mode_rewrites_and_rejected_locator_is_not_reused(stand, project, fake_llm):
+    test = _list_add_test(stand, project)
     stand.reset("v2")
     _healer(fake_llm)
     rep = arun(runner.run_test(test, cfg={"self_heal": True, "heal_mode": "auto"}))
@@ -157,7 +157,7 @@ def test_heal_auto_mode_rewrites_and_rejected_locator_is_not_reused(stand, fake_
 
     # A person rejected that choice: the same element is not accepted again.
     stand.reset()
-    test2 = _list_add_test(stand)
+    test2 = _list_add_test(stand, project)
     click2 = next(s for s in test2["steps"] if s["action"] == "click")
     click2["heal_rejected"] = [click["locator"]]
     stand.reset("v2")
@@ -166,8 +166,8 @@ def test_heal_auto_mode_rewrites_and_rejected_locator_is_not_reused(stand, fake_
     assert "отклонён" in next(r for r in rep["results"] if r["status"] == "failed")["error"]
 
 
-def test_heal_off_fails_the_step(stand):
-    test = _list_add_test(stand)
+def test_heal_off_fails_the_step(stand, project):
+    test = _list_add_test(stand, project)
     stand.reset("v2")
     rep = arun(runner.run_test(test, cfg={"self_heal": False}))
     assert not rep["passed"] and "self-healing is off" in rep["results"][-1]["error"]

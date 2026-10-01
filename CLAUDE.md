@@ -13,7 +13,7 @@ AI Test Generator — открытая реализация подхода из 
 
 | CoTester | Здесь |
 |---|---|
-| Проекты | Стартовая вкладка «Проекты» и мастер нового проекта: приложение → подключения к ресурсам (с проверкой) → привязка к этапам процесса. У проекта свои тесты, подключения, скиллы, процесс |
+| Проекты | Стартовая вкладка «Проекты» и мастер нового проекта: приложение → модель ИИ → подключения к ресурсам (с проверкой) → привязка к этапам процесса. У проекта свои тесты, модель, подключения, скиллы, процесс |
 | Start Generating Test Case: URL, проект, название | Форма «Новый тест» |
 | Описание сценария агенту | Поле «Сценарий» и чат с агентом |
 | Auto-Pilot Mode | Переключатель Auto-Pilot |
@@ -40,7 +40,7 @@ venv держим по короткому пути: драйвер Playwright н
 python -m venv $env:LOCALAPPDATA\aitestgen\venv
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m playwright install chromium
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ можно задать в «Проект → Модель»
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python server.py   # http://127.0.0.1:8765
 ```
 
@@ -82,8 +82,9 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 
 ## Переменные окружения
 
-- `ANTHROPIC_API_KEY` — обязательна.
-- `TESTGEN_MODEL` (по умолчанию `claude-opus-5`), `TESTGEN_EFFORT` (`medium`; для сложных сайтов `high`).
+- Модель в коде не задана: модель, effort, API-ключ, адрес API и цены выбираются в «Проект → Модель»
+  (шаг 2 мастера нового проекта); этап процесса может переопределить модель и effort.
+- `ANTHROPIC_API_KEY` — ключ для проектов без своего ключа (удобно для CI, где нет папки `secrets/`).
 - `TESTGEN_AUTH=off` — без входа в студию; `TESTGEN_SIGNUP=off` — без саморегистрации.
 - `TESTGEN_ADMINS` — администраторы студии через запятую (по умолчанию `admin`): только они задают
   команды, аргументы и переменные окружения MCP-подключений, создают подключения «Другой MCP-сервер»
@@ -206,11 +207,17 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 - `testgen/sources.py` — загрузка ТЗ из Jira/Confluence через Atlassian-подключение проекта
   ([mcp-atlassian](https://github.com/sooperset/mcp-atlassian), stdio-процесс на каждый запрос,
   `READ_ONLY_MODE`).
-- `testgen/llm.py` — общий клиент Anthropic и `common_params(stage)` (модель, effort,
-  `fallbacks: "default"`; `stage` — настройки этапа проекта, переопределяют модель и effort).
-  Все запросы к Claude должны использовать `common_params()`, системный промпт — через `llm.system()`
-  (точка кэша на tools + system; переживает context editing), ответ — через `llm.track()` (расход
-  токенов: `Usage`, `usage_scope()`).
+- `testgen/llm.py` — подключение к модели. Привязки к конкретным моделям в коде нет: настройки
+  проекта `project.json` → `llm` (`model`, `effort`, `base_url`, `prices`, результат проверки `check` и
+  список моделей `models` из Models API с поддерживаемыми effort и недостающими возможностями),
+  ключ — `secrets/projects/<id>/llm.json` (`projects.llm_settings`/`update_llm`), без него —
+  `ANTHROPIC_API_KEY`. Все запросы к Claude: `m = llm.model(project_id, stage)` → `m.client` и
+  `**m.params` (модель, effort — только если модель его поддерживает, `fallbacks: "default"`; `stage`
+  переопределяет модель и effort), системный промпт — через `llm.system()` (точка кэша на tools +
+  system; переживает context editing), ответ — через `m.track()` (расход токенов: `Usage`,
+  `usage_scope()`; стоимость — по ценам проекта). Без модели — `llm.NotConfigured`; сервер не
+  запускает генерацию без модели (`_require_model`). `llm.check()` — проверка подключения.
+  Не добавляй в код идентификаторы моделей, их цены и умолчания.
 - `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256);
   `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
   `data/projects/<id>/tests/<test>.json` (теги, карантин, `heal_proposals`, `verify`), `update()` —
@@ -225,6 +232,8 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
   свои у теста — `secrets/projects/<id>/test-<test>.json`.
 - Токены MCP-подключений: `secrets/projects/<id>/conn-<cid>.json`; в `project.json` и API только
   признак «задан» (`secrets_set`).
+- API-ключ модели: `secrets/projects/<id>/llm.json`; в API только `key_set`. Адрес API (`base_url`)
+  меняет только администратор: туда уходит ключ.
 - Команда, аргументы и env MCP-сервера — это запуск кода на сервере: менять их может только
   администратор (`auth.is_admin`); обычный пользователь заполняет лишь поля, объявленные пресетом.
 - `secrets/` в `.gitignore` — никогда не коммить и не выводи его содержимое.

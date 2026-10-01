@@ -6,7 +6,8 @@
 #     application, e.g. under qa/testgen-data, and pointed to by TESTGEN_DATA_DIR;
 #   - repository secrets: TESTGEN_USERNAME / TESTGEN_PASSWORD (login of the application under
 #     test) and, for self-healing and failure analysis, ANTHROPIC_API_KEY (optional: without it
-#     a broken locator just fails the step).
+#     a broken locator just fails the step). The model itself comes from the project settings
+#     in the data folder (Project -> Model in the studio).
 #
 # Result: a JUnit report (shown by the "Test report" step and kept as an artifact) and the
 # run history / traces in the uploaded data folder. The job fails when a test outside

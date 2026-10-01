@@ -2,7 +2,8 @@
 #
 # Include or copy into .gitlab-ci.yml. Expects the studio's data folder committed under
 # qa/testgen-data (TESTGEN_DATA_DIR) and CI/CD variables TESTGEN_USERNAME, TESTGEN_PASSWORD
-# (masked) and, optionally, ANTHROPIC_API_KEY for self-healing and failure analysis.
+# (masked) and, optionally, ANTHROPIC_API_KEY for self-healing and failure analysis (the
+# model is the one chosen in the project settings, Project -> Model).
 # The job fails when a test outside quarantine fails; the JUnit report is shown in merge requests.
 
 ui-regression:

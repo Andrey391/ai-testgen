@@ -89,8 +89,9 @@ async def heal(bs: BrowserSession, step: dict, cfg: dict | None = None,
     elements = "\n".join(describe_element(e) for e in snap["elements"])
     old = ", ".join(f"{c['kind']}={c.get('name') or c.get('value')}" for c in step["locator"])
     system = HEAL_SYSTEM + (skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
-    resp = await llm.client().beta.messages.parse(
-        **llm.common_params(cfg),
+    model = llm.model(project_id, cfg)
+    resp = await model.client.beta.messages.parse(
+        **model.params,
         max_tokens=4000,
         betas=[llm.FALLBACK_BETA],
         system=llm.system(system),
@@ -100,7 +101,7 @@ async def heal(bs: BrowserSession, step: dict, cfg: dict | None = None,
             f"Elements:\n{elements}")}],
         output_format=HealChoice,
     )
-    llm.track(resp)
+    model.track(resp)
     choice = resp.parsed_output
     if resp.stop_reason == "refusal" or not choice or choice.ref not in bs.elements:
         return None
@@ -145,15 +146,16 @@ async def analyze(test: dict, report: dict, cfg: dict | None = None, project_id:
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                     "data": failed["screenshot"]}})
     system = ANALYSIS_SYSTEM + (skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
-    resp = await llm.client().beta.messages.parse(
-        **llm.common_params(cfg),
+    model = llm.model(project_id, cfg)
+    resp = await model.client.beta.messages.parse(
+        **model.params,
         max_tokens=4000,
         betas=[llm.FALLBACK_BETA],
         system=llm.system(system),
         messages=[{"role": "user", "content": content}],
         output_format=FailureAnalysis,
     )
-    llm.track(resp)
+    model.track(resp)
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
         return None
     return resp.parsed_output.model_dump()
@@ -169,10 +171,11 @@ async def judge_visual(test: dict, step: dict, images: dict[str, bytes], cfg: di
                         {"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                                      "data": base64.b64encode(images[label]).decode()}}]
     system = VISUAL_SYSTEM + (skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
-    resp = await llm.client().beta.messages.parse(
-        **llm.common_params(cfg), max_tokens=4000, betas=[llm.FALLBACK_BETA], system=llm.system(system),
+    model = llm.model(project_id, cfg)
+    resp = await model.client.beta.messages.parse(
+        **model.params, max_tokens=4000, betas=[llm.FALLBACK_BETA], system=llm.system(system),
         messages=[{"role": "user", "content": content}], output_format=VisualVerdict)
-    llm.track(resp)
+    model.track(resp)
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
         return None
     return resp.parsed_output.model_dump()

@@ -74,9 +74,9 @@ def _context(requirements: str, url: str, cfg: dict) -> str:
     return text
 
 
-async def _parse(cfg: dict, system: str, context: str, task: str, fmt: type[BaseModel]):
-    resp = await llm.client().beta.messages.parse(
-        **llm.common_params(cfg),
+async def _parse(model: llm.Model, system: str, context: str, task: str, fmt: type[BaseModel]):
+    resp = await model.client.beta.messages.parse(
+        **model.params,
         max_tokens=16000,
         betas=[llm.FALLBACK_BETA],
         # The requirements are the same in every request of one generation: cache them.
@@ -85,6 +85,7 @@ async def _parse(cfg: dict, system: str, context: str, task: str, fmt: type[Base
         messages=[{"role": "user", "content": task}],
         output_format=fmt,
     )
+    model.track(resp)
     if resp.stop_reason == "max_tokens":
         raise RuntimeError("Ответ модели не поместился в лимит: разделите требования на части.")
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
@@ -97,10 +98,11 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
     """`project` (optional) supplies the "scenarios" stage settings: skills, scenario
     types to cover, model and effort. `log(text)` (optional) reports progress."""
     cfg = project["pipeline"]["scenarios"] if project else {}
+    model = llm.model(project["id"] if project else "", cfg)
     system = SYSTEM + (skills.prompt(project["id"], cfg.get("skills", [])) if project else "")
     context = _context(requirements, url, cfg)
 
-    plan: ScenarioPlan = await _parse(cfg, system, context, PLAN_TASK, ScenarioPlan)
+    plan: ScenarioPlan = await _parse(model, system, context, PLAN_TASK, ScenarioPlan)
     if log:
         log(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
     if not plan.scenarios:
@@ -116,7 +118,7 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
                 f"Write out in full only scenarios {start + 1}–{start + len(part)} of this plan, "
                 "in the same order, keeping their titles, types and priorities.")
         async with gate:
-            batch: ScenarioBatch = await _parse(cfg, system, context, task, ScenarioBatch)
+            batch: ScenarioBatch = await _parse(model, system, context, task, ScenarioBatch)
         # The plan is authoritative for what the scenario is; the batch adds the details.
         out = [full.model_copy(update={"title": planned.title, "type": planned.type,
                                        "priority": planned.priority})
