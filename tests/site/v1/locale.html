@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Локаль</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main><div id="locale" role="status"></div><div id="tz" role="status"></div><div id="ua" role="status"></div></main>
+<script>
+document.getElementById('locale').textContent = 'Язык: ' + navigator.language;
+document.getElementById('tz').textContent = 'Пояс: ' + Intl.DateTimeFormat().resolvedOptions().timeZone;
+document.getElementById('ua').textContent = /Mobile/.test(navigator.userAgent) ? 'Мобильный' : 'Десктоп';
+</script>
+</body>
+</html>

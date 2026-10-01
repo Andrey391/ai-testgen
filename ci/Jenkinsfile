@@ -1,0 +1,48 @@
+// Regression run of AI Test Generator tests in Jenkins (declarative pipeline) of the APPLICATION under test.
+//
+// Put it into the application's repository as Jenkinsfile (or a separate job). It expects:
+//   - the studio's data folder committed under qa/testgen-data (TESTGEN_DATA_DIR);
+//   - credentials in Jenkins: "testgen-app-login" (username/password of the application under test) and,
+//     optionally, "testgen-llm-key" (secret text: ANTHROPIC_API_KEY or the key of your model provider) for
+//     self-healing and failure analysis;
+//   - an agent with Python 3.12 and the Playwright system dependencies (or the playwright/python image).
+// The build fails when a test outside quarantine fails; flaky tests do not fail it.
+pipeline {
+    agent { docker { image 'mcr.microsoft.com/playwright/python:v1.55.0-noble' } }
+    parameters {
+        string(name: 'PROJECT', defaultValue: 'My project', description: 'Studio project name or id')
+        string(name: 'TAG', defaultValue: 'smoke', description: 'Tests with this tag; empty = all')
+        choice(name: 'BROWSER', choices: ['chromium', 'firefox', 'webkit'], description: 'Browser')
+    }
+    triggers { cron('H 3 * * *') }                 // nightly
+    environment {
+        TESTGEN_DATA_DIR = "${WORKSPACE}/qa/testgen-data"
+        APP = credentials('testgen-app-login')
+        TESTGEN_USERNAME = "${APP_USR}"
+        TESTGEN_PASSWORD = "${APP_PSW}"
+    }
+    stages {
+        stage('Install the studio') {
+            steps {
+                dir('.testgen') { git url: 'https://git.example.com/qa/ai-testgen.git', branch: 'main' }
+                sh 'python -m pip install -r .testgen/requirements.txt && python -m playwright install ${BROWSER}'
+            }
+        }
+        stage('Run tests') {
+            steps {
+                withCredentials([string(credentialsId: 'testgen-llm-key', variable: 'ANTHROPIC_API_KEY')]) {
+                    dir('.testgen') {
+                        sh '''python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"} --browser "$BROWSER" \
+                              --junit "$WORKSPACE/reports/junit.xml" --allure "$WORKSPACE/reports/allure"'''
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            junit allowEmptyResults: true, testResults: 'reports/junit.xml'
+            archiveArtifacts artifacts: 'reports/**, qa/testgen-data/projects/*/runs/**', allowEmptyArchive: true
+        }
+    }
+}

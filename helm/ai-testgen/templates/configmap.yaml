@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "testgen.fullname" . }}-env
+  labels:
+    {{- include "testgen.labels" . | nindent 4 }}
+data:
+  HOST: "0.0.0.0"
+  PORT: {{ .Values.web.port | quote }}
+  TESTGEN_DATA_DIR: /data
+  TESTGEN_SECRETS_DIR: /secrets
+  FORWARDED_ALLOW_IPS: "*"               # behind the ingress: https in cookies and OIDC links
+  TESTGEN_ADMINS: {{ .Values.admins | quote }}
+  TESTGEN_WORKER_CONCURRENCY: {{ .Values.worker.concurrency | quote }}
+  TESTGEN_S3_BUCKET: {{ .Values.s3.bucket | quote }}
+  TESTGEN_S3_REGION: {{ .Values.s3.region | quote }}
+  {{- with .Values.s3.endpoint }}
+  TESTGEN_S3_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.s3.prefix }}
+  TESTGEN_S3_PREFIX: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.oidc.issuer }}
+  TESTGEN_OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
+  TESTGEN_OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}
+  TESTGEN_OIDC_TITLE: {{ .Values.oidc.title | quote }}
+  TESTGEN_OIDC_GROUPS_CLAIM: {{ .Values.oidc.groupsClaim | quote }}
+  TESTGEN_OIDC_REDIRECT_URL: {{ printf "https://%s/api/auth/oidc/callback" .Values.ingress.host | quote }}
+  {{- end }}
+  {{- if .Values.ldap.url }}
+  TESTGEN_LDAP_URL: {{ .Values.ldap.url | quote }}
+  TESTGEN_LDAP_BASE_DN: {{ .Values.ldap.baseDn | quote }}
+  TESTGEN_LDAP_BIND_DN: {{ .Values.ldap.bindDn | quote }}
+  {{- with .Values.ldap.userFilter }}
+  TESTGEN_LDAP_USER_FILTER: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- range $k, $v := .Values.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

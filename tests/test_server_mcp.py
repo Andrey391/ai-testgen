@@ -105,6 +105,22 @@ def test_suite_endpoint_and_junit(client, open_studio, stand, project, save_test
     assert client.post(f"/api/projects/{project['id']}/runs", json={"tags": ["nope"]}).status_code == 400
 
 
+def test_dashboard_metrics(client, open_studio, stand, project, save_test):
+    good = save_test("A", [new_step("navigate", "open", f"{stand.url}/form.html")],
+                     external={"testit": {"work_item_id": "wi-1", "case_id": "wi-1"}},
+                     verify={"status": "done", "score": 0.8})
+    save_test("B", [new_step("navigate", "open", f"{stand.url}/list.html")], quarantine={"on": True})
+    save_test("M", [], role="module")
+    sid = client.post(f"/api/projects/{project['id']}/runs", json={}).json()["id"]
+    _wait(client, f"/api/suites/{sid}")
+    m = client.get(f"/api/projects/{project['id']}/metrics").json()
+    assert m["tests"] == 2 and m["automation"]["linked_cases"] == 1          # modules do not count
+    assert m["quality"]["mutation_score"] == 0.8 and m["stability"]["quarantined"] == 1
+    assert m["saved"]["runs"] == 2 and m["saved"]["hours"] == round(2 * 5 / 60, 1)
+    assert m["regression"]["last_minutes"] is not None and m["stability"]["pass_rate"] == 1.0
+    assert storage.load(good["id"])
+
+
 def test_tokens_and_mcp_over_http(client, monkeypatch, project):
     monkeypatch.setattr(auth, "ENABLED", True)
     auth.set_password("ide-user", "password-123")

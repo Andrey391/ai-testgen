@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Действия</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<style>.zone{border:2px dashed #999;padding:14px;margin-top:10px;min-height:30px}.card{background:#eef;padding:6px;display:inline-block;margin-top:10px}</style></head>
+<body>
+<main>
+  <h1>Действия</h1>
+  <label for="doc">Документ</label>
+  <input type="file" id="doc" data-testid="doc">
+  <div id="uploaded" role="status"></div>
+
+  <div><a id="report" href="/download/report.csv">Скачать отчёт</a></div>
+
+  <div><button id="del">Удалить черновик</button> <button id="rename">Переименовать</button></div>
+  <div id="dialog-result" role="status"></div>
+
+  <div><a id="newtab" href="list.html" target="_blank">Открыть список в новой вкладке</a></div>
+
+  <div><button id="dbl">Двойной клик</button> <span id="dbl-result"></span></div>
+
+  <div class="card" id="task" draggable="true">Задача 1</div>
+  <div class="zone" id="done-zone" data-testid="done-zone">Готово:</div>
+</main>
+<script>
+document.getElementById('doc').addEventListener('change', e => {
+  const f = e.target.files[0];
+  document.getElementById('uploaded').textContent = f ? 'Загружен: ' + f.name + ' (' + f.size + ' байт)' : '';
+});
+document.getElementById('del').addEventListener('click', () => {
+  document.getElementById('dialog-result').textContent = confirm('Удалить черновик?') ? 'Черновик удалён' : 'Отменено';
+});
+document.getElementById('rename').addEventListener('click', () => {
+  const name = prompt('Новое имя');
+  document.getElementById('dialog-result').textContent = name ? 'Имя: ' + name : 'Без имени';
+});
+document.getElementById('dbl').addEventListener('dblclick', () => {
+  document.getElementById('dbl-result').textContent = 'Сработал двойной клик';
+});
+const task = document.getElementById('task'), zone = document.getElementById('done-zone');
+task.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', task.id));
+zone.addEventListener('dragover', e => e.preventDefault());
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.textContent = 'Готово: ' + document.getElementById(e.dataTransfer.getData('text/plain')).textContent;
+});
+</script>
+</body>
+</html>

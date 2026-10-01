@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Веб-компонент</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <h1>Счётчик на веб-компоненте</h1>
+  <tg-counter></tg-counter>
+</main>
+<script>
+customElements.define('tg-counter', class extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({mode: 'open'});
+    root.innerHTML = '<style>button{font:inherit;padding:6px 14px;margin-right:8px}</style>' +
+      '<label for="step">Шаг</label> <input id="step" value="1" size="3">' +
+      '<button part="plus">Плюс</button><span class="value" role="status">Счётчик: 0</span>';
+    let n = 0;
+    root.querySelector('button').addEventListener('click', () => {
+      n += Number(root.getElementById('step').value || 1);
+      root.querySelector('.value').textContent = 'Счётчик: ' + n;
+    });
+  }
+});
+</script>
+</body>
+</html>

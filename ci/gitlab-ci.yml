@@ -13,17 +13,20 @@ ui-regression:
     TESTGEN_REPO: "https://gitlab.example.com/qa/ai-testgen.git"   # the studio
     PROJECT: "My project"                                          # studio project name or id
     TAG: "smoke"                                                   # empty = all tests
+  parallel:
+    matrix:
+      - BROWSER: [chromium]                                        # add firefox, webkit for cross-browser runs
   script:
     - git clone --depth 1 "$TESTGEN_REPO" .testgen
     - python -m pip install -r .testgen/requirements.txt
-    - python -m playwright install chromium
+    - python -m playwright install $BROWSER
     - cd .testgen
-    - python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"}
-        --junit "$CI_PROJECT_DIR/reports/junit.xml" --allure "$CI_PROJECT_DIR/reports/allure"
+    - python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"} --browser "$BROWSER"
+        --junit "$CI_PROJECT_DIR/reports/junit-$BROWSER.xml" --allure "$CI_PROJECT_DIR/reports/allure"
   artifacts:
     when: always
     reports:
-      junit: reports/junit.xml
+      junit: reports/junit-*.xml
     paths:
       - reports/
       - qa/testgen-data/projects/*/runs/
