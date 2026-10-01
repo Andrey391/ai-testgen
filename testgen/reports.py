@@ -1,7 +1,7 @@
 """Suite results for CI: JUnit XML and Allure results.
 
 JUnit: one <testcase> per test. A failure carries the failed step, the error and
-Claude's analysis; a flaky test (failed, then passed on re-run) passes with the
+the LLM's analysis; a flaky test (failed, then passed on re-run) passes with the
 property flaky=true; a failed test in quarantine is <skipped>, so it does not
 fail the build but stays visible.
 

@@ -1,7 +1,7 @@
 """Publishing to a test management system (Zephyr Scale) through its MCP server.
 
 Community Zephyr MCP servers differ in tool names and arguments, so instead of
-hard-coding one API Claude gets the connection's tools (everything except
+hard-coding one API the LLM gets the connection's tools (everything except
 delete/remove tools) plus the "publish" skills, and drives them itself. It ends
 with the `done` tool, which reports the key of the created/updated object.
 
@@ -111,7 +111,7 @@ async def _agent(project: dict, conn: dict, stage_cfg: dict, skill_names: list[s
                                 "is_error": is_error})
             messages.append({"role": "user", "content": results})
         raise PublishError("Публикация не завершилась за отведённое число шагов")
-    except anthropic.APIError as e:
+    except (anthropic.APIError, llm.ModelNotConfigured) as e:
         raise PublishError(llm.api_error_text(e))
     finally:
         await toolbox.close()

@@ -5,8 +5,8 @@
 #   - the tests: the studio's data folder (data/projects/<id>/...) committed next to the
 #     application, e.g. under qa/testgen-data, and pointed to by TESTGEN_DATA_DIR;
 #   - repository secrets: TESTGEN_USERNAME / TESTGEN_PASSWORD (login of the application under
-#     test) and, for self-healing and failure analysis, ANTHROPIC_API_KEY (optional: without it
-#     a broken locator just fails the step).
+#     test) and, for self-healing and failure analysis, ANTHROPIC_API_KEY plus the repository
+#     variable TESTGEN_MODEL (optional: without them a broken locator just fails the step).
 #
 # Result: a JUnit report (shown by the "Test report" step and kept as an artifact) and the
 # run history / traces in the uploaded data folder. The job fails when a test outside
@@ -29,6 +29,7 @@ jobs:
       TESTGEN_USERNAME: ${{ secrets.TESTGEN_USERNAME }}
       TESTGEN_PASSWORD: ${{ secrets.TESTGEN_PASSWORD }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TESTGEN_MODEL: ${{ vars.TESTGEN_MODEL }}
       PROJECT: "My project"       # studio project name or id
       TAG: ${{ github.event_name == 'schedule' && '' || 'smoke' }}   # smoke on pushes, everything nightly
     steps:

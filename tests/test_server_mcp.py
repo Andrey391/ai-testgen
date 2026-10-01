@@ -108,7 +108,7 @@ def test_suite_endpoint_and_junit(client, open_studio, stand, project, save_test
 def test_tokens_and_mcp_over_http(client, monkeypatch, project):
     monkeypatch.setattr(auth, "ENABLED", True)
     auth.set_password("ide-user", "password-123")
-    token, rec = auth.create_api_token("ide-user", "Claude Code")
+    token, rec = auth.create_api_token("ide-user", "IDE")
     assert auth.user_for_api_token(token) == "ide-user" and auth.user_for_api_token(token + "x") is None
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {

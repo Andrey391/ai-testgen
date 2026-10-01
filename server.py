@@ -11,6 +11,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 import zipfile
@@ -142,7 +143,7 @@ async def logout():
 async def me(request: Request):
     return {"user": request.state.user, "auth_enabled": auth.ENABLED, "signup": auth.SIGNUP,
             "is_admin": bool(request.state.user) and auth.is_admin(request.state.user),
-            "model": llm.MODEL, "effort": llm.EFFORT, "prompt_cache": llm.PROMPT_CACHE,
+            "model_set": bool(llm.MODEL), "effort": llm.EFFORT, "prompt_cache": llm.PROMPT_CACHE,
             "mcp_url": f"{request.base_url}".rstrip("/") + "/mcp"}
 
 
@@ -266,8 +267,9 @@ async def export_project(pid: str, tag: str = ""):
 # ---------- Project MCP connections ----------
 
 @app.get("/api/mcp/presets")
-async def mcp_presets():
-    return mcp_hub.presets_public()
+async def mcp_presets(request: Request):
+    # Launch commands come from the server's environment: only admins see them.
+    return mcp_hub.presets_public(with_commands=bool(request.state.user) and auth.is_admin(request.state.user))
 
 
 class NewConnection(BaseModel):
@@ -1044,6 +1046,8 @@ app.mount("/", MCP_APP)
 
 
 if __name__ == "__main__":
+    if not llm.MODEL:
+        sys.exit(llm.MODEL_HINT + ".")
     auth.ensure_admin()
-    print(f"AI Test Generator: http://127.0.0.1:{PORT}  (model {llm.MODEL}, effort {llm.EFFORT})")
+    print(f"AI Test Generator: http://127.0.0.1:{PORT}")
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

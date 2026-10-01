@@ -2,7 +2,7 @@
 
 Same interface as browser.BrowserSession (describe / screenshot_b64 / execute /
 url / close), so the agent, its tools and the recorded steps do not change:
-Claude still calls click(ref), fill(ref, text)..., only the page snapshot is
+The LLM still calls click(ref), fill(ref, text)..., only the page snapshot is
 Playwright's ARIA snapshot and actions go through the MCP server.
 
 Recorded steps need stable locators for replay and export. Before acting on an
@@ -11,7 +11,7 @@ the built-in snapshot (test id, id, role, name, label...), and the code
 Playwright MCP generates for the probe carries Playwright's own unique locator.
 Saved tests are replayed by runner.py with the built-in engine as usual.
 
-The password never reaches Claude: {{password}} is expanded right before the
+The password never reaches the LLM: {{password}} is expanded right before the
 tool call and masked in everything the server returns.
 """
 from __future__ import annotations

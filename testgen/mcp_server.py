@@ -1,4 +1,4 @@
-"""The studio as an MCP server: IDE agents (Claude Code, GitHub Copilot, Cursor)
+"""The studio as an MCP server: IDE agents
 generate, run and export tests and read failures without opening the studio.
 
 Two ways to connect (see docs/mcp.md):
@@ -11,7 +11,7 @@ Two ways to connect (see docs/mcp.md):
 A token (Проект → Доступ из IDE, or `python -m testgen.auth token <user>`)
 carries its user's rights. Nothing here deletes data or touches the commands of
 MCP connections, so admin rights are never involved; the authoring agent keeps
-all its rules (no irreversible actions, the password never reaches Claude).
+all its rules (no irreversible actions, the password never reaches the LLM).
 """
 from __future__ import annotations
 
@@ -213,7 +213,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         return {k: s.get(k) for k in ("id", "status", "passed", "summary", "tags", "started", "finished", "items")}
 
     @mcp.tool(description="Failing tests of a project (last run failed, errored or flaky) with the failed step, "
-                          "the error and Claude's verdict: product bug, test issue, environment, flaky.")
+                          "the error and the AI verdict: product bug, test issue, environment, flaky.")
     async def list_failures(project: str, include_flaky: bool = True) -> list[dict]:
         out = []
         for t in storage.all_tests(_project(project)["id"]):
@@ -251,7 +251,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         for n in names:
             f = runs.file(run, n)
             if f:
-                out.append({"file": str(f), "size": f.stat().st_size, "open": f'npx playwright show-trace "{f}"',
+                out.append({"file": str(f), "size": f.stat().st_size, "open": f'playwright show-trace "{f}"',
                             "download": f"{backend.studio_url}/api/runs/{run_id}/files/{n}" if backend.studio_url
                             else ""})
         return {"run_id": run_id, "status": run["status"], "traces": out}

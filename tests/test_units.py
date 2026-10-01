@@ -91,7 +91,7 @@ def test_usage_scopes_nest():
     from types import SimpleNamespace
 
     from testgen import llm
-    resp = SimpleNamespace(model="claude-opus-5", usage=SimpleNamespace(
+    resp = SimpleNamespace(model="test-model", usage=SimpleNamespace(
         input_tokens=1000, output_tokens=100, cache_creation_input_tokens=0, cache_read_input_tokens=9000))
     own = llm.Usage()
     with llm.usage_scope() as job:

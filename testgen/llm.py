@@ -1,4 +1,4 @@
-"""Shared Claude client settings, prompt caching and token accounting.
+"""Shared LLM client settings, prompt caching and token accounting.
 
 Prompt caching. Requests render as tools -> system -> messages. `system()` puts a
 cache breakpoint on the system prompt, so the tools, the rules and the skills
@@ -11,31 +11,62 @@ TESTGEN_PROMPT_CACHE=off switches caching off, to measure the difference.
 
 Token accounting. `track(resp)` adds a response's usage to a `Usage`: the one
 given, or the one opened with `usage_scope()` around a piece of work (a test
-run, a pipeline job). `Usage.cost()` estimates dollars for known models.
+run, a pipeline job). `Usage.cost()` estimates dollars when TESTGEN_PRICES gives
+the price of every model used.
+
+Nothing here names a model or a price: the model comes from TESTGEN_MODEL (or a
+project stage's settings), prices from TESTGEN_PRICES.
 """
 from __future__ import annotations
 
 import contextlib
 import contextvars
+import json
 import os
+from pathlib import Path
 
 import anthropic
 
-MODEL = os.environ.get("TESTGEN_MODEL", "claude-opus-5")
+# No built-in default: the model is chosen by whoever deploys the studio.
+MODEL = os.environ.get("TESTGEN_MODEL", "").strip()
 # Browser driving is a latency-sensitive loop of many small decisions;
 # "medium" keeps each step fast. Raise to "high" for tricky apps.
 EFFORT = os.environ.get("TESTGEN_EFFORT", "medium")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PROMPT_CACHE = os.environ.get("TESTGEN_PROMPT_CACHE", "on").lower() not in ("off", "0", "false", "no")
 
+# API protocol versions. The API only accepts these features under a dated
+# identifier; they are kept together here and nowhere else.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CONTEXT_BETA = "context-management-2025-06-27"
+CLEAR_TOOL_USES = "clear_tool_uses_20250919"
+
+MODEL_HINT = ("Не задана модель: укажите TESTGEN_MODEL (или модель этапа в «Проект → "
+              "Процесс генерации»)")
+
+
+class ModelNotConfigured(Exception):
+    """Neither TESTGEN_MODEL nor the stage's settings name a model."""
+
+    def __init__(self):
+        super().__init__(MODEL_HINT)
+
+
+def _load_prices() -> dict[str, tuple[float, float]]:
+    """TESTGEN_PRICES: JSON {"<model>": [input, output]} in $ per million tokens,
+    inline or a path to a .json file. Empty -> costs are not estimated."""
+    raw = os.environ.get("TESTGEN_PRICES", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw if raw.startswith("{") else Path(raw).read_text("utf-8"))
+        return {str(k): (float(v[0]), float(v[1])) for k, v in data.items()}
+    except (OSError, ValueError, TypeError, IndexError, AttributeError) as e:
+        raise SystemExit(f"TESTGEN_PRICES: ожидается JSON {{\"модель\": [вход, выход]}} или путь к нему ({e})")
+
 
 # $ per million tokens: input, output. Cache writes cost 1.25x input, reads 0.1x.
-PRICES = {"claude-opus-5": (5, 25), "claude-opus-5-5": (4, 20), "claude-fable-5-1": (10, 50),
-          "claude-fable-5": (10, 50), "claude-sonnet-5": (2, 10), "claude-opus-4-8": (5, 25),
-          "claude-opus-4-7": (5, 25), "claude-opus-4-6": (5, 25), "claude-sonnet-4-6": (3, 15),
-          "claude-haiku-4-5": (1, 5)}
+PRICES = _load_prices()
 
 _client: anthropic.AsyncAnthropic | None = None
 
@@ -53,13 +84,16 @@ def common_params(stage: dict | None = None) -> dict:
     `stage` is a pipeline stage config from the project: its "model" / "effort"
     override the global defaults when set.
 
-    fallbacks="default": if Claude's safety classifiers decline a request, the
-    API re-runs it on Anthropic's recommended fallback model instead of failing.
+    fallbacks="default": if the safety classifiers decline a request, the
+    API re-runs it on the provider's fallback model instead of failing.
     """
     stage = stage or {}
     effort = stage.get("effort") if stage.get("effort") in EFFORTS else EFFORT
+    model = (stage.get("model") or "").strip() or MODEL
+    if not model:
+        raise ModelNotConfigured()
     return {
-        "model": (stage.get("model") or "").strip() or MODEL,
+        "model": model,
         "output_config": {"effort": effort},
         "fallbacks": "default",
     }
@@ -103,7 +137,7 @@ class Usage:
         return {f: sum(m[f] for m in self.by_model.values()) for f in self.FIELDS}
 
     def cost(self) -> float | None:
-        """Estimated $, or None if a model's price is unknown."""
+        """Estimated $, or None if a model's price is not in TESTGEN_PRICES."""
         total = 0.0
         for model, m in self.by_model.items():
             price = next((p for k, p in PRICES.items() if model == k or model.startswith(k + "-")), None)
@@ -142,19 +176,23 @@ def track(resp, usage: Usage | None = None) -> None:
 
 
 def is_api_error(e: Exception) -> bool:
-    return isinstance(e, anthropic.APIError) or (isinstance(e, TypeError) and "authentication" in str(e))
+    """The LLM is unavailable: an API error, no credentials or no model configured."""
+    return (isinstance(e, (anthropic.APIError, ModelNotConfigured))
+            or (isinstance(e, TypeError) and "authentication" in str(e)))
 
 
 def api_error_text(e: Exception) -> str:
+    if isinstance(e, ModelNotConfigured):
+        return MODEL_HINT + "."
     if isinstance(e, anthropic.AuthenticationError):
-        return "Claude API: invalid or missing credentials (set ANTHROPIC_API_KEY)."
+        return "API ИИ: неверный или отсутствующий ключ (задайте ANTHROPIC_API_KEY)."
     if isinstance(e, anthropic.RateLimitError):
-        return "Claude API: rate limited, try again in a moment."
+        return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
-        return f"Claude API error {e.status_code}: {e.message}"
+        return f"Ошибка API ИИ {e.status_code}: {e.message}"
     if isinstance(e, anthropic.APIConnectionError):
-        return "Claude API: network error."
+        return "API ИИ: ошибка сети."
     if isinstance(e, TypeError) and "authentication" in str(e):
         # The SDK raises this before sending anything when no credentials are set.
-        return "Claude API: invalid or missing credentials (set ANTHROPIC_API_KEY)."
+        return "API ИИ: неверный или отсутствующий ключ (задайте ANTHROPIC_API_KEY)."
     return f"{type(e).__name__}: {e}"

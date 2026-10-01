@@ -1,7 +1,7 @@
 """The full, configurable test generation process of a project:
 
     requirements (Jira / Confluence via MCP, .md, text, or the Planner's site map)
-      -> scenarios (test design by Claude + skills; manual or automatic selection)
+      -> scenarios (test design by the LLM + skills; manual or automatic selection)
       -> authoring (agent in a real browser: built-in Playwright or Playwright MCP)
       -> run (replay with self-healing, re-run of failures, failure analysis)
       -> verify (mutation testing of the assertions; weak ones are strengthened by the agent)
@@ -41,7 +41,7 @@ async def run_and_record(project: dict, test: dict, headless: bool | None = None
     """Run a saved test with the project's "run" settings and record the result.
 
     One attempt, and a second one if it failed (run.retry_failed): failed then passed
-    is "flaky". A failure is analysed by Claude with the test's history. The run goes
+    is "flaky". A failure is analysed by the LLM with the test's history. The run goes
     to the history (runs.py); the test gets its last run summary, heal proposals
     (review mode) or healed locators (auto mode), and quarantine if auto-quarantine
     is on and the test flips too often. Reported to Zephyr if publishing is set up.

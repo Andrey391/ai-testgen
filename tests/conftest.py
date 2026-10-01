@@ -15,6 +15,9 @@ from pathlib import Path
 _TMP = Path(tempfile.mkdtemp(prefix="testgen-tests-"))
 os.environ["TESTGEN_DATA_DIR"] = str(_TMP / "data")
 os.environ["TESTGEN_SECRETS_DIR"] = str(_TMP / "secrets")
+# A neutral model name and its price: the studio has no built-in models or prices.
+os.environ["TESTGEN_MODEL"] = "test-model"
+os.environ["TESTGEN_PRICES"] = '{"test-model": [5, 25]}'
 for var in ("TESTGEN_USERNAME", "TESTGEN_PASSWORD", "TESTGEN_PROMPT_CACHE", "TESTGEN_BASE_URL"):
     os.environ.pop(var, None)
 ROOT = Path(__file__).resolve().parent.parent
