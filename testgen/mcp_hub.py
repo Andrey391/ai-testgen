@@ -1,5 +1,11 @@
-"""MCP connections of a project: Jira/Confluence (mcp-atlassian), Zephyr Scale,
-Playwright MCP, or any other MCP server.
+"""MCP connections of a project: Jira/Confluence, Zephyr Scale, Playwright MCP,
+or any other MCP server.
+
+The studio does not name or download any MCP server package itself. A preset's
+launch command comes from the connection (set by an admin) or from the preset's
+environment variable (TESTGEN_ATLASSIAN_MCP, TESTGEN_ZEPHYR_MCP,
+TESTGEN_PLAYWRIGHT_MCP); for Jira/Confluence the server installed from
+requirements.txt next to this interpreter is found as well.
 
 A connection is created from a preset. Its public part (preset, name, command,
 non-secret fields) lives in project.json; secret fields (API tokens) live in
@@ -37,7 +43,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 
 from . import vault
 
-STARTUP_TIMEOUT = 120      # npx may download the package on first start
+STARTUP_TIMEOUT = 120      # a package runner may download the server on first start
 CALL_TIMEOUT = 120
 MAX_RESULT_CHARS = 30_000
 
@@ -56,15 +62,26 @@ def normalize_site(site: str) -> str:
 
 # ---------- presets ----------
 
-def _atlassian_command() -> tuple[str, list[str]]:
-    custom = os.environ.get("TESTGEN_ATLASSIAN_MCP")
-    if custom:
-        cmd, *args = shlex.split(custom, posix=os.name != "nt")
-        return cmd, args
-    # Installed from requirements.txt next to this interpreter; else try uvx.
-    exe = (shutil.which("mcp-atlassian", path=os.path.dirname(sys.executable))
-           or shutil.which("mcp-atlassian"))
-    return (exe, []) if exe else ("uvx", ["mcp-atlassian"])
+def _env_command(var: str) -> tuple[str, list[str]] | None:
+    custom = os.environ.get(var, "").strip()
+    if not custom:
+        return None
+    cmd, *args = shlex.split(custom, posix=os.name != "nt")
+    return cmd, args
+
+
+def _installed(name: str) -> tuple[str, list[str]] | None:
+    """A server installed from requirements.txt next to this interpreter."""
+    exe = shutil.which(name, path=os.path.dirname(sys.executable))
+    return (exe, []) if exe else None
+
+
+def preset_command(preset: str) -> tuple[str, list[str]] | None:
+    """The configured launch command of a preset, or None if it is not configured."""
+    p = PRESETS[preset]
+    if not p.get("command_env"):
+        return None
+    return _env_command(p["command_env"]) or (_installed(p["installed"]) if p.get("installed") else None)
 
 
 def _atlassian_env(f: dict) -> dict:
@@ -81,21 +98,25 @@ PRESETS: dict[str, dict] = {
     "atlassian": {
         "title": "Jira / Confluence",
         "kind": "requirements",
-        "hint": "MCP-сервер mcp-atlassian (Atlassian Cloud), только чтение. Токен: "
-                "id.atlassian.com → Security → API tokens.",
+        "hint": "MCP-сервер Jira/Confluence, только чтение. Команда запуска — переменная "
+                "TESTGEN_ATLASSIAN_MCP или сервер из requirements.txt. Токен: профиль Atlassian → "
+                "Security → API tokens.",
+        "command_env": "TESTGEN_ATLASSIAN_MCP", "installed": "mcp-atlassian",
         "fields": [
             {"key": "site", "label": "Адрес", "placeholder": "https://company.atlassian.net", "required": True},
             {"key": "email", "label": "Email", "required": True},
             {"key": "token", "label": "API-токен", "secret": True, "required": True},
+            {"key": "defect_project", "label": "Проект Jira для дефектов (ключ)", "placeholder": "QA"},
+            {"key": "defect_type", "label": "Тип задачи дефекта", "placeholder": "Bug"},
         ],
         "env": _atlassian_env,
     },
     "zephyr": {
         "title": "Zephyr Scale",
         "kind": "test_management",
-        "hint": "MCP-сервер mcp-zephyr-scale (Zephyr Scale Cloud, нужен Node.js). Токен: Jira → "
-                "профиль → Zephyr API keys.",
-        "command": "npx", "args": ["-y", "mcp-zephyr-scale"],
+        "hint": "MCP-сервер Zephyr Scale. Команда запуска — переменная TESTGEN_ZEPHYR_MCP "
+                "или поле «Команда» (администратор). Токен: Jira → профиль → Zephyr API keys.",
+        "command_env": "TESTGEN_ZEPHYR_MCP",
         "fields": [
             {"key": "project_key", "label": "Ключ проекта Jira", "placeholder": "PROJ", "required": True},
             {"key": "token", "label": "Zephyr API-токен", "secret": True, "required": True},
@@ -106,11 +127,82 @@ PRESETS: dict[str, dict] = {
     "playwright": {
         "title": "Playwright MCP",
         "kind": "browser",
-        "hint": "Официальный MCP-сервер Playwright (@playwright/mcp, нужен Node.js). Используется как "
-                "движок браузера при генерации тестов. По умолчанию берёт Chromium, установленный "
-                "командой playwright install.",
-        "command": "npx", "args": ["-y", "@playwright/mcp@latest"],
+        "hint": "MCP-сервер Playwright. Используется как движок браузера при генерации тестов. "
+                "Команда запуска — переменная TESTGEN_PLAYWRIGHT_MCP или поле «Команда» "
+                "(администратор). По умолчанию берёт Chromium, установленный командой playwright install.",
+        "command_env": "TESTGEN_PLAYWRIGHT_MCP",
         "fields": [],
+        "env": lambda f: {},
+    },
+    "allure": {
+        "title": "Allure TestOps",
+        "kind": "test_management",
+        "hint": "Встроенный MCP-сервер Allure TestOps (с версии 26.1.1), HTTP. Токен: профиль → API tokens. "
+                "Публикация тест-кейсов, результаты прогонов, импорт ручных кейсов. Если адрес MCP у вашей "
+                "установки другой — администратор меняет его в «Запуск сервера».",
+        "transport": "http",
+        "fields": [
+            {"key": "site", "label": "Адрес Allure TestOps", "placeholder": "https://allure.company.ru", "required": True},
+            {"key": "project_id", "label": "ID проекта", "placeholder": "12", "required": True},
+            {"key": "token", "label": "API-токен", "secret": True, "required": True},
+        ],
+        "url": lambda f: f"{normalize_site(f.get('site', ''))}/api/mcp" if f.get("site") else "",
+        "headers": lambda f: {"Authorization": f"Api-Token {f['token']}"} if f.get("token") else {},
+        "env": lambda f: {},
+    },
+    "testit": {
+        "title": "Test IT",
+        "kind": "test_management",
+        "hint": "Test IT через REST API v2 (MCP-сервера с записью у Test IT нет). Токен: профиль → Приватный "
+                "токен. Автотесты с привязкой к ручным кейсам, результаты прогонов, импорт ручных кейсов.",
+        "rest": True,
+        "fields": [
+            {"key": "site", "label": "Адрес Test IT", "placeholder": "https://testit.company.ru", "required": True},
+            {"key": "project_id", "label": "ID проекта (UUID)", "required": True},
+            {"key": "configuration_id", "label": "ID конфигурации (необязательно)"},
+            {"key": "token", "label": "Приватный токен", "secret": True, "required": True},
+        ],
+        "env": lambda f: {},
+    },
+    "youtrack": {
+        "title": "YouTrack",
+        "kind": "tracker",
+        "hint": "YouTrack через REST API: требования из задач (только чтение) и дефекты — только по нажатию "
+                "человека. Токен: профиль → Account Security → Tokens.",
+        "rest": True,
+        "fields": [
+            {"key": "site", "label": "Адрес YouTrack", "placeholder": "https://company.youtrack.cloud", "required": True},
+            {"key": "defect_project", "label": "Проект для дефектов (краткое имя)", "placeholder": "QA"},
+            {"key": "token", "label": "Постоянный токен", "secret": True, "required": True},
+        ],
+        "env": lambda f: {},
+    },
+    "yandex_tracker": {
+        "title": "Яндекс Трекер",
+        "kind": "tracker",
+        "hint": "Яндекс Трекер через REST API: требования из задач (только чтение) и дефекты — только по нажатию "
+                "человека. OAuth-токен или IAM-токен и идентификатор организации.",
+        "rest": True,
+        "fields": [
+            {"key": "org_id", "label": "ID организации", "required": True},
+            {"key": "cloud", "label": "Организация Yandex Cloud (yes/no)", "placeholder": "no"},
+            {"key": "queue", "label": "Очередь для дефектов", "placeholder": "QA"},
+            {"key": "token", "label": "OAuth-токен", "secret": True, "required": True},
+        ],
+        "env": lambda f: {},
+    },
+    "kaiten": {
+        "title": "Kaiten",
+        "kind": "tracker",
+        "hint": "Kaiten через REST API: требования из карточек (только чтение) и дефекты — только по нажатию "
+                "человека. Токен: профиль → API/Интеграции.",
+        "rest": True,
+        "fields": [
+            {"key": "site", "label": "Адрес Kaiten", "placeholder": "https://company.kaiten.ru", "required": True},
+            {"key": "board_id", "label": "Доска для дефектов (ID)"},
+            {"key": "column_id", "label": "Колонка для дефектов (ID)"},
+            {"key": "token", "label": "API-токен", "secret": True, "required": True},
+        ],
         "env": lambda f: {},
     },
     "custom": {
@@ -143,18 +235,31 @@ def parse_env(text: str) -> dict:
     return env
 
 
-def presets_public() -> list[dict]:
-    return [{"id": k, "title": p["title"], "kind": p["kind"], "hint": p["hint"],
-             "admin_only": p.get("admin_only", False),
-             "fields": p["fields"], "command": p.get("command", ""), "args": p.get("args", [])}
-            for k, p in PRESETS.items()]
+def presets_public(with_commands: bool = False) -> list[dict]:
+    out = []
+    for k, p in PRESETS.items():
+        cmd, args = (preset_command(k) if with_commands else None) or ("", [])
+        out.append({"id": k, "title": p["title"], "kind": p["kind"], "hint": p["hint"],
+                    "admin_only": p.get("admin_only", False), "rest": p.get("rest", False),
+                    "fields": p["fields"], "command": cmd, "args": args, "command_env": p.get("command_env", "")})
+    return out
 
 
 def new_connection(preset: str, name: str = "") -> dict:
     p = PRESETS[preset]
     return {"id": uuid.uuid4().hex[:8], "preset": preset, "name": name or p["title"],
-            "enabled": True, "transport": "stdio", "command": "", "args": [], "url": "",
+            "enabled": True, "transport": p.get("transport", "stdio"), "command": "", "args": [], "url": "",
             "env": {}, "fields": {}}
+
+
+def is_rest(conn: dict) -> bool:
+    """Connections the studio calls over REST itself (Test IT, trackers): no MCP server."""
+    return bool(PRESETS.get(conn.get("preset"), {}).get("rest"))
+
+
+def fields_of(project_id: str, conn: dict) -> tuple[dict, dict]:
+    """(non-secret fields, secrets) of a connection."""
+    return dict(conn.get("fields") or {}), load_secrets(project_id, conn["id"])
 
 
 def secret_keys(conn: dict) -> set[str]:
@@ -205,13 +310,13 @@ def find(project: dict, preset: str | None = None, cid: str = "", enabled_only: 
 def _command(conn: dict) -> tuple[str, list[str]]:
     if conn.get("command"):
         return conn["command"], list(conn.get("args") or [])
-    p = PRESETS[conn["preset"]]
-    if conn["preset"] == "atlassian":
-        cmd, args = _atlassian_command()
-        return cmd, args + list(conn.get("args") or [])
-    if not p.get("command"):
-        raise McpError(f"Для подключения «{conn['name']}» не задана команда запуска")
-    return p["command"], list(p.get("args", [])) + list(conn.get("args") or [])
+    found = preset_command(conn["preset"])
+    if not found:
+        var = PRESETS[conn["preset"]].get("command_env")
+        raise McpError(f"Для подключения «{conn['name']}» не задана команда запуска"
+                       + (f": укажите её в {var} или в настройках подключения (администратор)" if var else ""))
+    cmd, args = found
+    return cmd, args + list(conn.get("args") or [])
 
 
 def _env(project_id: str, conn: dict) -> dict:
@@ -238,20 +343,24 @@ async def connect(project_id: str, conn: dict, extra_args: list[str] | None = No
     raised by the caller's code inside the block pass through unchanged."""
     # The server's stderr goes to a file: when it exits on bad settings (no token...),
     # its last lines are the only useful explanation.
+    if is_rest(conn):
+        raise McpError(f"«{conn['name']}» — подключение по REST API, а не MCP-сервер")
     fields = dict(conn.get("fields") or {}) | load_secrets(project_id, conn["id"])
     missing = [f["label"] for f in PRESETS[conn["preset"]]["fields"] if f.get("required") and not fields.get(f["key"])]
     if missing and not conn.get("command"):
         raise McpError(f"Подключение «{conn['name']}»: заполните {', '.join(missing)}")
     errlog = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
     started = False
+    preset = PRESETS[conn["preset"]]
     try:
         if conn.get("transport") == "http":
-            if not conn.get("url"):
+            url = conn.get("url") or (preset["url"](fields) if preset.get("url") else "")
+            if not url:
                 raise McpError(f"Для подключения «{conn['name']}» не задан адрес")
             auth = load_secrets(project_id, conn["id"]).get("authorization")
-            headers = {"Authorization": auth} if auth else None
-            async with create_mcp_http_client(headers=headers) as http:
-                async with streamable_http_client(conn["url"], http_client=http) as (read, write, _):
+            headers = {"Authorization": auth} if auth else (preset["headers"](fields) if preset.get("headers") else None)
+            async with create_mcp_http_client(headers=headers or None) as http:
+                async with streamable_http_client(url, http_client=http) as (read, write, _):
                     async with ClientSession(read, write) as session:
                         await asyncio.wait_for(session.initialize(), STARTUP_TIMEOUT)
                         started = True
@@ -277,8 +386,7 @@ async def connect(project_id: str, conn: dict, extra_args: list[str] | None = No
             raise McpError(f"MCP-сервер «{conn['name']}» не ответил вовремя")
         stderr = _tail(errlog)
         raise McpError(f"Не удалось подключиться к MCP-серверу «{conn['name']}»: "
-                       + (f"{stderr}" if stderr else f"{_first_error(e)}. Проверьте команду запуска"
-                          + (" и что установлен Node.js" if _command_name(conn).startswith("npx") else "")))
+                       + (f"{stderr}" if stderr else f"{_first_error(e)}. Проверьте команду запуска"))
     finally:
         errlog.close()
 
@@ -297,13 +405,6 @@ def _tail(f, lines: int = 6) -> str:
         return ""
     rows = [r.strip() for r in text.splitlines() if r.strip() and not r.strip().startswith("at ")]
     return " ".join(rows[-lines:])[:800]
-
-
-def _command_name(conn: dict) -> str:
-    try:
-        return os.path.basename(_command(conn)[0]).lower()
-    except McpError:
-        return ""
 
 
 def result_text(res) -> str:
@@ -362,14 +463,27 @@ class McpClient:
 
 
 async def test(project_id: str, conn: dict) -> list[dict]:
-    """Start the server and list its tools."""
+    """Start the server and list its tools (a REST connection: a read of its project / profile)."""
+    if is_rest(conn):
+        fields, secrets = fields_of(project_id, conn)
+        missing = missing_fields(conn, secrets)
+        if missing:
+            raise McpError(f"Подключение «{conn['name']}»: заполните {', '.join(missing)}")
+        try:
+            if conn["preset"] == "testit":
+                from . import testit
+                return await testit.check(fields, secrets)
+            from . import trackers
+            return await trackers.check(conn["preset"], fields, secrets)
+        except Exception as e:
+            raise McpError(str(e)) from e
     async with connect(project_id, conn) as session:
         tools = (await session.list_tools()).tools
     return [{"name": t.name, "description": (t.description or "").strip().split("\n")[0][:200],
              "access": access(t.name)} for t in tools]
 
 
-# ---------- tools for Claude ----------
+# ---------- tools for the LLM ----------
 
 _READ = {"get", "list", "search", "read", "find", "fetch", "query", "describe", "view", "show",
          "download", "export", "count", "browse", "lookup", "check"}
@@ -394,7 +508,7 @@ def access(tool_name: str) -> str:
 
 
 class Toolbox:
-    """MCP tools of several connections, offered to Claude as regular tools.
+    """MCP tools of several connections, offered to the LLM as regular tools.
 
     mode="read": only tools that look read-only (authoring agent context);
     mode="write": everything except destructive tools (publishing to Zephyr).
@@ -411,6 +525,8 @@ class Toolbox:
         """Start every connection; one that fails is skipped and listed in `errors`."""
         self.errors: list[str] = []
         for conn in self.conns:
+            if is_rest(conn):
+                continue        # REST connections (Test IT, trackers) have no tools for the model
             try:
                 client = await McpClient(self.project_id, conn).start()
             except McpError as e:

@@ -7,25 +7,24 @@
 A run has one or two attempts: a failed test is re-run once (run.retry_failed);
 failed then passed means "flaky". Status: running | passed | flaky | failed | error.
 Only the last run.keep_runs runs of a test are kept.
-Runs in progress live in LIVE as well, so the UI can poll them every second.
+Runs in progress live in LIVE as well, so the UI can poll them every second. With a shared
+database (fs.py) a run may go on in a worker: its record is saved as it progresses, its files
+are sent to the store as they appear, and the web server reads both from there.
 """
 from __future__ import annotations
 
-import json
 import re
-import shutil
-import threading
 import time
 import uuid
 from pathlib import Path
 
-from . import projects
+from . import fs, projects
 
 LIVE: dict[str, dict] = {}
 FLAKY_WINDOW = 20        # runs looked at for the flip rate
+STALE = 300              # s: a running run nobody saved for this long was left by a stopped process
 _RID = re.compile(r"[0-9a-f]{10}")
 _FILE = re.compile(r"[\w.-]{1,120}")
-_lock = threading.Lock()
 
 
 def _safe(s: str) -> str:
@@ -40,14 +39,16 @@ def files_dir(run: dict) -> Path:
     return _test_dir(run["project_id"], run["test_id"]) / run["id"]
 
 
-def new(test: dict, trigger: str = "manual", suite_id: str = "", user: str = "") -> dict:
+def new(test: dict, trigger: str = "manual", suite_id: str = "", user: str = "", live: bool = True) -> dict:
+    """A run record, saved; `live=False` when another process (a worker) will run it."""
     run = {"id": uuid.uuid4().hex[:10], "project_id": test["project_id"], "test_id": test["id"],
            "test_name": test["name"], "trigger": trigger, "suite_id": suite_id, "user": user,
            "status": "running", "started": time.time(), "finished": None, "passed": None, "flaky": False,
            "quarantined": bool((test.get("quarantine") or {}).get("on")),
            "healed": 0, "proposals": 0, "results": [], "events": [], "trace": "", "analysis": None,
            "attempts": [], "error": ""}
-    LIVE[run["id"]] = run
+    if live:
+        LIVE[run["id"]] = run
     save(run)
     return run
 
@@ -63,10 +64,10 @@ def public(run: dict) -> dict:
 
 
 def save(run: dict) -> None:
-    d = _test_dir(run["project_id"], run["test_id"])
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{run['id']}.json").write_text(json.dumps(public(run), ensure_ascii=False, indent=1), "utf-8")
-
+    run["saved"] = time.time()
+    fs.write_json(_test_dir(run["project_id"], run["test_id"]) / f"{run['id']}.json", public(run), indent=1)
+    if fs.remote():
+        fs.push(files_dir(run))           # screenshots of the steps so far, the trace
 
 def outcomes(run: dict) -> list[bool]:
     """Pass/fail of each attempt, in order."""
@@ -83,22 +84,25 @@ def finish(run: dict, keep: int = 30) -> None:
     run["finished"] = time.time()
     LIVE.pop(run["id"], None)
     save(run)
-    with _lock:
+    from . import monitoring
+    monitoring.RUNS.labels(run.get("status") or "", run.get("trigger") or "").inc()
+    d = _test_dir(run["project_id"], run["test_id"])
+    with fs.lock(d / "index.json"):
         index = history(run["project_id"], run["test_id"], limit=0)
         index = [x for x in index if x["id"] != run["id"]] + [summary(run)]
         drop, index = index[:-keep] if len(index) > keep else [], index[-keep:]
-        d = _test_dir(run["project_id"], run["test_id"])
-        (d / "index.json").write_text(json.dumps(index, ensure_ascii=False), "utf-8")
+        fs.write_json(d / "index.json", index, indent=None)
     for old in drop:
-        (d / f"{old['id']}.json").unlink(missing_ok=True)
-        shutil.rmtree(d / old["id"], ignore_errors=True)
+        fs.unlink(d / f"{old['id']}.json")
+        fs.rmtree(d / old["id"])
 
 
 def history(pid: str, tid: str, limit: int = FLAKY_WINDOW) -> list[dict]:
     """Summaries of finished runs, oldest first (the last `limit`; 0 = all)."""
     f = _test_dir(pid, tid) / "index.json"
     try:
-        index = json.loads(f.read_text("utf-8")) if f.exists() else []
+        with fs.reading(f):
+            index = fs.read_json(f, [])
     except ValueError:
         index = []
     return index[-limit:] if limit else index
@@ -118,12 +122,21 @@ def get(rid: str) -> dict | None:
         return LIVE[rid]
     if not _RID.fullmatch(rid or ""):
         return None
-    for f in projects.ROOT.glob(f"*/runs/*/{rid}.json"):
-        run = json.loads(f.read_text("utf-8"))
-        if run["status"] == "running":
+    for f in fs.glob(projects.ROOT, f"*/runs/*/{rid}.json"):
+        run = fs.read_json(f)
+        if run["status"] == "running" and _abandoned(run):
             run.update(status="error", error="Студия была перезапущена во время прогона")
         return run
     return None
+
+
+def _abandoned(run: dict) -> bool:
+    """A running run found only in the store: in the file mode nobody runs it any more (it would be in
+    LIVE); with a shared database a worker may still be on it - it saves the run as it goes."""
+    if not fs.remote():
+        return True
+    from . import workqueue
+    return not workqueue.active(run["id"]) and time.time() - (run.get("saved") or run["started"]) > STALE
 
 
 def list_for_test(pid: str, tid: str, limit: int = 30) -> list[dict]:
@@ -131,11 +144,12 @@ def list_for_test(pid: str, tid: str, limit: int = 30) -> list[dict]:
 
 
 def file(run: dict, name: str) -> Path | None:
+    """A file of the run on the local disk (brought from the shared store if needed)."""
     if not _FILE.fullmatch(name or "") or name.startswith("."):
         return None
-    f = files_dir(run) / name
+    f = fs.local_path(files_dir(run) / name)
     return f if f.is_file() else None
 
 
 def delete_test(pid: str, tid: str) -> None:
-    shutil.rmtree(_test_dir(pid, tid), ignore_errors=True)
+    fs.rmtree(_test_dir(pid, tid))

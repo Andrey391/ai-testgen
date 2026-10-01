@@ -2,12 +2,15 @@
 
     python -m testgen.run --project "Shop" --tag smoke --junit report.xml
     python -m testgen.run --project Shop --test "Login" --test 3f9a1c2b7e --headed
+    python -m testgen.run --project Shop --browser firefox --browser webkit
     python -m testgen.run --project Shop --list
 
 Tests, settings and history come from the data folder (TESTGEN_DATA_DIR, by
 default ./data), the application login from the project / test settings or
-TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis need
-ANTHROPIC_API_KEY; without it a broken locator simply fails the step.
+TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis use the
+project's model (Project -> Model in the studio) and its API key, or ANTHROPIC_API_KEY
+when the secrets folder is not there; without a model a broken locator simply fails
+the step.
 
 Exit code: 0 - all tests passed (flaky ones and failures in quarantine do not
 count), 1 - failures, 2 - bad arguments or setup.
@@ -16,10 +19,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
+import os
 import sys
 from pathlib import Path
 
-from . import projects, reports, storage, suite
+from . import audit, projects, reports, storage, suite
 
 MARK = {"passed": "PASS ", "flaky": "FLAKY", "failed": "FAIL ", "error": "ERROR"}
 
@@ -34,12 +39,12 @@ def find_project(ref: str) -> dict | None:
     return None
 
 
-def pick_tests(project: dict, tags: list[str], refs: list[str]) -> list[dict]:
+def pick_tests(project: dict, tags: list[str], refs: list[str], drafts: bool = False) -> list[dict]:
     tests = storage.all_tests(project["id"])
     if refs:
         wanted = {r.strip().lower() for r in refs}
         return [t for t in tests if t["id"] in refs or t["name"].strip().lower() in wanted]
-    return storage.select(project["id"], tags=tags)
+    return storage.select(project["id"], tags=tags, include_drafts=drafts)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,15 +60,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--junit", help="write a JUnit XML report here")
     ap.add_argument("--allure", help="write Allure results into this folder")
     ap.add_argument("--parallel", type=int, help="tests at once (default: project setting)")
+    ap.add_argument("--browser", action="append", default=[], choices=["chromium", "firefox", "webkit"],
+                    help="run in this browser (repeatable; default: the project's run.browsers)")
     ap.add_argument("--headed", action="store_true", help="show the browser windows")
     ap.add_argument("--list", action="store_true", help="only list the tests that would run")
+    ap.add_argument("--include-drafts", action="store_true", help="also drafts and tests under review")
     args = ap.parse_args(argv)
 
     project = find_project(args.project)
     if not project:
         print(f"Project not found: {args.project}", file=sys.stderr)
         return 2
-    tests = pick_tests(project, storage.normalize_tags(args.tag), args.test)
+    tests = pick_tests(project, storage.normalize_tags(args.tag), args.test, args.include_drafts)
     if not tests:
         print("No tests to run" + (f" with tags {', '.join(args.tag)}" if args.tag else ""), file=sys.stderr)
         return 2
@@ -74,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"{project['name']}: {len(tests)} tests")
-    s = suite.new(project, tests, tags=storage.normalize_tags(args.tag), trigger="cli")
+    s = suite.new(project, tests, tags=storage.normalize_tags(args.tag), trigger="cli", browsers=args.browser or None)
+    audit.record("suite.start", user=os.environ.get("TESTGEN_CLI_USER") or getpass.getuser(), project_id=project["id"],
+                 target={"sid": s["id"]}, details={"tags": s["tags"], "tests": len(tests)}, via="cli")
 
     def report(item: dict) -> None:
         q = " (quarantine)" if item["quarantined"] else ""
@@ -88,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     c = s["summary"]
     print(f"\npassed {c['passed']}, flaky {c['flaky']}, failed {c['failed']}, errors {c['error']}"
           + (f" (in quarantine: {c['quarantined_failed']})" if c["quarantined_failed"] else "")
-          + (f"; Claude API ≈ ${s['usage']['cost_usd']}" if s["usage"].get("requests") and s["usage"].get("cost_usd") else ""))
+          + (f"; LLM ≈ ${s['usage']['cost_usd']}" if s["usage"].get("requests") and s["usage"].get("cost_usd") else ""))
     if args.junit:
         Path(args.junit).parent.mkdir(parents=True, exist_ok=True)
         Path(args.junit).write_text(reports.junit(s), "utf-8")

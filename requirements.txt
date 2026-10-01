@@ -7,3 +7,15 @@ mcp>=1.20
 mcp-atlassian>=0.23
 httpx
 Faker
+pypdf
+python-multipart
+# Encrypted secrets (vault.py), OIDC ID tokens and LDAP / Active Directory login (sso.py).
+cryptography>=42
+PyJWT>=2.8
+ldap3>=2.9
+# Shared storage for a team (fs.py, db.py): PostgreSQL, S3-compatible storage; Prometheus metrics.
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2
+boto3>=1.34
+prometheus-client>=0.20

@@ -10,25 +10,31 @@ import contextlib
 import io
 import json
 import os
-import shutil
+import re
 import threading
 import time
 import zipfile
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
+import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
-from testgen import (auth, checks, explorer, exporters, llm, mcp_hub, mcp_server, mutations, pipeline, projects,
-                     publisher, reports, runs, scenarios, skills, sources, storage, suite, traffic)
+from testgen import (access, audit, auth, checks, db, defects, explorer, exporters, fs, llm, mailbox, mcp_hub,
+                     mcp_server, metrics, monitoring, mutations, notify, pipeline, projects, publisher,
+                     reports, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic, trackers, vault,
+                     workqueue)
+from testgen import worker as worker_mod
+from testgen import agent as agent_mod
 from testgen.agent import StudioSession
-from testgen.steps import ALL_ACTIONS, new_step
+from testgen.steps import ALL_ACTIONS, DATA_ACTIONS, check_api, new_step
 
 ROOT = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", "8765"))
+HOST = os.environ.get("HOST", "127.0.0.1")    # 0.0.0.0 in a container
 
 # Playwright objects are bound to the event loop that created them, so all
 # browser work runs on one dedicated background loop; the web server just
@@ -48,6 +54,13 @@ async def call(coro):
 
 
 SESSIONS: dict[str, StudioSession] = {}
+SESSION_TASKS: dict[str, str] = {}   # session id -> project task the test is made for
+# With several instances of the studio (a shared database): this instance's address for the others.
+# Studio sessions and pipeline jobs live in the instance that started them; requests about them that
+# reach another instance are passed here (_elsewhere / _proxy).
+INSTANCE_URL = os.environ.get("TESTGEN_INSTANCE_URL", "").strip().rstrip("/")
+PROXIED = "X-Testgen-Proxied"
+PROXY_TRANSPORT: httpx.AsyncBaseTransport | None = None     # tests: the other instance
 
 projects.ensure_default()
 
@@ -58,16 +71,42 @@ MCP_APP = MCP.streamable_http_app()
 
 @contextlib.asynccontextmanager
 async def lifespan(_app):
+    background = []
+    if workqueue.enabled():
+        # Queued runs: this instance takes them too unless dedicated workers do (TESTGEN_EMBEDDED_WORKER=off).
+        if os.environ.get("TESTGEN_EMBEDDED_WORKER", "on").lower() not in ("off", "0", "false", "no"):
+            w = worker_mod.Worker(int(os.environ.get("TESTGEN_WORKER_CONCURRENCY", "2")), name=f"web-{INSTANCE_ID}")
+            background.append((w, submit(w.serve())))
+        background.append((None, submit(_keep_owners())))
     async with MCP.session_manager.run():
         yield
+    for w, fut in background:
+        if w:
+            w.stopping = True
+        else:
+            fut.cancel()
 
 
-app = FastAPI(title="AI Test Generator", lifespan=lifespan)
-
-PUBLIC = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout"}
+INSTANCE_ID = os.urandom(3).hex()
 
 
-@app.middleware("http")
+async def _keep_owners() -> None:
+    """The live sessions and jobs of this instance stay findable for the other instances."""
+    while True:
+        if INSTANCE_URL:
+            try:
+                workqueue.touch_owners(INSTANCE_URL)
+            except Exception as e:
+                print(f"owners: {e}")
+        monitoring.SESSIONS.set(len(SESSIONS))
+        await asyncio.sleep(30)
+
+
+PUBLIC = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout", "/api/health",
+          "/api/ready", "/metrics", "/api/auth/oidc/login", "/api/auth/oidc/callback"}
+OIDC_COOKIE = "tg_oidc"
+
+
 async def require_login(request: Request, call_next):
     if request.url.path.rstrip("/") == "/mcp":
         # IDE agents authenticate with an API token instead of the session cookie.
@@ -80,9 +119,117 @@ async def require_login(request: Request, call_next):
         return await call_next(request)
     user = auth.read_token(request.cookies.get(auth.COOKIE)) if auth.ENABLED else auth.ANONYMOUS
     request.state.user = user
+    storage.ACTOR.set(user or "")
+    access.USER.set(user or "")
     if not user and request.url.path not in PUBLIC:
         return JSONResponse({"detail": "Требуется вход"}, status_code=401)
-    return await call_next(request)
+    target = _elsewhere(request)
+    if target:
+        return await _proxy(request, target)
+    started = time.time()
+    response = await call_next(request)
+    route = getattr(request.scope.get("route"), "path", "")
+    if route.startswith("/api/"):
+        monitoring.observe(request.method, route, response.status_code, started)
+    _audit(request, response.status_code)
+    return response
+
+
+def _elsewhere(request: Request) -> str | None:
+    """The instance holding the Studio session or pipeline job this request is about, if not this one."""
+    if not INSTANCE_URL or not fs.remote() or request.headers.get(PROXIED):
+        return None
+    m = re.match(r"/api/sessions/([^/]+)", request.url.path)
+    if m and m.group(1) not in SESSIONS:
+        url = workqueue.owner("session", m.group(1))
+    else:
+        m = re.match(r"/api/jobs/([^/]+)/(select|cancel)$", request.url.path)
+        url = workqueue.owner("job", m.group(1)) if m and m.group(1) not in pipeline.JOBS else None
+    return url if url and url != INSTANCE_URL else None
+
+
+async def _proxy(request: Request, target: str) -> Response:
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() in ("cookie", "content-type", "accept", "authorization")} | {PROXIED: INSTANCE_URL}
+    try:
+        async with httpx.AsyncClient(timeout=120, transport=PROXY_TRANSPORT) as client:
+            r = await client.request(request.method, target + request.url.path, params=request.query_params,
+                                     content=await request.body(), headers=headers)
+    except httpx.HTTPError:
+        return JSONResponse({"detail": "Экземпляр студии, где идёт эта сессия, недоступен"}, status_code=502)
+    keep = {k: v for k, v in r.headers.items() if k.lower() in ("content-type", "cache-control", "content-disposition")}
+    return Response(r.content, status_code=r.status_code, headers=keep)
+
+
+# ---------- Audit log (audit.py): every change through the API, and exports ----------
+
+AUDIT_ACTIONS = {
+    ("POST", "/api/auth/login"): "auth.login",
+    ("GET", "/api/auth/oidc/callback"): "auth.login",
+    ("POST", "/api/auth/logout"): "auth.logout",
+    ("POST", "/api/auth/register"): "auth.register",
+    ("POST", "/api/auth/tokens"): "token.create",
+    ("DELETE", "/api/auth/tokens/{tid}"): "token.delete",
+    ("PUT", "/api/sso"): "sso.settings",
+    ("POST", "/api/projects"): "project.create",
+    ("PUT", "/api/projects/{pid}"): "project.update",
+    ("DELETE", "/api/projects/{pid}"): "project.delete",
+    ("PUT", "/api/projects/{pid}/access"): "project.access",
+    ("PUT", "/api/projects/{pid}/credentials"): "project.credentials",
+    ("PUT", "/api/projects/{pid}/mailbox"): "project.mailbox",
+    ("PUT", "/api/projects/{pid}/llm"): "project.llm",
+    ("DELETE", "/api/projects/{pid}/llm/key"): "project.llm",
+    ("PUT", "/api/projects/{pid}/notify"): "project.notify",
+    ("GET", "/api/projects/{pid}/export"): "project.export",
+    ("POST", "/api/projects/{pid}/connections"): "connection.create",
+    ("PUT", "/api/projects/{pid}/connections/{cid}"): "connection.update",
+    ("DELETE", "/api/projects/{pid}/connections/{cid}"): "connection.delete",
+    ("DELETE", "/api/projects/{pid}/connections/{cid}/secrets/{key}"): "connection.secret_clear",
+    ("POST", "/api/projects/{pid}/connections/{cid}/test"): "connection.test",
+    ("PUT", "/api/projects/{pid}/skills/{name}"): "skill.save",
+    ("DELETE", "/api/projects/{pid}/skills/{name}"): "skill.delete",
+    ("POST", "/api/projects/{pid}/files"): "file.upload",
+    ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
+    ("POST", "/api/projects/{pid}/runs"): "suite.start",
+    ("POST", "/api/projects/{pid}/jobs"): "pipeline.start",
+    ("POST", "/api/sessions"): "studio.start",
+    ("POST", "/api/sessions/{sid}/save"): "test.save",
+    ("PUT", "/api/tests/{tid}"): "test.update",
+    ("PATCH", "/api/tests/{tid}/meta"): "test.meta",
+    ("DELETE", "/api/tests/{tid}"): "test.delete",
+    ("POST", "/api/tests/{tid}/versions/{n}/restore"): "test.restore",
+    ("PUT", "/api/tests/{tid}/data"): "test.data",
+    ("PUT", "/api/tests/{tid}/credentials"): "test.credentials",
+    ("GET", "/api/tests/{tid}/export"): "test.export",
+    ("POST", "/api/tests/{tid}/run"): "run.start",
+    ("POST", "/api/tests/{tid}/verify"): "test.verify",
+    ("POST", "/api/tests/{tid}/publish"): "test.publish",
+    ("POST", "/api/tests/{tid}/comments"): "test.comment",
+    ("DELETE", "/api/tests/{tid}/comments/{cid}"): "test.comment",
+    ("POST", "/api/tests/{tid}/proposals/{prop_id}/{decision}"): "heal.{decision}",
+    ("POST", "/api/runs/{rid}/defect"): "defect.create",
+    ("POST", "/api/runs/{rid}/baseline/{step_id}"): "baseline.accept",
+}
+# Frequent and harmless: polling the Studio, the agent's steps, the pipeline's choices.
+AUDIT_SKIP = ("/api/sessions/{sid}/", "/api/jobs/{jid}/", "/api/scenarios", "/api/requirements/")
+
+
+def _audit(request: Request, status: int) -> None:
+    path = getattr(request.scope.get("route"), "path", "")
+    action = AUDIT_ACTIONS.get((request.method, path))
+    if not action and (request.method in ("GET", "HEAD", "OPTIONS") or not path.startswith("/api/")
+                       or any(path.startswith(p) for p in AUDIT_SKIP)):
+        return
+    params = dict(request.scope.get("path_params") or {})
+    extra = dict(getattr(request.state, "audit", None) or {})
+    action = action.format(**params) if action else f"{request.method} {path}"
+    try:
+        audit.record(action, user=extra.pop("user", None) or request.state.user or "",
+                     project_id=getattr(request.state, "project_id", "") or params.get("pid", ""),
+                     target={k: v for k, v in params.items() if k != "pid"}, status=status, details=extra,
+                     via="web", ip=request.client.host if request.client else "")
+    except OSError as e:     # the log must not take the studio down; the chain shows the gap
+        print(f"audit: {e}")
 
 
 def require_admin(request: Request) -> None:
@@ -90,10 +237,121 @@ def require_admin(request: Request) -> None:
         raise HTTPException(403, "Это может сделать только администратор студии")
 
 
+# ---------- Access to projects (roles: access.py) ----------
+#
+# Every route under a project's resource is checked here, before its handler and before its
+# body is read: without access the answer is 404 as for a resource that does not exist, with a
+# lower role than needed 403. A route not listed in ROLE_RULES needs a viewer for GET and an
+# editor for anything else. Handlers that take the project from the body check it themselves
+# (project(pid, need)).
+
+ROLE_RULES = {
+    ("POST", "/api/tests/{tid}/run"): "viewer",
+    ("POST", "/api/projects/{pid}/runs"): "viewer",
+    ("GET", "/api/tests/{tid}/credentials"): "editor",
+    ("PUT", "/api/projects/{pid}"): "owner",
+    ("DELETE", "/api/projects/{pid}"): "owner",
+    ("PUT", "/api/projects/{pid}/access"): "owner",
+    ("PUT", "/api/projects/{pid}/credentials"): "owner",
+    ("PUT", "/api/projects/{pid}/mailbox"): "owner",
+    ("PUT", "/api/projects/{pid}/llm"): "owner",
+    ("DELETE", "/api/projects/{pid}/llm/key"): "owner",
+    ("POST", "/api/projects/{pid}/llm/test"): "owner",
+    ("PUT", "/api/projects/{pid}/notify"): "owner",
+    ("POST", "/api/projects/{pid}/notify/test"): "owner",
+    ("POST", "/api/projects/{pid}/connections"): "owner",
+    ("PUT", "/api/projects/{pid}/connections/{cid}"): "owner",
+    ("DELETE", "/api/projects/{pid}/connections/{cid}"): "owner",
+    ("DELETE", "/api/projects/{pid}/connections/{cid}/secrets/{key}"): "owner",
+    ("POST", "/api/projects/{pid}/connections/{cid}/test"): "owner",
+    ("PUT", "/api/projects/{pid}/skills/{name}"): "owner",
+    ("DELETE", "/api/projects/{pid}/skills/{name}"): "owner",
+    ("GET", "/api/projects/{pid}/audit"): "owner",
+}
+
+# Route prefix -> (path parameter, its project id or None, the "not found" text).
+RESOURCES = {
+    "/api/projects/{pid}": ("pid", lambda v: v, "Проект не найден"),
+    "/api/tests/{tid}": ("tid", lambda v: (storage.load(v) or {}).get("project_id"), "Тест не найден"),
+    "/api/tasks/{tid}": ("tid", lambda v: (tasks.load(v) or {}).get("project_id"), "Задача не найдена"),
+    "/api/runs/{rid}": ("rid", lambda v: (runs.get(v) or {}).get("project_id"), "Прогон не найден"),
+    "/api/suites/{sid}": ("sid", lambda v: (suite.get(v) or {}).get("project_id"), "Прогон набора не найден"),
+    "/api/jobs/{jid}": ("jid", lambda v: (pipeline.get_job(v) or {}).get("project_id"), "Запуск не найден"),
+    "/api/sessions/{sid}": ("sid", lambda v: SESSIONS[v].project["id"] if v in SESSIONS else None,
+                            "Session not found"),
+}
+
+
+def _allowed(p: dict | None, need: str, missing: str) -> dict:
+    if not p:
+        raise HTTPException(404, missing)
+    try:
+        access.check(access.USER.get(), p, need, missing)
+    except access.Denied as e:
+        raise HTTPException(404 if e.hidden else 403, str(e))
+    return p
+
+
+def route_role(method: str, path: str) -> str:
+    return ROLE_RULES.get((method, path)) or ("viewer" if method in ("GET", "HEAD") else "editor")
+
+
+async def guard(request: Request) -> None:
+    path = getattr(request.scope.get("route"), "path", "")
+    for prefix, (param, owner_of, missing) in RESOURCES.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            pid = owner_of(request.path_params[param])
+            break
+    else:
+        if path != "/api/tests":      # the test list of a project: ?project_id=
+            return
+        pid, missing = request.query_params.get("project_id"), "Проект не найден"
+    request.state.project_id = pid       # the audit log records denied attempts too
+    _allowed(projects.get(pid) if pid else None, route_role(request.method, path), missing)
+
+
+app = FastAPI(title="AI Test Generator", lifespan=lifespan, dependencies=[Depends(guard)])
+app.middleware("http")(require_login)
+
+
 def _attachment(name: str, ext: str, inline: bool = False) -> dict:
     # Names are often non-ASCII (e.g. Cyrillic): HTTP headers need RFC 5987 encoding.
     kind = "inline" if inline else "attachment"
     return {"Content-Disposition": f"{kind}; filename=\"file.{ext}\"; filename*=UTF-8''{quote(name)}"}
+
+
+@app.get("/api/health")
+async def health():
+    """Liveness for Docker / Kubernetes: the web server answers and the browser worker loop runs."""
+    ok = WORKER.is_running()
+    return JSONResponse({"ok": ok, "sessions": len(SESSIONS)}, status_code=200 if ok else 503)
+
+
+@app.get("/api/ready")
+async def ready():
+    """Readiness: the browser loop, the shared database and S3 (when configured) answer."""
+    checks_ = {"worker_loop": WORKER.is_running()}
+    if fs.remote():
+        checks_["database"] = await asyncio.to_thread(db.ping)
+        if fs.s3_enabled():
+            checks_["s3"] = await asyncio.to_thread(fs.s3_ping)
+        if workqueue.enabled():
+            try:
+                checks_["queue"] = await asyncio.to_thread(workqueue.stats)
+            except Exception:
+                checks_["queue"] = False
+    ok = all(v is not False for v in checks_.values())
+    return JSONResponse({"ok": ok, "storage": "database" if fs.remote() else "files"} | checks_,
+                        status_code=200 if ok else 503)
+
+
+@app.get("/metrics")
+async def metrics_endpoint(request: Request):
+    token = os.environ.get("TESTGEN_METRICS_TOKEN", "").strip()
+    if token and request.headers.get("authorization", "") != f"Bearer {token}":
+        raise HTTPException(401, "Нужен токен метрик")
+    monitoring.SESSIONS.set(len(SESSIONS))
+    return Response(await asyncio.to_thread(monitoring.render), media_type=monitoring.CONTENT_TYPE)
 
 
 # ---------- Studio login ----------
@@ -105,18 +363,87 @@ class Login(BaseModel):
 
 @app.post("/api/auth/login")
 async def login(body: Login, request: Request):
+    """A password of the directory (LDAP), or of the studio itself when local passwords are on."""
     if not auth.ENABLED:
         return {"user": auth.ANONYMOUS}
-    if not auth.verify(body.username.strip(), body.password):
+    name = body.username.strip()
+    request.state.audit = {"user": name[:64]}
+    if sso.ldap_enabled():
+        try:
+            found = await asyncio.to_thread(sso.ldap_login, name, body.password)
+        except sso.SsoError as e:
+            if not auth.LOCAL_LOGIN:
+                raise HTTPException(502, str(e))
+            found = None
+        if found:
+            try:
+                user = auth.sso_login(found[0], found[1], "ldap")
+            except sso.SsoError as e:
+                raise HTTPException(403, str(e))
+            request.state.audit = {"user": user, "method": "ldap", "groups": found[1]}
+            return _session_response(user, request, auth.SSO_SESSION_TTL)
+    if not auth.LOCAL_LOGIN:
+        await asyncio.sleep(1)
+        if sso.ldap_enabled():
+            raise HTTPException(401, "Неверный логин или пароль")
+        raise HTTPException(403, f"Вход по паролю студии выключен: «{sso.oidc_title()}»")
+    if not auth.verify(name, body.password):
         await asyncio.sleep(1)   # slow down password guessing
         raise HTTPException(401, "Неверный логин или пароль")
-    return _session_response(body.username.strip(), request)
+    return _session_response(name, request)
+
+
+def _login_failed(text: str) -> RedirectResponse:
+    resp = RedirectResponse("/?login_error=" + quote(text[:300]), status_code=302)
+    resp.delete_cookie(OIDC_COOKIE)
+    return resp
+
+
+@app.get("/api/auth/oidc/login")
+async def oidc_login(request: Request):
+    """Off to the identity provider (authorization code + PKCE); it comes back to the callback."""
+    if not auth.ENABLED or not sso.oidc_enabled():
+        raise HTTPException(404, "Вход через OIDC не настроен")
+    redirect = (os.environ.get("TESTGEN_OIDC_REDIRECT_URL")
+                or f"{request.base_url}".rstrip("/") + "/api/auth/oidc/callback")
+    try:
+        url, flow = await asyncio.to_thread(sso.start, redirect)
+    except sso.SsoError as e:
+        return _login_failed(str(e))
+    resp = RedirectResponse(url, status_code=302)
+    # Lax: the provider sends the browser back with a cross-site GET.
+    resp.set_cookie(OIDC_COOKIE, sso.pack_flow(flow, auth._sign), max_age=sso.FLOW_TTL, httponly=True,
+                    samesite="lax", secure=request.url.scheme == "https")
+    return resp
+
+
+@app.get("/api/auth/oidc/callback")
+async def oidc_callback(request: Request, code: str = "", state: str = "", error: str = "",
+                        error_description: str = ""):
+    if not auth.ENABLED or not sso.oidc_enabled():
+        raise HTTPException(404, "Вход через OIDC не настроен")
+    flow = sso.unpack_flow(request.cookies.get(OIDC_COOKIE), auth._sign)
+    try:
+        if error:
+            raise sso.SsoError(f"Провайдер входа: {error_description or error}")
+        username, groups = await asyncio.to_thread(sso.finish, flow, code, state)
+        user = auth.sso_login(username, groups, "oidc")
+    except sso.SsoError as e:
+        request.state.audit = {"error": str(e)[:300]}
+        return _login_failed(str(e))
+    request.state.audit = {"user": user, "method": "oidc", "groups": groups}
+    resp = RedirectResponse("/", status_code=302)
+    resp.delete_cookie(OIDC_COOKIE)
+    resp.set_cookie(auth.COOKIE, auth.make_token(user, auth.SSO_SESSION_TTL), max_age=auth.SSO_SESSION_TTL,
+                    httponly=True, samesite="strict", secure=request.url.scheme == "https")
+    return resp
 
 
 @app.post("/api/auth/register")
 async def register(body: Login, request: Request):
     if not auth.SIGNUP:
         raise HTTPException(403, "Регистрация отключена")
+    request.state.audit = {"user": body.username.strip()[:64]}
     try:
         auth.register(body.username.strip(), body.password)
     except ValueError as e:
@@ -124,9 +451,9 @@ async def register(body: Login, request: Request):
     return _session_response(body.username.strip(), request)
 
 
-def _session_response(username: str, request: Request) -> JSONResponse:
+def _session_response(username: str, request: Request, ttl: int | None = None) -> JSONResponse:
     resp = JSONResponse({"user": username})
-    resp.set_cookie(auth.COOKIE, auth.make_token(username), max_age=auth.SESSION_TTL,
+    resp.set_cookie(auth.COOKIE, auth.make_token(username, ttl), max_age=ttl or auth.SESSION_TTL,
                     httponly=True, samesite="strict", secure=request.url.scheme == "https")
     return resp
 
@@ -140,9 +467,13 @@ async def logout():
 
 @app.get("/api/auth/me")
 async def me(request: Request):
+    admin = bool(request.state.user) and auth.is_admin(request.state.user)
     return {"user": request.state.user, "auth_enabled": auth.ENABLED, "signup": auth.SIGNUP,
+            "local_login": auth.LOCAL_LOGIN, "sso": {"oidc": sso.oidc_title(), "ldap": sso.ldap_enabled()},
+            "groups": auth.user_groups(request.state.user), "secrets": vault.describe() if admin else None,
             "is_admin": bool(request.state.user) and auth.is_admin(request.state.user),
-            "model": llm.MODEL, "effort": llm.EFFORT, "prompt_cache": llm.PROMPT_CACHE,
+            "roles": {r: access.LABELS[r] for r in access.ROLES},
+            "efforts": llm.EFFORTS, "prompt_cache": llm.PROMPT_CACHE,
             "mcp_url": f"{request.base_url}".rstrip("/") + "/mcp"}
 
 
@@ -168,45 +499,68 @@ async def delete_token(tid: str, request: Request):
 
 # ---------- Projects ----------
 
-def project(pid: str) -> dict:
-    p = projects.get(pid)
-    if not p:
-        raise HTTPException(404, "Проект не найден")
-    return p
+def project(pid: str, need: str = "viewer") -> dict:
+    """The project if the current user has at least the role `need` in it (404 / 403 otherwise)."""
+    return _allowed(projects.get(pid), need, "Проект не найден")
 
 
 def _project_view(p: dict) -> dict:
+    role = access.role(access.USER.get(), p)
     c = projects.app_credentials(p["id"])
-    return p | {"connections": [mcp_hub.public_view(p["id"], x) for x in p["connections"]],
-                "app_username": c.get("username", ""), "app_has_password": bool(c.get("password"))}
+    return p | {"role": role, "visibility": p.get("visibility", "open"),
+                "connections": [mcp_hub.public_view(p["id"], x) for x in p["connections"]],
+                # Secrets are for editors: a viewer does not even see the login.
+                "app_username": c.get("username", "") if access.RANK[role] >= access.RANK["editor"] else "",
+                "app_has_password": bool(c.get("password")),
+                "app_has_totp": bool(c.get("totp_secret")), "mailbox_has_password": bool(mailbox.password(p["id"])),
+                "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p),
+                "llm": p["llm"] | {"key_set": bool(projects.llm_key(p["id"])),
+                                   "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+
+
+def _require_model(p: dict) -> None:
+    """Fail before starting a browser when the project has no model to drive it."""
+    if not p["llm"]["model"]:
+        raise HTTPException(400, "Модель не настроена: выберите её в «Проект → Модель».")
 
 
 class ProjectBody(BaseModel):
     name: str | None = None
     description: str | None = None
     base_url: str | None = None
+    language: str | None = None      # "" | ru | en: steps, scenarios, Gherkin
     pipeline: dict | None = None
 
 
 @app.get("/api/projects")
-async def list_projects():
-    """With a connection summary for the projects page."""
+async def list_projects(request: Request):
+    """Projects the user may see, with a connection summary for the projects page."""
     out = []
     for item in projects.list_projects():
-        p = projects.get(item["id"]) or {"connections": []}
+        p = projects.get(item["id"])
+        role = access.role(request.state.user, p) if p else None
+        if not role:
+            continue
         conns = [mcp_hub.public_view(item["id"], c) for c in p["connections"]]
         out.append(item | {"connections": [{k: c[k] for k in ("id", "name", "preset", "title", "enabled",
                                                                 "missing", "check")} for c in conns],
-                           "has_app_login": bool(projects.app_credentials(item["id"]).get("username"))})
+                           "model": p["llm"]["model"], "model_check": p["llm"]["check"],
+                           "has_app_login": bool(projects.app_credentials(item["id"]).get("username")),
+                           "open_tasks": tasks.counts(item["id"])["open"], "role": role,
+                           "visibility": p.get("visibility", "open")})
     return out
 
 
 @app.post("/api/projects")
-async def create_project(body: ProjectBody):
+async def create_project(body: ProjectBody, request: Request):
+    """The author becomes the owner; the project is visible to its members only."""
     try:
-        return _project_view(projects.create(body.name or "", body.description or "", body.base_url or ""))
+        p = projects.create(body.name or "", body.description or "", body.base_url or "",
+                            owner=request.state.user if auth.ENABLED else "")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    request.state.project_id = p["id"]
+    return _project_view(p)
 
 
 @app.get("/api/projects/{pid}")
@@ -230,16 +584,239 @@ async def delete_project(pid: str, request: Request):
     return {"ok": projects.delete(pid)}
 
 
+# ---------- The project's model connection ----------
+
+class LlmBody(BaseModel):
+    model: str | None = None
+    effort: str | None = None
+    base_url: str | None = None
+    prices: dict[str, list[float]] | None = None
+    api_key: str = ""    # empty = keep the saved one
+
+
+@app.put("/api/projects/{pid}/llm")
+async def update_llm(pid: str, body: LlmBody, request: Request):
+    """The project's model connection. The API address decides where requests (and the
+    key) go, so only an administrator changes it."""
+    p = project(pid, "owner")
+    patch = body.model_dump(exclude_none=True, exclude={"api_key"})
+    if "base_url" in patch and patch["base_url"].strip().rstrip("/") != p["llm"]["base_url"]:
+        require_admin(request)
+    return _project_view(projects.update_llm(pid, patch, body.api_key))
+
+
+@app.delete("/api/projects/{pid}/llm/key")
+async def clear_llm_key(pid: str):
+    project(pid, "owner")
+    projects.clear_llm_key(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/llm/test")
+async def test_llm(pid: str):
+    """Check the connection and list the models it offers; remembered in the project."""
+    project(pid, "owner")
+    conf = projects.llm_settings(pid)
+    try:
+        models = await call(asyncio.wait_for(llm.check(conf), 60))
+        result = {"ok": True, "models": len(models)}
+    except Exception as e:
+        models, result = [], {"ok": False, "error": "Нет ответа от API" if isinstance(e, asyncio.TimeoutError)
+                              else llm.api_error_text(e)}
+    p = projects.get(pid)
+    p["llm"]["check"] = result | {"at": time.time()}
+    if result["ok"]:
+        p["llm"]["models"] = models
+    projects.save(p)
+    if not result["ok"]:
+        raise HTTPException(400, result["error"])
+    return {"models": models}
+
+
+# ---------- Members of a project; directory groups -> roles (admins) ----------
+
+@app.get("/api/projects/{pid}/access")
+async def get_access(pid: str, request: Request):
+    p = project(pid)
+    return {"visibility": p.get("visibility", "open"), "role": access.role(request.state.user, p),
+            "members": [{"user": u, "role": r} for u, r in sorted((p.get("members") or {}).items())],
+            "groups": [r for r in auth.sso_settings()["group_roles"] if r.get("project") in ("*", pid)],
+            "users": auth.list_users(), "roles": [{"id": r, "title": access.LABELS[r]} for r in access.ROLES]}
+
+
+class AccessBody(BaseModel):
+    visibility: str = "members"
+    members: dict[str, str] = {}
+
+
+@app.put("/api/projects/{pid}/access")
+async def set_access(pid: str, body: AccessBody, request: Request):
+    p = project(pid, "owner")
+    if body.visibility not in access.VISIBILITY:
+        raise HTTPException(400, "Видимость проекта: members или open")
+    try:
+        members = access.normalize_members(body.members)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if "owner" not in members.values():
+        raise HTTPException(400, "В проекте должен остаться хотя бы один владелец")
+    before = p.get("members") or {}
+    request.state.audit = {"visibility": body.visibility, "members": {
+        u: [before.get(u), members.get(u)] for u in set(before) | set(members) if before.get(u) != members.get(u)}}
+    projects.set_access(pid, body.visibility, members)
+    return await get_access(pid, request)
+
+
+@app.get("/api/projects/{pid}/audit")
+async def project_audit(pid: str, user: str = "", action: str = "", month: str = "", limit: int = 200):
+    """The project's part of the audit log, for its owners."""
+    return audit.read(month, project_id=pid, user=user, action=action, limit=max(1, min(limit, 2000)))
+
+
+@app.get("/api/audit")
+async def studio_audit(request: Request, project_id: str = "", user: str = "", action: str = "", month: str = "",
+                       limit: int = 200):
+    require_admin(request)
+    return audit.read(month, project_id=project_id, user=user, action=action, limit=max(1, min(limit, 5000)))
+
+
+@app.get("/api/audit/verify")
+async def audit_verify(request: Request):
+    """Is the hash chain of the log intact (nothing edited, inserted or removed)?"""
+    require_admin(request)
+    return audit.verify()
+
+
+@app.get("/api/audit/export")
+async def audit_export(month: str, request: Request):
+    """A month of the log as JSON lines, for a SIEM or an auditor."""
+    require_admin(request)
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", month):
+        raise HTTPException(400, "Месяц в формате ГГГГ-ММ")
+    return Response(audit.export(month), media_type="application/x-ndjson",
+                    headers=_attachment(f"audit-{month}.jsonl", "jsonl"))
+
+
+@app.get("/api/users")
+async def list_users():
+    """Studio users (to pick members and assignees)."""
+    return auth.list_users()
+
+
+@app.get("/api/sso")
+async def get_sso(request: Request):
+    require_admin(request)
+    return auth.sso_settings()
+
+
+class SsoBody(BaseModel):
+    group_roles: list[dict] = []
+    admin_groups: list[str] = []
+
+
+@app.put("/api/sso")
+async def set_sso(body: SsoBody, request: Request):
+    """Directory groups (OIDC, LDAP) -> roles in projects, and the groups of studio admins."""
+    require_admin(request)
+    try:
+        rules = access.normalize_rules(body.group_roles)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return auth.save_sso_settings({"group_roles": rules,
+                                   "admin_groups": sorted({g.strip() for g in body.admin_groups if g.strip()})})
+
+
 class Credentials(BaseModel):
     username: str = ""
     password: str = ""   # empty = keep the saved one
+    totp_secret: str | None = None   # None = keep, "" = remove (2FA: the base32 secret of the authenticator)
 
 
 @app.put("/api/projects/{pid}/credentials")
 async def set_project_credentials(pid: str, body: Credentials):
     project(pid)
-    projects.set_app_credentials(pid, body.username, body.password)
+    if body.totp_secret and not re.fullmatch(r"[A-Za-z2-7\s=]{16,128}", body.totp_secret):
+        raise HTTPException(400, "Секрет TOTP — строка base32 (буквы A–Z и цифры 2–7)")
+    projects.set_app_credentials(pid, body.username, body.password, body.totp_secret)
     return {"ok": True}
+
+
+class MailboxBody(BaseModel):
+    kind: str = ""        # mailpit | imap | "" (none)
+    url: str = ""
+    host: str = ""
+    port: int = 993
+    user: str = ""
+    ssl: bool = True
+    password: str = ""    # IMAP; empty = keep
+
+
+@app.put("/api/projects/{pid}/mailbox")
+async def set_mailbox(pid: str, body: MailboxBody):
+    """The project's test mailbox for read_email steps (codes from letters)."""
+    project(pid)
+    return mailbox.set_mailbox(pid, body.model_dump(exclude={"password"}), body.password)
+
+
+# ---------- Project files (upload_file steps) ----------
+
+_FILE_NAME = re.compile(r"[^/\\:*?\"<>|\x00-\x1f]{1,200}")
+
+
+def _files_dir(pid: str) -> Path:
+    return projects.path(pid) / "files"
+
+
+@app.get("/api/projects/{pid}/files")
+async def list_files(pid: str):
+    project(pid)
+    return [{"name": f.name, "size": fs.size(f)} for f in sorted(fs.glob(_files_dir(pid), "*")) if fs.is_file(f)]
+
+
+@app.post("/api/projects/{pid}/files")
+async def upload_file(pid: str, file: UploadFile):
+    project(pid)
+    name = Path(file.filename or "").name
+    if not _FILE_NAME.fullmatch(name) or name.startswith("."):
+        raise HTTPException(400, "Недопустимое имя файла")
+    data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(400, "Файл больше 20 МБ")
+    fs.write_bytes(_files_dir(pid) / name, data)
+    return {"name": name, "size": len(data)}
+
+
+@app.delete("/api/projects/{pid}/files/{name}")
+async def delete_file(pid: str, name: str):
+    project(pid)
+    f = _files_dir(pid) / Path(name).name
+    if not _FILE_NAME.fullmatch(name) or not fs.is_file(f):
+        raise HTTPException(404, "Файл не найден")
+    fs.unlink(f)
+    return {"ok": True}
+
+
+def _file_bytes(pid: str):
+    def read(name: str) -> bytes | None:
+        f = _files_dir(pid) / Path(name).name
+        return fs.read_bytes(f) if fs.is_file(f) else None
+    return read
+
+
+@app.get("/api/projects/{pid}/usage")
+async def project_usage(pid: str, month: str = ""):
+    """Language model spending of the project in a month, by stage and model."""
+    project(pid)
+    if month and not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(400, "Месяц в формате ГГГГ-ММ")
+    return llm.ledger_report(pid, month)
+
+
+@app.get("/api/projects/{pid}/metrics")
+async def project_metrics(pid: str, days: int = 30):
+    """The QA lead's dashboard: automation, stability, quality of checks, regression time, saved hours."""
+    project(pid)
+    return metrics.project_metrics(pid, max(1, min(days, 365)))
 
 
 @app.get("/api/projects/{pid}/tags")
@@ -248,16 +825,41 @@ async def project_tags(pid: str):
     return sorted({tag for t in storage.all_tests(pid) for tag in t.get("tags") or []})
 
 
+class NotifyBody(BaseModel):
+    settings: dict = {}
+    secrets: dict[str, str] = {}      # telegram_token, mattermost_webhook, smtp_password; empty = keep
+
+
+@app.put("/api/projects/{pid}/notify")
+async def set_notify(pid: str, body: NotifyBody):
+    project(pid)
+    secrets = {k: v for k, v in body.secrets.items() if k in notify.SECRET_KEYS and v.strip()}
+    notify.save(pid, body.settings, secrets)
+    return notify.public_view(project(pid))
+
+
+@app.post("/api/projects/{pid}/notify/test")
+async def test_notify(pid: str):
+    p = project(pid)
+    failed = await call(notify.send(p, f"{p['name']}: проверка уведомлений", "Если вы видите это сообщение, "
+                                    "уведомления AI Test Generator настроены."))
+    if failed:
+        raise HTTPException(400, "Не удалось отправить: " + ", ".join(failed) + " (подробности — в журнале студии)")
+    return {"ok": True}
+
+
 @app.get("/api/projects/{pid}/export")
-async def export_project(pid: str, tag: str = ""):
+async def export_project(pid: str, tag: str = "", testit: bool = False):
     """All (or tagged) tests as a pytest project in a zip: conftest.py, tests/, features/."""
     p = project(pid)
-    tests = storage.select(pid, tags=[tag] if tag else None)
+    tests = storage.select(pid, tags=[tag] if tag else None, include_drafts=True)
     if not tests:
         raise HTTPException(404, "Нет тестов для экспорта")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for path, text in exporters.bundle(p, tests, p["pipeline"]["run"]["a11y_impact"]).items():
+        for path, text in exporters.bundle(p, tests, p["pipeline"]["run"]["a11y_impact"], lookup=storage.load,
+                                           login=pipeline.login_test(pid), files=_file_bytes(pid),
+                                           testit=testit).items():
             z.writestr(path, text)
     name = "".join(c if c.isalnum() else "_" for c in p["name"]).lower() or "tests"
     return Response(buf.getvalue(), media_type="application/zip", headers=_attachment(f"{name}_tests.zip", "zip"))
@@ -266,8 +868,9 @@ async def export_project(pid: str, tag: str = ""):
 # ---------- Project MCP connections ----------
 
 @app.get("/api/mcp/presets")
-async def mcp_presets():
-    return mcp_hub.presets_public()
+async def mcp_presets(request: Request):
+    # Launch commands come from the server's environment: only admins see them.
+    return mcp_hub.presets_public(with_commands=bool(request.state.user) and auth.is_admin(request.state.user))
 
 
 class NewConnection(BaseModel):
@@ -461,10 +1064,14 @@ class NewSession(BaseModel):
     engine: str = ""       # builtin | playwright-mcp; empty = project setting
     username: str = ""     # login for the app under test; empty = the project's
     password: str = ""
+    task_id: str = ""      # project task the test is made for: linked on save
+    fresh_login: bool = False   # do not start with the project's saved login (e.g. a new login test)
 
 
 def _start_session(s: StudioSession, autopilot: bool) -> None:
     SESSIONS[s.id] = s
+    if INSTANCE_URL and fs.remote():
+        workqueue.set_owner("session", s.id, INSTANCE_URL)
 
     async def boot():
         await _guard(s, s.start())
@@ -475,16 +1082,22 @@ def _start_session(s: StudioSession, autopilot: bool) -> None:
 
 
 @app.post("/api/sessions")
-async def create_session(body: NewSession):
-    p = project(body.project_id)
+async def create_session(body: NewSession, request: Request):
+    p = project(body.project_id, "editor")
     url = body.url if "://" in body.url else "https://" + body.url
     creds = {"username": body.username.strip(), "password": body.password}
     if not any(creds.values()):
         creds = projects.app_credentials(p["id"])
     engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
+    if body.scenario.strip() or body.autopilot:
+        _require_model(p)
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
-                      engine=engine)
+                      engine=engine, use_login_state=not body.fresh_login)
+    request.state.project_id = p["id"]
     _start_session(s, body.autopilot)
+    t = tasks.load(body.task_id)
+    if t and t["project_id"] == p["id"]:
+        SESSION_TASKS[s.id] = t["id"]
     return {"id": s.id}
 
 
@@ -554,14 +1167,17 @@ class Pick(BaseModel):
     value: str = ""
     description: str = ""
     source: str = "picker"
+    target_x: float | None = None     # drag_to: where to drop
+    target_y: float | None = None
 
 
 @app.post("/api/sessions/{sid}/pick")
 async def pick(sid: str, body: Pick):
     s = sess(sid)
+    target = (body.target_x, body.target_y) if body.target_x is not None and body.target_y is not None else None
     try:
         return await call(s.pick(body.x, body.y, body.action, body.value, body.description,
-                                 body.source))
+                                 body.source, target=target))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -575,7 +1191,7 @@ class Manual(BaseModel):
 @app.post("/api/sessions/{sid}/manual")
 async def manual(sid: str, body: Manual):
     s = sess(sid)
-    if body.action not in ALL_ACTIONS:
+    if body.action not in ALL_ACTIONS or body.action in DATA_ACTIONS:
         raise HTTPException(400, "Unknown action")
     step = new_step(body.action, body.description or f"{body.action} {body.value}".strip(),
                     body.value, source="manual")
@@ -588,19 +1204,30 @@ class StepsBody(BaseModel):
 
 @app.put("/api/sessions/{sid}/steps")
 async def set_steps(sid: str, body: StepsBody):
-    sess(sid).steps = body.steps
+    s = sess(sid)
+    s.steps = body.steps
+    s.edits += 1           # a person corrected the agent (authoring_stats)
     return {"ok": True}
 
 
+class SaveBody(BaseModel):
+    status: str = ""     # "" = keep (a new test: draft) | draft | review | ready
+
+
 @app.post("/api/sessions/{sid}/save")
-async def save_session(sid: str):
-    t, warnings = sess(sid).save()
+async def save_session(sid: str, body: SaveBody | None = None):
+    t, warnings = sess(sid).save((body or SaveBody()).status)
+    if sid in SESSION_TASKS:
+        tasks.link_test(SESSION_TASKS[sid], t["id"])
     return t | {"warnings": warnings}
 
 
 @app.delete("/api/sessions/{sid}")
 async def close_session(sid: str):
     s = SESSIONS.pop(sid, None)
+    SESSION_TASKS.pop(sid, None)
+    if INSTANCE_URL and fs.remote():
+        workqueue.drop_owner("session", sid)
     if s:
         submit(s.close())
     return {"ok": True}
@@ -638,11 +1265,22 @@ class MetaBody(BaseModel):
     tags: list[str] | None = None
     quarantine: bool | None = None
     reason: str = ""
+    role: str | None = None        # "" | login (the project's login test) | module (used by other tests as a step)
+    status: str | None = None      # draft -> review -> ready (the regression suite runs ready tests)
 
 
 @app.patch("/api/tests/{tid}/meta")
 async def test_meta(tid: str, body: MetaBody, request: Request):
-    test_or_404(tid)
+    t0 = test_or_404(tid)
+    if body.role not in (None, "", "login", "module"):
+        raise HTTPException(400, "Роль теста: login, module или пусто")
+    if body.status not in (None, *storage.STATUSES):
+        raise HTTPException(400, "Статус теста: draft, review или ready")
+    if body.role == "login":
+        # One login test per project: the previous one becomes a regular test.
+        for other in storage.all_tests(t0["project_id"]):
+            if other.get("role") == "login" and other["id"] != tid:
+                storage.update(other["id"], lambda x: x.update(role=""))
 
     def change(t: dict) -> None:
         if body.tags is not None:
@@ -650,7 +1288,120 @@ async def test_meta(tid: str, body: MetaBody, request: Request):
         if body.quarantine is not None:
             t["quarantine"] = {"on": True, "by": request.state.user, "at": time.time(),
                                "reason": body.reason.strip() or "Вручную"} if body.quarantine else {"on": False}
+        if body.role is not None:
+            t["role"] = body.role
+        if body.status is not None and body.status != storage.status(t):
+            t["status"] = body.status
+            t["review"] = {"status": body.status, "by": request.state.user, "at": time.time()}
     return storage.update(tid, change)
+
+
+# ---------- comments on steps and versions of a test ----------
+
+class CommentBody(BaseModel):
+    step_id: str = ""      # "" = about the whole test
+    text: str
+
+
+@app.post("/api/tests/{tid}/comments")
+async def add_comment(tid: str, body: CommentBody, request: Request):
+    test_or_404(tid)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Пустой комментарий")
+    c = {"id": os.urandom(4).hex(), "step_id": body.step_id, "user": request.state.user, "text": text[:4000],
+         "at": time.time()}
+    return storage.update(tid, lambda t: t.update(comments=(t.get("comments") or []) + [c]))
+
+
+@app.delete("/api/tests/{tid}/comments/{cid}")
+async def delete_comment(tid: str, cid: str, request: Request):
+    """Only the author removes a comment."""
+    t = test_or_404(tid)
+    c = next((c for c in t.get("comments") or [] if c["id"] == cid), None)
+    if not c:
+        raise HTTPException(404, "Комментарий не найден")
+    if c["user"] != request.state.user and not access.can(request.state.user, project(t["project_id"]), "owner"):
+        raise HTTPException(403, "Удалить комментарий может только его автор или владелец проекта")
+    return storage.update(tid, lambda t: t.update(comments=[x for x in t.get("comments") or [] if x["id"] != cid]))
+
+
+@app.get("/api/tests/{tid}/versions")
+async def test_versions(tid: str):
+    return storage.versions(test_or_404(tid))
+
+
+@app.get("/api/tests/{tid}/versions/{n}")
+async def test_version(tid: str, n: int):
+    """A version and how the current test differs from it."""
+    t = test_or_404(tid)
+    v = storage.version(t, n)
+    if not v:
+        raise HTTPException(404, "Версия не найдена")
+    return v | {"diff": storage.diff(v, t)}
+
+
+@app.post("/api/tests/{tid}/versions/{n}/restore")
+async def restore_version(tid: str, n: int):
+    test_or_404(tid)
+    try:
+        return storage.restore(tid, n)
+    except KeyError:
+        raise HTTPException(404, "Версия не найдена")
+
+
+class DataBody(BaseModel):
+    before: list[dict] = []
+    after: list[dict] = []
+
+
+@app.put("/api/tests/{tid}/data")
+async def test_data(tid: str, body: DataBody):
+    """The test's data preparation: api_request steps a PERSON writes (the agent never does). Only
+    to the application under test; DELETE only after the test and only for what "before" created."""
+    t = test_or_404(tid)
+    p = project(t["project_id"])
+    base = p.get("base_url") or t.get("url", "")
+    blocks: dict[str, list[dict]] = {}
+    own: set[str] = set()
+    for phase in ("before", "after"):
+        out = []
+        for raw in getattr(body, phase):
+            step = new_step("api_request", str(raw.get("description") or "Запрос к API"), source="manual")
+            step["id"] = str(raw.get("id") or step["id"])[:16]
+            value = raw.get("value")
+            step["value"] = value if isinstance(value, str) else json.dumps(value or {}, ensure_ascii=False)
+            try:
+                check_api(step, base, phase, own)
+                s = json.loads(step["value"])
+            except ValueError as e:
+                raise HTTPException(400, f"«{step['description']}»: {e}")
+            if phase == "before":
+                own |= set((s.get("save") or {}).keys())
+            out.append(step)
+        blocks[phase] = out
+    return storage.update(tid, lambda x: x.update(blocks))
+
+
+@app.post("/api/tests/{tid}/traffic/{index}/before")
+async def traffic_to_before(tid: str, index: int):
+    """A recorded request of the scenario becomes a "before" request (to edit: values, what to save)."""
+    t = test_or_404(tid)
+    entries = traffic.load(t["project_id"], tid)
+    if not 0 <= index < len(entries):
+        raise HTTPException(404, "Запрос не найден")
+    e = entries[index]
+    if e["method"] == "DELETE" or e.get("third_party"):
+        raise HTTPException(400, "Удаление и запросы к другим сайтам в подготовку данных не добавляются")
+    path = urlparse(e["url"])
+    try:
+        body = json.loads(e["post_data"]) if e["post_data"] else None
+    except ValueError:
+        body = e["post_data"]
+    step = new_step("api_request", f"{e['method']} {path.path}", json.dumps(
+        {"method": e["method"], "url": path.path + (f"?{path.query}" if path.query else ""), "body": body,
+         "expect_status": e["status"]}, ensure_ascii=False), source="manual")
+    return storage.update(tid, lambda x: x.update(before=(x.get("before") or []) + [step]))
 
 
 @app.delete("/api/tests/{tid}")
@@ -661,7 +1412,8 @@ async def delete_test(tid: str):
 @app.get("/api/tests/{tid}/credentials")
 async def get_credentials(tid: str):
     c = storage.own_credentials(test_or_404(tid))
-    return {"username": c.get("username", ""), "has_password": bool(c.get("password"))}
+    return {"username": c.get("username", ""), "has_password": bool(c.get("password")),
+            "has_totp": bool(c.get("totp_secret"))}
 
 
 @app.put("/api/tests/{tid}/credentials")
@@ -671,17 +1423,19 @@ async def set_credentials(tid: str, body: Credentials):
     c["username"] = body.username.strip()
     if body.password:
         c["password"] = body.password
+    if body.totp_secret is not None:
+        c["totp_secret"] = re.sub(r"\s+", "", body.totp_secret).upper()
     storage.set_own_credentials(t, c)
     return {"ok": True}
 
 
 @app.get("/api/tests/{tid}/export")
-async def export(tid: str, format: str = "playwright"):
+async def export(tid: str, format: str = "playwright", testit: bool = False):
     t = test_or_404(tid)
     p = projects.get(t["project_id"]) or {"pipeline": projects.normalize_pipeline(None)}
     name = "".join(c if c.isalnum() else "_" for c in t["name"]).lower()
     if format == "gherkin":
-        text, fname = exporters.to_gherkin(t | {"project": p.get("name", "")}), f"{name}.feature"
+        text, fname = exporters.to_gherkin(t | {"project": p.get("name", "")}, p.get("language", "")), f"{name}.feature"
     elif format == "api":
         text, fname = exporters.to_api_tests(t, traffic.load(t["project_id"], tid)), f"test_{name}_api.py"
     elif format == "har":
@@ -690,7 +1444,10 @@ async def export(tid: str, format: str = "playwright"):
             raise HTTPException(404, "Трафик этого теста не записан")
         return JSONResponse(har, headers=_attachment(f"{name}.har", "har"))
     else:
-        text, fname = exporters.to_playwright(t, p["pipeline"]["run"]["a11y_impact"]), f"test_{name}.py"
+        login = pipeline.login_test(t["project_id"]) if p["pipeline"]["run"].get("login_once") else None
+        text = exporters.to_playwright(t, p["pipeline"]["run"]["a11y_impact"], lookup=storage.load, login=login,
+                                       run_cfg=p["pipeline"]["run"], testit=testit)
+        fname = f"test_{name}.py"
     return PlainTextResponse(text, headers=_attachment(fname, fname.rsplit(".", 1)[1], inline=True))
 
 
@@ -724,20 +1481,25 @@ async def add_mock(tid: str, body: MockBody):
     return storage.update(tid, change)
 
 
-def _run_request(t: dict, headless: bool | None, request: Request) -> dict:
+def _run_request(t: dict, headless: bool | None, request: Request, browser: str = "", device: str | None = None) -> dict:
     p = project(t["project_id"])
-    run = runs.new(t, "manual", user=request.state.user)
-    submit(pipeline.run_and_record(p, t, headless=headless, trigger="manual", user=request.state.user, run=run))
+    run = runs.new(t, "manual", user=request.state.user, live=not workqueue.enabled())
+    worker_mod.start_run(p, t, run, submit, headless=headless, trigger="manual", user=request.state.user,
+                         browser=browser, device=device)
     return run
 
 
 class RunBody(BaseModel):
     headless: bool | None = None   # None = project setting
+    browser: str = ""              # chromium | firefox | webkit; empty = the project's first
+    device: str | None = None      # a device profile; None = the project's first
 
 
 @app.post("/api/tests/{tid}/run")
 async def run(tid: str, body: RunBody, request: Request):
-    return {"id": _run_request(test_or_404(tid), body.headless, request)["id"]}
+    if body.browser and body.browser not in ("chromium", "firefox", "webkit"):
+        raise HTTPException(400, "Браузер: chromium, firefox или webkit")
+    return {"id": _run_request(test_or_404(tid), body.headless, request, body.browser, body.device)["id"]}
 
 
 @app.get("/api/tests/{tid}/runs")
@@ -769,6 +1531,42 @@ async def run_file(rid: str, name: str):
     return FileResponse(f, headers={"Cache-Control": "private, max-age=3600"})
 
 
+@app.get("/api/runs/{rid}/defect")
+async def defect_draft(rid: str):
+    """A defect draft from a failed run, and the trackers it can go to."""
+    r = run_or_404(rid)
+    t = test_or_404(r["test_id"])
+    p = project(r["project_id"])
+    return defects.draft(t, r) | {"trackers": [{"id": c["id"], "name": c["name"], "preset": c["preset"]}
+                                               for c in defects.trackers_of(p)], "created": r.get("defect")}
+
+
+class DefectBody(BaseModel):
+    connection: str
+    title: str
+    text: str
+
+
+@app.post("/api/runs/{rid}/defect")
+async def create_defect(rid: str, body: DefectBody, request: Request):
+    """The person pressed "Создать": the defect goes to the tracker (never on a model's decision)."""
+    r = run_or_404(rid)
+    p = project(r["project_id"])
+    conn = next((c for c in defects.trackers_of(p) if c["id"] == body.connection), None)
+    if not conn:
+        raise HTTPException(404, "Трекер не найден")
+    if not body.title.strip():
+        raise HTTPException(400, "Укажите заголовок дефекта")
+    try:
+        res = await call(defects.create(p, conn, body.title.strip()[:250], body.text))
+    except (trackers.TrackerError, mcp_hub.McpError) as e:
+        raise HTTPException(400, str(e))
+    stored = runs.get(rid)
+    stored["defect"] = res | {"tracker": conn["name"], "by": request.state.user, "at": time.time()}
+    runs.save(stored)
+    return stored["defect"]
+
+
 @app.post("/api/runs/{rid}/baseline/{step_id}")
 async def accept_baseline(rid: str, step_id: str):
     """The run's screenshot of a visual check becomes its new baseline."""
@@ -779,9 +1577,7 @@ async def accept_baseline(rid: str, step_id: str):
     f = runs.file(r, v["actual"]) if v else None
     if not f:
         raise HTTPException(404, "У этого шага нет снимка для эталона")
-    dest = checks.baseline_file(r["project_id"], r["test_id"], step_id)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(f, dest)
+    fs.write_bytes(checks.baseline_file(r["project_id"], r["test_id"], step_id), f.read_bytes())
     return {"ok": True}
 
 
@@ -789,9 +1585,9 @@ async def accept_baseline(rid: str, step_id: str):
 async def baseline_image(tid: str, step_id: str):
     t = test_or_404(tid)
     f = checks.baseline_file(t["project_id"], tid, step_id)
-    if not f.exists():
+    if not fs.is_file(f):
         raise HTTPException(404, "Эталона нет: он создаётся при первом прогоне")
-    return FileResponse(f, media_type="image/png", headers={"Cache-Control": "no-store"})
+    return Response(fs.read_bytes(f), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/tests/{tid}/proposals/{prop_id}/{decision}")
@@ -827,7 +1623,7 @@ async def verify_test(tid: str):
         raise HTTPException(409, "Проверка уже идёт")
     p = project(t["project_id"])
     storage.update(tid, lambda x: x.update(verify={"status": "running", "at": time.time()}))
-    submit(mutations.verify(p, t))
+    worker_mod.start_verify(p, t, submit)
     return {"ok": True}
 
 
@@ -839,6 +1635,7 @@ async def strengthen(tid: str, request: Request):
     if not v.get("weak"):
         raise HTTPException(400, "Сначала проверьте тест мутациями: усиливать нечего")
     p = project(t["project_id"])
+    _require_model(p)
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=True,
                       credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v))
     s.test_id = tid
@@ -867,17 +1664,18 @@ class SuiteBody(BaseModel):
     test_ids: list[str] = []
     headless: bool | None = None
     parallel: int | None = None
+    include_drafts: bool = False     # also drafts and tests under review
 
 
 @app.post("/api/projects/{pid}/runs")
 async def run_suite(pid: str, body: SuiteBody, request: Request):
     p = project(pid)
     tags = storage.normalize_tags(body.tags)
-    tests = storage.select(pid, tags=tags, test_ids=body.test_ids)
+    tests = storage.select(pid, tags=tags, test_ids=body.test_ids, include_drafts=body.include_drafts)
     if not tests:
         raise HTTPException(400, "Нет тестов для прогона" + (f" с тегами {', '.join(tags)}" if tags else ""))
     s = suite.new(p, tests, tags=tags, trigger="manual", user=request.state.user)
-    submit(suite.run(p, s, tests, headless=body.headless, parallel=body.parallel))
+    worker_mod.start_suite(p, s, tests, submit, headless=body.headless, parallel=body.parallel)
     return {"id": s["id"]}
 
 
@@ -915,15 +1713,7 @@ class ExploreBody(BaseModel):
 async def explore(pid: str, body: ExploreBody):
     p = project(pid)
     state = {"id": os.urandom(5).hex(), "project_id": pid, "status": "running", "pages": [], "log": []}
-    explorer.LIVE[state["id"]] = state
-
-    async def go():
-        try:
-            await explorer.explore(p, body.url, log=lambda text: state["log"].append(text), state=state)
-        finally:
-            explorer.LIVE.pop(state["id"], None)
-
-    submit(go())
+    worker_mod.start_explore(p, state, body.url, submit)
     return {"id": state["id"]}
 
 
@@ -945,6 +1735,60 @@ async def coverage(pid: str):
     return explorer.coverage(pid) or {"pages": [], "total": 0, "covered": 0, "at": None}
 
 
+# ---------- Project tasks ----------
+
+class TaskBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    status: str | None = None
+    priority: str | None = None
+    assignee: str | None = None
+    due: str | None = None
+    test_ids: list[str] | None = None
+
+
+def task_or_404(tid: str) -> dict:
+    t = tasks.load(tid)
+    if not t:
+        raise HTTPException(404, "Задача не найдена")
+    return t
+
+
+@app.get("/api/projects/{pid}/tasks")
+async def list_tasks(pid: str, status: str = "", assignee: str = ""):
+    """status: todo | in_progress | review | done | open (all but done); empty = all."""
+    project(pid)
+    return {"tasks": tasks.list_tasks(pid, status, assignee), "counts": tasks.counts(pid)}
+
+
+@app.post("/api/projects/{pid}/tasks")
+async def create_task(pid: str, body: TaskBody, request: Request):
+    project(pid)
+    try:
+        return tasks.create(pid, body.model_dump(exclude_none=True), user=request.state.user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/tasks/{tid}")
+async def get_task(tid: str):
+    return task_or_404(tid)
+
+
+@app.patch("/api/tasks/{tid}")
+async def update_task(tid: str, body: TaskBody):
+    task_or_404(tid)
+    try:
+        return tasks.update(tid, body.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/tasks/{tid}")
+async def delete_task(tid: str):
+    return {"ok": tasks.delete(tid)}
+
+
 # ---------- Requirements -> scenarios ----------
 
 class ReqBody(BaseModel):
@@ -955,7 +1799,8 @@ class ReqBody(BaseModel):
 
 @app.post("/api/scenarios")
 async def gen_scenarios(body: ReqBody):
-    p = project(body.project_id)
+    p = project(body.project_id, "editor")
+    _require_model(p)
     try:
         res = await call(scenarios.generate(body.requirements, body.url, project=p))
     except Exception as e:
@@ -970,9 +1815,21 @@ class FetchBody(BaseModel):
 
 @app.post("/api/requirements/fetch")
 async def fetch_requirements(body: FetchBody):
-    p = project(body.project_id)
+    p = project(body.project_id, "editor")
     try:
         return await call(sources.fetch(body.link, p))
+    except sources.SourceError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/requirements/file")
+async def requirements_file(file: UploadFile):
+    """A specification file (.docx, .pdf, .md, .txt) -> text."""
+    data = await file.read()
+    if len(data) > 30 * 1024 * 1024:
+        raise HTTPException(400, "Файл больше 30 МБ")
+    try:
+        return sources.from_file(file.filename or "file", data)
     except sources.SourceError as e:
         raise HTTPException(400, str(e))
 
@@ -984,16 +1841,27 @@ class JobBody(BaseModel):
     text: str = ""
     url: str = ""
     explore: bool = False
+    case_connection: str = ""   # automate manual test cases of this connection (Test IT, Allure, Zephyr)
+    case_ids: str = ""          # their ids; empty = every test case (Test IT)
 
 
 @app.post("/api/projects/{pid}/jobs")
 async def start_job(pid: str, body: JobBody, request: Request):
     p = project(pid)
-    if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore:
-        raise HTTPException(400, "Укажите ссылки на требования, текст или включите исследование сайта")
-    job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore)
+    cases = None
+    if body.case_connection:
+        if not any(c["id"] == body.case_connection for c in p["connections"]):
+            raise HTTPException(400, "Подключение для импорта кейсов не найдено")
+        cases = {"connection": body.case_connection, "ids": publisher.parse_ids(body.case_ids)}
+    if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases:
+        raise HTTPException(400, "Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта")
+    _require_model(p)
+    job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore,
+                       cases=cases)
     pipeline.JOBS[job.id] = job
     job.save()
+    if INSTANCE_URL and fs.remote():
+        workqueue.set_owner("job", job.id, INSTANCE_URL)
     submit(job.run())
     return {"id": job.id}
 
@@ -1045,5 +1913,5 @@ app.mount("/", MCP_APP)
 
 if __name__ == "__main__":
     auth.ensure_admin()
-    print(f"AI Test Generator: http://127.0.0.1:{PORT}  (model {llm.MODEL}, effort {llm.EFFORT})")
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
+    print(f"AI Test Generator: http://{HOST}:{PORT}  (the model is set per project: Project -> Model)")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

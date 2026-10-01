@@ -1,7 +1,7 @@
 """Suite results for CI: JUnit XML and Allure results.
 
 JUnit: one <testcase> per test. A failure carries the failed step, the error and
-Claude's analysis; a flaky test (failed, then passed on re-run) passes with the
+the LLM's analysis; a flaky test (failed, then passed on re-run) passes with the
 property flaky=true; a failed test in quarantine is <skipped>, so it does not
 fail the build but stays visible.
 
@@ -45,7 +45,7 @@ def _steps_log(run: dict) -> str:
 def junit(suite: dict, run_by_id: dict[str, dict] | None = None) -> str:
     run_by_id = run_by_id or {}
     items = suite["items"]
-    runs_of = {i["test_id"]: run_by_id.get(i["run_id"]) or (runs.get(i["run_id"]) if i["run_id"] else None)
+    runs_of = {id(i): run_by_id.get(i["run_id"]) or (runs.get(i["run_id"]) if i["run_id"] else None)
                for i in items}
     failures = sum(i["status"] == "failed" and not i["quarantined"] for i in items)
     errors = sum(i["status"] == "error" and not i["quarantined"] for i in items)
@@ -56,10 +56,11 @@ def junit(suite: dict, run_by_id: dict[str, dict] | None = None) -> str:
     ts = ET.SubElement(root, "testsuite", name=suite["project"], tests=str(len(items)), failures=str(failures),
                        errors=str(errors), skipped=str(skipped), time=f"{total_time:.3f}")
     for i in items:
-        run = runs_of.get(i["test_id"])
+        run = runs_of.get(id(i))
         tc = ET.SubElement(ts, "testcase", classname=suite["project"], name=i["name"],
                            time=f"{_duration(run):.3f}")
-        props = [("test_id", i["test_id"]), ("run_id", i["run_id"] or "")] + [("tag", t) for t in i["tags"]]
+        props = [("test_id", i["test_id"]), ("run_id", i["run_id"] or "")] + [("tag", t) for t in i["tags"]] \
+            + [(k, i[k]) for k in ("browser", "device") if i.get(k)]
         if i["status"] == "flaky":
             props.append(("flaky", "true"))
         if run and run.get("healed"):
@@ -107,11 +108,13 @@ def allure(suite: dict, out_dir: Path) -> None:
                     shutil.copy(f, out_dir / name)
                     attachments.append({"name": "screenshot", "source": name, "type": "image/jpeg"})
         analysis = (run or {}).get("analysis") or {}
-        result = {"uuid": uid, "historyId": hashlib.md5(i["test_id"].encode()).hexdigest(),
+        combo = f"{i['test_id']}|{i.get('browser', '')}|{i.get('device', '')}"
+        result = {"uuid": uid, "historyId": hashlib.md5(combo.encode()).hexdigest(),
                   "name": i["name"], "fullName": f"{suite['project']}.{i['name']}", "status": status,
                   "stage": "finished", "start": start, "stop": stop, "steps": steps, "attachments": attachments,
                   "statusDetails": {"message": f"{i['failed_step']}: {i['error']}" if i["error"] else "",
                                     "trace": analysis.get("summary", ""), "flaky": i["status"] == "flaky"},
                   "labels": [{"name": "suite", "value": suite["project"]}, {"name": "framework", "value": "testgen"}]
-                  + [{"name": "tag", "value": t} for t in i["tags"]]}
+                  + [{"name": "tag", "value": t} for t in i["tags"]]
+                  + [{"name": k, "value": i[k]} for k in ("browser", "device") if i.get(k)]}
         (out_dir / f"{uid}-result.json").write_text(json.dumps(result, ensure_ascii=False), "utf-8")

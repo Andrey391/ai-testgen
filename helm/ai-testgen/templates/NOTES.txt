@@ -1,0 +1,11 @@
+AI Test Generator: {{ .Values.web.replicas }} web instance(s), {{ .Values.worker.replicas }} worker(s).
+
+Open: {{ if .Values.ingress.enabled }}https://{{ .Values.ingress.host }}{{ else }}kubectl port-forward svc/{{ include "testgen.fullname" . }} 8765:80{{ end }}
+
+The first pod that starts creates and upgrades the database schema (a PostgreSQL advisory lock
+keeps the others waiting). To move an installation that kept its data in folders:
+  kubectl cp ./data <web pod>:/tmp/data && kubectl cp ./secrets <web pod>:/tmp/secrets
+  kubectl exec <web pod> -- python -m testgen.db import-files /tmp/data /tmp/secrets
+
+Health: /api/health (alive), /api/ready (database, S3, queue).
+Metrics: /metrics of the web pods, :{{ .Values.worker.metricsPort }}/metrics of the workers.

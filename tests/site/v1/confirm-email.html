@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Подтверждение почты</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <h1>Подтверждение почты</h1>
+  <label for="email">Email</label><input id="email" type="email">
+  <div><button id="send">Отправить код</button></div>
+  <label for="code">Код из письма</label><input id="code" autocomplete="off">
+  <div><button id="check">Подтвердить почту</button></div>
+  <div id="msg" role="status"></div>
+</main>
+<script>
+const post = (url, body) => fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify(body)}).then(r => r.json());
+const $ = id => document.getElementById(id);
+$('send').addEventListener('click', async () => { await post('/api/send-code', {email: $('email').value}); $('msg').textContent = 'Код отправлен'; });
+$('check').addEventListener('click', async () => {
+  const d = await post('/api/check-code', {email: $('email').value, code: $('code').value});
+  $('msg').textContent = d.ok ? 'Почта подтверждена' : 'Неверный код';
+});
+</script>
+</body>
+</html>

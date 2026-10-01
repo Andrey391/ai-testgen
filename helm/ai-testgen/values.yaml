@@ -1,0 +1,86 @@
+# AI Test Generator for a team (stage 5.5 of docs/plan.md, docs/deploy.md).
+# PostgreSQL and S3-compatible storage (MinIO, Yandex Object Storage) are yours: give their addresses.
+
+image:
+  repository: registry.example.ru/qa/ai-testgen
+  tag: "0.5.0"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Web instances: the UI, the API, the MCP server for IDEs, live Studio sessions.
+web:
+  replicas: 2
+  port: 8765
+  resources:
+    requests: {cpu: "500m", memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+  # Runs go to the workers; set true to let the web instances take queued runs too.
+  embeddedWorker: false
+
+# Workers: runs of saved tests, suites (spread over the workers), mutation checks, the Planner.
+worker:
+  replicas: 3
+  concurrency: 2              # tests at a time in one worker (one browser, a context per test)
+  metricsPort: 9100
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {cpu: "3", memory: 6Gi}
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+# Secrets: either the chart makes a Secret from these values, or you give an existing Secret with the
+# same keys (TESTGEN_DATABASE_URL, TESTGEN_SECRET_KEY, TESTGEN_S3_ACCESS_KEY, TESTGEN_S3_SECRET_KEY,
+# TESTGEN_OIDC_CLIENT_SECRET, TESTGEN_LDAP_BIND_PASSWORD, ANTHROPIC_API_KEY, ...).
+existingSecret: ""
+secrets:
+  databaseUrl: ""             # postgresql+psycopg://testgen:***@postgres.db:5432/testgen
+  secretKey: ""               # encryption of secrets in the database: a long random string, keep a copy
+  s3AccessKey: ""
+  s3SecretKey: ""
+  oidcClientSecret: ""
+  ldapBindPassword: ""
+  anthropicApiKey: ""
+
+s3:
+  endpoint: ""                # https://storage.yandexcloud.net or http://minio.minio:9000
+  bucket: ai-testgen
+  region: ru-central1
+  prefix: ""
+
+# Corporate login (docs/security.md). Empty = the studio's own users.
+oidc:
+  issuer: ""                  # https://sso.company.ru/realms/qa
+  clientId: ""
+  title: "Войти через Keycloak"
+  groupsClaim: groups
+ldap:
+  url: ""                     # ldaps://dc.company.ru:636
+  baseDn: ""
+  bindDn: ""
+  userFilter: ""
+admins: "admin"               # TESTGEN_ADMINS; admin groups of the directory: Проект → Участники и доступ
+
+# Anything else the studio reads (TESTGEN_OFFLINE, TESTGEN_AUDIT_SYSLOG, TESTGEN_PLAYWRIGHT_MCP...).
+extraEnv: {}
+
+ingress:
+  enabled: true
+  className: nginx
+  host: testgen.company.ru
+  tls: []                     # - secretName: testgen-tls
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 30m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+
+metrics:
+  serviceMonitor:
+    enabled: false            # Prometheus Operator
+    interval: 30s
+  token: ""                   # TESTGEN_METRICS_TOKEN; empty = /metrics without a token
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

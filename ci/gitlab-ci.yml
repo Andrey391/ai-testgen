@@ -2,7 +2,8 @@
 #
 # Include or copy into .gitlab-ci.yml. Expects the studio's data folder committed under
 # qa/testgen-data (TESTGEN_DATA_DIR) and CI/CD variables TESTGEN_USERNAME, TESTGEN_PASSWORD
-# (masked) and, optionally, ANTHROPIC_API_KEY for self-healing and failure analysis.
+# (masked) and, optionally, ANTHROPIC_API_KEY for self-healing and failure analysis (the
+# model is the one chosen in the project settings, Project -> Model).
 # The job fails when a test outside quarantine fails; the JUnit report is shown in merge requests.
 
 ui-regression:
@@ -13,17 +14,20 @@ ui-regression:
     TESTGEN_REPO: "https://gitlab.example.com/qa/ai-testgen.git"   # the studio
     PROJECT: "My project"                                          # studio project name or id
     TAG: "smoke"                                                   # empty = all tests
+  parallel:
+    matrix:
+      - BROWSER: [chromium]                                        # add firefox, webkit for cross-browser runs
   script:
     - git clone --depth 1 "$TESTGEN_REPO" .testgen
     - python -m pip install -r .testgen/requirements.txt
-    - python -m playwright install chromium
+    - python -m playwright install $BROWSER
     - cd .testgen
-    - python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"}
-        --junit "$CI_PROJECT_DIR/reports/junit.xml" --allure "$CI_PROJECT_DIR/reports/allure"
+    - python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"} --browser "$BROWSER"
+        --junit "$CI_PROJECT_DIR/reports/junit-$BROWSER.xml" --allure "$CI_PROJECT_DIR/reports/allure"
   artifacts:
     when: always
     reports:
-      junit: reports/junit.xml
+      junit: reports/junit-*.xml
     paths:
       - reports/
       - qa/testgen-data/projects/*/runs/

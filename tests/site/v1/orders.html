@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Заказы</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<main><h1>Заказы</h1><ul id="orders"></ul><div id="total" data-testid="orders-total"></div></main>
+<script>
+fetch('/api/orders').then(r => r.json()).then(list => {
+  document.getElementById('orders').innerHTML = list.map(o => '<li data-testid="order">Заказ #' + o.id + ': ' + o.title + '</li>').join('');
+  document.getElementById('total').textContent = 'Заказов: ' + list.length;
+});
+</script>
+</body>
+</html>
