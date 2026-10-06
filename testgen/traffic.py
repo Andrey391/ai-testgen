@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse
 
 from . import fs, projects
+from .testdata import secret_pairs
 
 SECRET_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key",
                   "x-auth-token", "x-csrf-token", "x-xsrf-token"}
@@ -57,11 +58,12 @@ def _mask_value(key: str, value, credentials: dict):
         return [_mask_value(key, v, credentials) for v in value]
     if not isinstance(value, str):
         return value
-    if credentials.get("password") and value == credentials["password"]:
-        return "{{password}}"
+    for secret, placeholder in secret_pairs(credentials):
+        if value == secret:
+            return placeholder
     if credentials.get("username") and value == credentials["username"]:
         return "{{username}}"
-    if value in ("{{password}}", "{{username}}"):
+    if value in ("{{password}}", "{{username}}") or re.fullmatch(r"\{\{auth\.\w+\}\}", value):
         return value
     return MASK if SECRET_KEY.search(key or "") and value else value
 
@@ -69,9 +71,8 @@ def _mask_value(key: str, value, credentials: dict):
 def mask_text(text: str, mime: str, credentials: dict) -> str:
     if not text:
         return text
-    pw = credentials.get("password")
-    if pw:
-        text = text.replace(pw, "{{password}}").replace(quote_plus(pw), "{{password}}")
+    for secret, placeholder in secret_pairs(credentials):
+        text = text.replace(secret, placeholder).replace(quote_plus(secret), placeholder)
     if "json" in mime or text.lstrip()[:1] in ("{", "["):
         try:
             return json.dumps(_mask_value("", json.loads(text), credentials), ensure_ascii=False)

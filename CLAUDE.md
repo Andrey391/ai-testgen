@@ -23,7 +23,7 @@ AI Test Generator — студия генерации автотестов с п
 | Live View | Скриншот страницы в реальном времени (или реальное окно браузера) |
 | Сохранение и повторный запуск | Вкладка «Тесты»: прогон в новом браузере, история прогонов, trace, события браузера |
 | Самолечение локаторов | Несколько локаторов на шаг; если все сломались, Claude находит элемент заново — новый локатор идёт на ревью человеку |
-| Требования/user stories → сценарии, Gherkin | Вкладка «Требования»; число сценариев не ограничено; без ТЗ — «Исследовать сайт» (Planner) |
+| Требования/user stories → сценарии, Gherkin | Вкладка «Требования»: живая лента генерации, история анализов (раскрывающийся список: требования → сценарии с правкой → тесты по каждому), «Сгенерировать все»; число сценариев не ограничено; без ТЗ — «Исследовать сайт» (Planner) |
 | Экспорт в Selenium/Playwright и Gherkin | `.py` (pytest-playwright, локаторы с `.or_()`), `.feature`, проект целиком `.zip`, API-тесты по трафику |
 | Интеграции (Jira, test management) | Проект → Подключения (MCP): Jira/Confluence, Zephyr Scale, Playwright MCP, любой MCP |
 | Сквозной процесс генерации | Вкладка «Конвейер»; этапы настраиваются в «Проект → Процесс генерации» и «Скиллы» |
@@ -157,7 +157,7 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 
 ## Архитектура
 
-- `server.py` — FastAPI: REST API (`/api/projects` с подресурсами `access`, `audit`, `connections`, `skills`, `jobs`, `tasks`,
+- `server.py` — FastAPI: REST API (`/api/projects` с подресурсами `access`, `audit`, `connections`, `skills`, `jobs`, `tasks`, `sessions` (прерванные),
   `credentials`, `runs` (прогон набора), `suites`, `export` (.zip), `tags`, `explore`, `coverage`;
   `/api/mcp/presets`, `/api/sessions`, `/api/tests` (+ `meta`, `runs`, `proposals`, `verify`,
   `strengthen`, `traffic`, `mock`, `baselines`), `/api/runs` (+ `files`, `baseline`), `/api/suites`,
@@ -246,10 +246,21 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   моделей слабее — настройки этапа: компактный промпт и примеры ходов (`authoring.prompt`, скилл
   `authoring-examples`), текстовый режим (`authoring.screenshots`: скриншот по инструменту `look` или
   никогда). Неверный ответ возвращается модели на исправление (`check_call`, не больше `MAX_REPAIRS` на шаг).
+  Перед каждым ходом агент пишет в чат, что и зачем делает; `finish` содержит `evidence` (какие проверки
+  подтверждают результат) — Studio показывает «Сейчас / Цель / Тест будет готов, когда» и итог.
+  `stop()` (`/api/sessions/{sid}/stop`) выключает Auto-Pilot и отменяет запрос к модели (ход возвращается
+  в очередь, «Продолжить с AI» повторяет его); шаг, уже выполняемый в браузере, доделывается.
   Настройки этапа `authoring` проекта: движок, скиллы, модель и effort, лимит шагов, read-only инструменты
   подключений (их вызовы выполняются сразу и не становятся шагами). `save()` сохраняет тест (сохраняя
   теги, карантин, ключ Zephyr) и трафик; `usage` — расход токенов сессии. С `base_steps` сессия сначала
   воспроизводит сохранённый тест и получает `task` — так агент усиливает слабые проверки.
+  **Сессия переживает перезапуск студии:** после каждого шага и реплики `checkpoint()` пишет снимок
+  (шаги, чат без пароля, сценарий, `test_id`, `task_id`, `origin`) в `data/projects/<id>/sessions/<sid>.json`,
+  свой логин сессии — в хранилище секретов (`session-<sid>`). Разговор с моделью не сохраняется:
+  `restored()` продолжает сессию с тем же id через `base_steps` (шаги воспроизводятся, агент получает
+  `RESUME_TASK`); если воспроизведение не удалось, шаги остаются в сессии. `save_checkpoint()` сохраняет
+  шаги как тест без браузера. Снимок удаляет только `close(discard=True)` (человек закрыл сессию,
+  конвейер сохранил тест) или «Удалить» в списке «Прерванные сессии».
 - `testgen/runner.py` — одна попытка прогона (`run_test`): trace (`run.trace`, пароль маскируется
   `mask_trace`), события браузера, скриншоты шагов в папку прогона, хуки для мутаций. Самолечение:
   если все локаторы шага сломались, `heal()` просит модель выбрать элемент; в режиме `run.heal_mode =
@@ -265,7 +276,10 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   текст, карта сайта Planner) → сценарии (ручной или автоматический отбор) → по каждому сценарию
   генерация (`StudioSession` в Auto-Pilot, видна в Studio) → сохранение → прогон → проверка
   мутациями (этап `verify`, при слабых проверках агент их усиливает) → публикация. Состояние в
-  `data/projects/<id>/jobs/<job>.json`.
+  `data/projects/<id>/jobs/<job>.json`. Запуск, прерванный перезапуском (или остановленный, упавший),
+  продолжает `Job.resumed` (`POST /api/jobs/{jid}/resume`): сценарии и выбор не повторяются, готовые
+  пункты (`DONE_ITEMS`) пропускаются, у пункта с тестом — только непройденные этапы, прерванная генерация
+  продолжается из снимка сессии.
 - `testgen/suite.py` — прогон набора (все тесты / по тегам / список) в одном браузере, `run.parallel`
   контекстов; карантин не валит набор. `testgen/reports.py` — JUnit XML и Allure.
   `testgen/run.py` — CLI `python -m testgen.run`.
@@ -281,10 +295,15 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 - `testgen/publisher.py` — публикация в Zephyr Scale через MCP: Claude получает инструменты
   подключения (кроме удаления) и скиллы публикации и заканчивает инструментом `done`; ключ кейса
   хранится в `test["external"]["zephyr"]`, повторная публикация обновляет тот же кейс.
-- `testgen/scenarios.py` — требования → сценарии (structured output: тип, приоритет, инструкции для
+- `testgen/scenarios.py` — требования → сценарии (`progress` — промежуточные результаты: план, пакеты,
+  лог; `/api/scenarios` со `stream: true` отдаёт их NDJSON-потоком для живой ленты во вкладке «Требования») (structured output: тип, приоритет, инструкции для
   агента, ожидаемый результат, Gherkin). Лимита на количество нет: сначала компактный план всех
   сценариев, затем детализация параллельными пакетами (`BATCH`, `PARALLEL`) — так число сценариев не
   упирается в `max_tokens` одного ответа. Не возвращай ограничение количеством.
+- `testgen/analyses.py` — история анализов требований: документ `data/projects/<id>/analyses/<id>.json`
+  (требования, сценарии с `id`, `test_ids` каждого). Генерация (`/api/scenarios`) заполняет его по событиям
+  `progress`; сценарии правят `/api/analyses/{aid}/scenarios`; тест привязывается к сценарию при сохранении
+  сессии Studio (`analysis_id`/`scenario_id`) и в конвейере (`/jobs` с `analysis_id` — сразу этап генерации).
 - `testgen/exporters.py` — экспорт: pytest-playwright (до `MAX_ALTERNATIVES` локаторов шага через
   `.or_()`, фикстуры `app_url`/`credentials`/`testdata`/…), Gherkin, проект целиком (`bundle()`:
   `conftest.py`, `tests/`, `features/`) и API-тесты pytest + httpx по записанному трафику
@@ -323,8 +342,12 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   (не с SSO).
 - Все секреты идут через `testgen/vault.py`: строки базы по путям `secrets/<kind>/<key>.json`, всегда
   зашифрованные (AES-256-GCM, ключ `TESTGEN_SECRET_KEY` или локальный `secret.key`, путь — AAD), или HashiCorp Vault.
-- Учётные данные тестируемого приложения: проекта — `secrets/projects/<id>/app.json`,
-  свои у теста — `secrets/projects/<id>/test-<test>.json`; видят их редакторы, в API только логин.
+- Учётные данные тестируемого приложения: сколько угодно учётных записей проекта в
+  `secrets/projects/<id>/app.json` (`projects.save_account`/`account_credentials`; у записи логин, пароль,
+  TOTP и параметры авторизации «имя — значение», агент вводит их как `{{auth.<имя>}}`, секретные маскируются
+  как пароль — `testdata.secret_pairs`; одна запись — по умолчанию). Тест входит под `test["account"]`,
+  иначе под записью по умолчанию; свои у теста — `secrets/projects/<id>/test-<test>.json`. Видят их
+  редакторы, в API только логин, несекретные параметры и признаки «задан»; наблюдатель — только названия.
 - Токены MCP-подключений: `secrets/projects/<id>/conn-<cid>.json`; в `project.json` и API только
   признак «задан» (`secrets_set`).
 - API-ключ модели: `secrets/projects/<id>/llm.json`; в API только `key_set`. Адрес API (`base_url`)

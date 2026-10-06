@@ -27,7 +27,7 @@ from playwright.async_api import async_playwright
 
 from .browser import ELEMENT_INFO_JS, VIEWPORT, expand, group_candidates, locator_candidates
 from .mcp_hub import McpClient, McpError, error_text, result_text
-from .testdata import DataValues
+from .testdata import DataValues, secret_values
 
 MAX_SNAPSHOT_CHARS = 40_000
 _STATE_JS = {
@@ -295,8 +295,9 @@ class McpBrowser:
     # ---------- internals ----------
 
     def _mask(self, text: str) -> str:
-        pw = self.credentials.get("password")
-        return text.replace(pw, "***") if pw else text
+        for secret in secret_values(self.credentials):
+            text = text.replace(secret, "***")
+        return text
 
     async def _call(self, tool: str, args: dict):
         res = await self.client.call(tool, args)

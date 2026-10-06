@@ -143,7 +143,8 @@ def test_hashicorp_vault_backend(monkeypatch):
     try:
         p = projects.create(f"Vault {uuid.uuid4().hex[:6]}")
         projects.set_app_credentials(p["id"], "login-v", "in-vault-only")
-        assert fake.data[f"testgen/projects/{p['id']}/app"] == {"username": "login-v", "password": "in-vault-only"}
+        [acc] = fake.data[f"testgen/projects/{p['id']}/app"]["accounts"]
+        assert (acc["username"], acc["password"]) == ("login-v", "in-vault-only")
         assert projects.app_credentials(p["id"])["password"] == "in-vault-only"
         assert not _rows(f"projects/{p['id']}") and set(fake.tokens) == {"s.root-token"}
         vault.save(f"projects/{p['id']}/nested", "x", {"a": 1})

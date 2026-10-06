@@ -38,7 +38,7 @@ from urllib.parse import quote_plus, urlparse
 
 from pydantic import BaseModel
 
-from . import checks, fs, llm, skills
+from . import checks, fs, llm, skills, testdata
 from .browser import BrowserSession, describe_element, group_candidates, listed
 from .steps import MAX_MODULE_DEPTH, needs_element, perform, spec
 
@@ -163,9 +163,9 @@ async def judge_visual(test: dict, step: dict, images: dict[str, bytes], cfg: di
 
 
 def secret_values(credentials: dict, storage_state: dict | None = None) -> list[str]:
-    """Values that must not stay in a trace: the password, the TOTP secret, cookie values of a
+    """Values that must not stay in a trace: the password, secret login parameters, the TOTP secret, cookie values of a
     saved login (the suite's login state is a secret too)."""
-    out = [v for k, v in credentials.items() if k in ("password", "totp_secret") and v]
+    out = testdata.secret_values(credentials)
     for c in (storage_state or {}).get("cookies") or []:
         if len(str(c.get("value") or "")) >= 8:
             out.append(str(c["value"]))

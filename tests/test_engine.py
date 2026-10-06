@@ -102,7 +102,7 @@ def test_long_pages_are_listed_near_the_viewport_and_searchable(stand, project, 
         if "Выбран: Товар 399" in last:
             if "assert" not in json.dumps([m for m in kw["messages"] if m["role"] == "assistant"], default=str):
                 return tool("assert_text_present", text="Выбран: Товар 399", description="Выбран товар 399")
-            return tool("finish", status="passed", summary="ok")
+            return tool("finish", status="passed", summary="ok", evidence="проверка результата")
         return tool("find_elements", text="Товар 399")
     fake_llm.script = script
     s = StudioSession(project, "Каталог", f"{stand.url}/many.html", "Выбрать товар 399")

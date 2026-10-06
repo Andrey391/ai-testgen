@@ -175,3 +175,42 @@ def test_api_error_text_no_credits():
     assert error_text(low) == NO_CREDITS
     assert error_text(err(402, "billing_error", "Payment required")) == NO_CREDITS
     assert error_text(err(400, "invalid_request_error", "messages: field required")).startswith("Ошибка API ИИ 400")
+
+
+def test_context_editing_failure_falls_back_to_trimming():
+    """A gateway (LiteLLM) whose context_management polyfill fails on images: the request is
+    repeated with the old screenshots cut by the studio, and later ones skip context editing."""
+    import asyncio
+    import types
+
+    import anthropic
+    import httpx
+
+    from testgen.providers import anthropic as prov
+    from testgen.providers.base import Request
+
+    req = httpx.Request("POST", "http://gateway.local/v1/messages")
+    body = {"type": "error", "error": {"type": "api_error", "message":
+            "context_management polyfill failed: Invalid content item type: image."}}
+    calls = []
+
+    async def create(**kw):
+        calls.append(kw)
+        if "context_management" in kw:
+            raise anthropic.APIStatusError(body["error"]["message"],
+                                           response=httpx.Response(500, request=req), body=body)
+        return types.SimpleNamespace(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn",
+                                     model=kw["model"], usage=None)
+
+    client = types.SimpleNamespace(base_url="http://gateway.local/" + uuid.uuid4().hex,
+                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create)))
+    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    shot = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+    messages = [{"role": "user", "content": [{"type": "text", "text": "step"}, shot]} for _ in range(4)]
+    r = Request(model="deepseek-coder", system="s", messages=messages, keep_images=1)
+
+    assert asyncio.run(p.chat(r)).text == "ok"
+    assert len(calls) == 2 and "context_management" not in calls[1]
+    assert json.dumps(calls[1]["messages"]).count('"image"') == 1     # old screenshots cut out
+    asyncio.run(p.chat(r))
+    assert len(calls) == 3 and "context_management" not in calls[2]   # no failing first try any more

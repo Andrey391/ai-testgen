@@ -66,9 +66,9 @@ def test_password_never_reaches_claude_or_artifacts(stand, project, fake_llm):
         ("fill", {"text": "{{username}}", "press_enter": False, "description": "Ввести логин"}, "Логин"),
         ("fill", {"text": "{{password}}", "press_enter": False, "description": "Ввести пароль"}, "Пароль"),
         ("click", {"description": "Нажать «Войти»"}, "Войти"),
-        ("finish", {"status": "passed", "summary": "Вошли"}, None),            # refused: no assertion yet
+        ("finish", {"status": "passed", "summary": "Вошли", "evidence": "проверка результата"}, None),            # refused: no assertion yet
         ("assert_element_text", {"text": "Всего: 2", "description": "В списке два пункта"}, "Всего: 2"),
-        ("finish", {"status": "passed", "summary": "Вошли, список открыт"}, None),
+        ("finish", {"status": "passed", "summary": "Вошли, список открыт", "evidence": "проверка результата"}, None),
     ])
     s = StudioSession(project, "Вход", f"{stand.url}/login.html", "Войти и увидеть список",
                       credentials={"username": USERNAME, "password": PASSWORD})
@@ -155,7 +155,7 @@ def test_strengthen_session_replays_the_test_then_adds_checks(stand, project, fa
     stand.reset()
     fake_llm.script = _agent([
         ("assert_count", {"count": 3, "description": "В списке три пункта"}, "Молоко"),
-        ("finish", {"status": "passed", "summary": "Добавлена проверка числа пунктов"}, None),
+        ("finish", {"status": "passed", "summary": "Добавлена проверка числа пунктов", "evidence": "проверка результата"}, None),
     ])
     s = StudioSession(project, "Добавление", f"{stand.url}/list.html", "Добавить пункт", base_steps=base,
                       task="Survived mutants: the click does nothing. Add assertion steps.")
@@ -222,7 +222,7 @@ def test_new_secrets_stay_home_login_state_totp_and_before_responses(stand, proj
     # 1. A session that starts logged in: the cookie of the saved login stays out of everything.
     fake_llm.script = _agent([
         ("assert_text_present", {"text": "Здравствуйте, demo", "description": "Кабинет открыт"}, None),
-        ("finish", {"status": "passed", "summary": "ok"}, None)])
+        ("finish", {"status": "passed", "summary": "ok", "evidence": "проверка результата"}, None)])
     s = StudioSession(p, "Кабинет", f"{stand.url}/account.html", "Открыть кабинет")
     t, _ = arun(_run(s, s.save))
     assert s.status == "done" and s.logged_in, s.chat
@@ -243,7 +243,7 @@ def test_new_secrets_stay_home_login_state_totp_and_before_responses(stand, proj
         ("fill", {"text": "{{totp}}", "press_enter": False, "description": "Код"}, "Код из приложения"),
         ("click", {"description": "Подтвердить"}, "Подтвердить"),
         ("assert_text_present", {"text": "Вход подтверждён", "description": "Вход подтверждён"}, None),
-        ("finish", {"status": "passed", "summary": "ok"}, None)])
+        ("finish", {"status": "passed", "summary": "ok", "evidence": "проверка результата"}, None)])
     s = StudioSession(p, "2FA", f"{stand.url}/login-2fa.html", "Войти с кодом", use_login_state=False,
                       credentials=storage.credentials({"id": "x", "project_id": p["id"]}))
     t, _ = arun(_run(s, s.save))
@@ -266,7 +266,7 @@ def test_new_secrets_stay_home_login_state_totp_and_before_responses(stand, proj
 def test_saved_test_keeps_studio_metadata_on_resave(stand, project, fake_llm):
     fake_llm.script = _agent([
         ("assert_text_present", {"text": "Регистрация", "description": "Открыта регистрация"}, None),
-        ("finish", {"status": "passed", "summary": "ok"}, None)])
+        ("finish", {"status": "passed", "summary": "ok", "evidence": "проверка результата"}, None)])
     s = StudioSession(project, "Форма", f"{stand.url}/form.html", "Открыть форму")
     t, _ = arun(_run(s, s.save))
     storage.update(t["id"], lambda x: x.update(tags=["smoke"], quarantine={"on": True},
