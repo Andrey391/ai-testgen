@@ -233,6 +233,12 @@ def fail_item(item: dict, error: str) -> None:
 
 
 def main() -> None:
+    # The log goes to a file or a pipe (systemd, docker, CI): on Windows that is cp1252 without this.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     if not workqueue.enabled():
         sys.exit("Воркеру нужна общая база данных: задайте TESTGEN_DATABASE_URL")
     w = Worker(int(os.environ.get("TESTGEN_WORKER_CONCURRENCY", "2")))

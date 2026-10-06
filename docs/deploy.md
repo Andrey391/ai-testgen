@@ -22,7 +22,7 @@
   локальная папка остаётся кэшем: скриншоты шагов пишутся локально и отправляются в хранилище по ходу
   прогона, а при чтении из другого экземпляра скачиваются.
 - **Блокировки.** Изменения одного документа (тест, индекс прогонов, пользователи, журнал расходов)
-  сериализуются между процессами: в PostgreSQL — advisory lock, в SQLite — строка в таблице `locks`.
+  сериализуются между процессами advisory lock PostgreSQL.
 - **Очередь** (`testgen/workqueue.py`). «Запустить», наборы, проверка мутациями и Planner ставят
   задание в таблицу `work`; воркер берёт его атомарным `UPDATE … WHERE status = 'queued'`. Набор
   раскладывается на задания по тестам: один воркер делает вход (состояние входа общее через хранилище
@@ -40,7 +40,7 @@
 
 | Переменная | Что задаёт |
 |---|---|
-| `TESTGEN_DATABASE_URL` | `postgresql+psycopg://testgen:***@db:5432/testgen`; `sqlite:///…` — для одного экземпляра |
+| `TESTGEN_DATABASE_URL` | `postgresql+psycopg://testgen:***@db:5432/testgen` (поддерживается только PostgreSQL) |
 | `TESTGEN_DB_POOL` | размер пула соединений (10) |
 | `TESTGEN_S3_BUCKET`, `TESTGEN_S3_ENDPOINT`, `TESTGEN_S3_ACCESS_KEY`, `TESTGEN_S3_SECRET_KEY`, `TESTGEN_S3_REGION`, `TESTGEN_S3_PREFIX` | объектное хранилище; для Yandex Object Storage — `https://storage.yandexcloud.net`, регион `ru-central1` |
 | `TESTGEN_SECRET_KEY` | ключ шифрования секретов; в общей базе обязателен (или `TESTGEN_VAULT_ADDR`). Храните копию: без него секреты не прочитать |
@@ -103,18 +103,17 @@ python -m testgen.db import-files ./data ./secrets     # с TESTGEN_DATABASE_URL
 
 ```bash
 python -m pytest -q -n 4                                             # файлы
-TESTGEN_TEST_DB=sqlite TESTGEN_TEST_S3=moto python -m pytest -q -n 4  # база + S3 (moto)
+TESTGEN_TEST_DB=postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen   TESTGEN_TEST_S3=moto python -m pytest -q -n 4                      # PostgreSQL + S3 (moto)
 ```
 
-`TESTGEN_TEST_DB` может быть и адресом PostgreSQL — каждому потоку pytest создаётся своя база
-(так работает job `shared-storage` в CI). `tests/test_cluster.py` поднимает отдельными процессами два
+`TESTGEN_TEST_DB` — адрес сервера PostgreSQL: каждому потоку pytest создаётся своя база, тестам
+`tests/test_scale.py` — своя на каждый тест (так работает job `shared-storage` в CI). Без него тесты
+общего хранилища пропускаются. `tests/test_cluster.py` поднимает отдельными процессами два
 экземпляра студии и три воркера на одной базе и проверяет, что набор расходится по воркерам, а
 сессия Studio доступна через любой экземпляр.
 
 ## Ограничения
 
-- SQLite годится для одного экземпляра (и тестов): блокировки между процессами работают, но
-  одновременная запись нескольких экземпляров упирается в одну блокировку файла базы.
 - MCP-сервер студии (`/mcp`) не передаёт `get_generation` другому экземпляру: генерацию, начатую через
   MCP, опрашивайте через тот же адрес или включите привязку клиента на балансировщике.
 - Прогон из CI (`python -m testgen.run`) с общей базой идёт в процессе CI-агента, а не в воркерах:

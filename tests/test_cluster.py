@@ -2,7 +2,7 @@
 database. A suite started through one instance is spread over the workers and read through the
 other; a Studio session is reached through either instance.
 
-Needs a shared database: TESTGEN_TEST_DB=sqlite (or a PostgreSQL URL); skipped otherwise."""
+Needs a shared database: TESTGEN_TEST_DB (a PostgreSQL URL); skipped otherwise."""
 from __future__ import annotations
 
 import os

@@ -111,6 +111,12 @@ def test_usage_scopes_nest():
     assert other.as_dict()["cost_usd"] is None          # no price entered for the model
 
 
+def test_own_gateway_gets_the_key_as_bearer_too():
+    from testgen import llm
+    headers = llm.make_client("sk-test", "https://gw.example").auth_headers
+    assert headers["X-Api-Key"] == "sk-test" and headers["Authorization"] == "Bearer sk-test"
+
+
 def test_model_comes_from_the_project_settings():
     from types import SimpleNamespace
 
@@ -151,3 +157,21 @@ def test_har_roundtrip():
     assert [b["step"] for b in back] == [2, 3]
     assert [b["third_party"] for b in back] == [False, True]
     assert traffic.mock_spec(back[0])["url"] == "https://app.test/api/items*"
+
+
+def test_api_error_text_no_credits():
+    import anthropic
+    import httpx
+
+    from testgen.providers.anthropic import NO_CREDITS, error_text
+
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+    def err(status, kind, message):
+        body = {"type": "error", "error": {"type": kind, "message": message}}
+        return anthropic.APIStatusError(message, response=httpx.Response(status, request=req), body=body)
+
+    low = err(400, "invalid_request_error", "Your credit balance is too low to access the Anthropic API.")
+    assert error_text(low) == NO_CREDITS
+    assert error_text(err(402, "billing_error", "Payment required")) == NO_CREDITS
+    assert error_text(err(400, "invalid_request_error", "messages: field required")).startswith("Ошибка API ИИ 400")

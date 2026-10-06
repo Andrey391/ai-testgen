@@ -89,13 +89,17 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 фикстура `project` задаёт проекту модель `test-model`), без ключей API и затрат. Данные и секреты
 тестов уходят во временную папку (`TESTGEN_DATA_DIR`/`TESTGEN_SECRETS_DIR` в `tests/conftest.py`).
 Запускай после правок; CI — `.github/workflows/tests.yml`. Те же тесты на общем хранилище:
-`TESTGEN_TEST_DB=sqlite` (или адрес PostgreSQL — база на каждый поток xdist) и `TESTGEN_TEST_S3=moto`;
+`TESTGEN_TEST_DB` — адрес сервера PostgreSQL (база на каждый поток xdist и на каждый тест
+`tests/test_scale.py`) и `TESTGEN_TEST_S3=moto`; без базы тесты общего хранилища пропускаются.
 `tests/test_cluster.py` (только с базой) поднимает 2 экземпляра студии и 3 воркера процессами.
+SQLite не поддерживается: общая база — только PostgreSQL.
 
 ```powershell
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements-dev.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
-$env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -m "not browser"   # быстрая часть; тесты со стендом помечаются browser автоматически
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q tests/test_units.py -k имя_теста   # один тест
+$env:TESTGEN_TEST_DB = "postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
 ```
 
 Ручная проверка — запуском студии (для локальной отладки удобно `TESTGEN_AUTH=off`); стенд для
@@ -160,7 +164,9 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
 - **Хранилище** (`testgen/fs.py`, `testgen/db.py`). Все данные под `DATA`/`SECRETS` читай и пиши через `fs`
   (`read_json`, `write_json`, `glob`, `documents`, `rmtree`, `lock` для read-modify-write, `local_path`/`push`
   для файлов браузера), не через `Path` напрямую: с `TESTGEN_DATABASE_URL` путь — ключ строки PostgreSQL
-  (таблица `docs`), бинарные файлы — в S3. Схема — миграции Alembic в `testgen/migrations`.
+  (таблица `docs`), бинарные файлы — в S3. Прогоны, тесты, задачи и расход модели в общей базе —
+  свои таблицы (`runs`, `tests`, `tasks`, `usage`) через репозитории `testgen/repo/` (`Files`/`Sql`). Схема —
+  миграции Alembic в `testgen/migrations`.
 - **Очередь и воркеры** (`testgen/workqueue.py`, `testgen/worker.py`). С общей базой «Запустить», наборы,
   мутации и Planner становятся заданиями очереди (`worker.start_*`); набор раскладывается на задания по
   тестам (`suite.distribute`, `item_done`). Сессии Studio и конвейер остаются в экземпляре-владельце
@@ -203,7 +209,8 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
 - `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`TESTGEN_PLAYWRIGHT_MCP`).
   Агент и шаги не меняются; снимок — ARIA-снапшот MCP. Локаторы шага: код, сгенерированный MCP
   (`--codegen python`), плюс `ELEMENT_INFO_JS` через `browser_evaluate` (те же поля, что у встроенного
-  снимка). По умолчанию берёт Chromium из `playwright install` (`--executable-path`). Picker/Record
+  снимка). Берёт Chromium из `playwright install` (`--executable-path`) при любой команде stdio, если в
+  аргументах нет своего браузера, и `--no-sandbox`, как встроенный движок (без `--sandbox` в аргументах). Инструкция подключения — `setup` пресета (видит администратор). Picker/Record
   только во встроенном движке. Сохранённые тесты всегда прогоняются встроенным раннером.
 - `testgen/mcp_hub.py` — MCP-подключения проекта: пресеты `PRESETS` (atlassian, zephyr, playwright,
   custom) с полями и маппингом в env, секреты в `secrets/projects/<id>/conn-<cid>.json`.

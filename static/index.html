@@ -2687,7 +2687,11 @@ function connCard(c, wizard) {
     return `<div><label>${esc(f.label)}${f.required ? ' *' : ''}${f.secret && set ? ` · <a href="#" onclick="clearSecret('${c.id}','${f.key}');return false">очистить</a>` : ''}</label>${input}</div>`;
   }).join('');
   const cmd = c.command || [pr.command, ...(pr.args || [])].filter(Boolean).join(' ') || (pr.command_env ? `не задана, укажите ${pr.command_env}` : '');
-  const admin = ME.is_admin ? `<details class="opt"><summary>Запуск сервера (администратор)</summary>
+  // pr.setup: trusted markup from the preset (mcp_hub.PRESETS), not user input.
+  const setup = pr.setup?.length ? `<div class="hint"><b>Как подключить</b><ol style="margin:4px 0 8px;padding-left:18px">${
+    pr.setup.map(s => `<li>${s}</li>`).join('')}</ol></div>` : '';
+  const admin = ME.is_admin ? `<details class="opt" ${setup && !c.check?.ok ? 'open' : ''}><summary>Запуск сервера (администратор)</summary>
+      ${setup}
       <div class="grid2">
         <div><label>Транспорт</label><select data-a="transport"><option value="stdio">stdio (команда)</option><option value="http" ${c.transport === 'http' ? 'selected' : ''}>HTTP (streamable)</option></select></div>
         <div><label>Адрес HTTP-сервера</label><input data-a="url" value="${esc(c.url || '')}" placeholder="https://mcp.example.com/mcp"></div>

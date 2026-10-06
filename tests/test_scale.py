@@ -1,7 +1,8 @@
 """Shared storage and scale (stage 5.5): the database and S3 behind fs.py, locks between processes,
 the work queue and workers, requests passed to the instance that holds a Studio session, metrics.
 
-The database here is SQLite of the temporary folder (as with TESTGEN_TEST_DB=sqlite), S3 is moto."""
+Every test gets a database of its own on the TESTGEN_TEST_DB server (PostgreSQL; skipped without it),
+S3 is moto."""
 from __future__ import annotations
 
 import asyncio
@@ -36,9 +37,8 @@ def s3_server():
 
 
 @pytest.fixture
-def shared(monkeypatch, tmp_path, s3_server):
-    """The shared storage for this test: its own SQLite database and bucket prefix."""
-    monkeypatch.setenv("TESTGEN_DATABASE_URL", f"sqlite:///{(tmp_path / 'shared.db').as_posix()}")
+def shared(fresh_database, monkeypatch, s3_server):
+    """The shared storage for this test: its own database and bucket prefix."""
     monkeypatch.setenv("TESTGEN_SECRET_KEY", KEY)
     for k, v in {"TESTGEN_S3_ENDPOINT": s3_server, "TESTGEN_S3_BUCKET": "scale-tests", "TESTGEN_S3_ACCESS_KEY": "t",
                  "TESTGEN_S3_SECRET_KEY": "t", "TESTGEN_S3_PREFIX": uuid.uuid4().hex[:8]}.items():

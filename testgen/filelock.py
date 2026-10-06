@@ -1,5 +1,5 @@
 """An exclusive lock between processes on one machine, by a lock file (msvcrt on Windows, fcntl elsewhere):
-the audit log's chain in data/audit/ and migrations of a SQLite database."""
+the audit log's chain in data/audit/."""
 from __future__ import annotations
 
 import contextlib
