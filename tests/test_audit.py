@@ -1,43 +1,17 @@
-"""Audit log (stage 5.4): the hash chain, records of API changes, export to a SIEM."""
+"""Audit log (stage 5.4): records of API changes, export to a SIEM (the hash chain: tests/test_scale.py)."""
 from __future__ import annotations
 
 import json
 import socket
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 
-from testgen import audit, auth, fs, projects, storage
+from testgen import audit, auth, projects, storage
 from testgen.steps import new_step
 
 
-@pytest.fixture(autouse=True)
-def log_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(audit, "DATA", tmp_path)
-    return tmp_path / "audit"
-
-
-@pytest.mark.skipif(fs.remote(), reason="the log is in the database: tests/test_scale.py")
-def test_chain_detects_edits_and_removals(log_dir):
-    for i in range(5):
-        audit.record("test.update", user="alice", project_id="p1", target={"tid": f"t{i}"})
-    assert audit.verify() == {"ok": True, "records": 5, "error": ""}
-    assert [r["target"]["tid"] for r in audit.read(limit=2)] == ["t4", "t3"]
-    f = next(log_dir.glob("*.jsonl"))
-    lines = f.read_text("utf-8").splitlines()
-
-    f.write_text("\n".join(lines[:2] + lines[3:]) + "\n", "utf-8")            # a record removed
-    assert "цепочка прервана" in audit.verify()["error"]
-    edited = json.loads(lines[2])
-    edited["user"] = "mallory"
-    f.write_text("\n".join(lines[:2] + [json.dumps(edited, ensure_ascii=False)] + lines[3:]) + "\n", "utf-8")
-    assert "изменена" in audit.verify()["error"]
-    f.write_text("\n".join(lines) + "\n", "utf-8")
-    assert audit.verify()["ok"]
-
-
-def test_copies_to_a_file_and_syslog(log_dir, tmp_path, monkeypatch):
+def test_copies_to_a_file_and_syslog(tmp_path, monkeypatch):
     copy = tmp_path / "siem" / "audit.jsonl"
     monkeypatch.setenv("TESTGEN_AUDIT_FILE", str(copy))
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -53,7 +27,7 @@ def test_copies_to_a_file_and_syslog(log_dir, tmp_path, monkeypatch):
     assert msg.startswith("<3") and "testgen-audit:" in msg and rec["hash"] in msg      # facility auth (4)
 
 
-def test_api_changes_are_recorded(log_dir, monkeypatch):
+def test_api_changes_are_recorded(monkeypatch):
     import server
     monkeypatch.setattr(auth, "ENABLED", True)
     monkeypatch.setattr(auth, "ADMINS", {"root"})

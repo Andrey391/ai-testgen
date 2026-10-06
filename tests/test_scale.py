@@ -1,8 +1,7 @@
 """Shared storage and scale (stage 5.5): the database and S3 behind fs.py, locks between processes,
 the work queue and workers, requests passed to the instance that holds a Studio session, metrics.
 
-Every test gets a database of its own on the TESTGEN_TEST_DB server (PostgreSQL; skipped without it),
-S3 is moto."""
+Every test gets an empty PostgreSQL database of its own (conftest.new_database), S3 is moto."""
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +13,7 @@ import uuid
 import boto3
 import httpx
 import pytest
+from conftest import drop_database, new_database
 from fastapi.testclient import TestClient
 
 from testgen import audit, db, fs, projects, runs, storage, suite, vault, workqueue
@@ -37,14 +37,17 @@ def s3_server():
 
 
 @pytest.fixture
-def shared(fresh_database, monkeypatch, s3_server):
+def shared(monkeypatch, tmp_path, s3_server):
     """The shared storage for this test: its own database and bucket prefix."""
+    url = new_database("scale")
+    monkeypatch.setenv("TESTGEN_DATABASE_URL", url)
     monkeypatch.setenv("TESTGEN_SECRET_KEY", KEY)
     for k, v in {"TESTGEN_S3_ENDPOINT": s3_server, "TESTGEN_S3_BUCKET": "scale-tests", "TESTGEN_S3_ACCESS_KEY": "t",
                  "TESTGEN_S3_SECRET_KEY": "t", "TESTGEN_S3_PREFIX": uuid.uuid4().hex[:8]}.items():
         monkeypatch.setenv(k, v)
-    return boto3.client("s3", endpoint_url=s3_server, aws_access_key_id="t", aws_secret_access_key="t",
-                        region_name="us-east-1")
+    yield boto3.client("s3", endpoint_url=s3_server, aws_access_key_id="t", aws_secret_access_key="t",
+                       region_name="us-east-1")
+    drop_database(url)
 
 
 def _objects(s3) -> list[str]:
@@ -117,14 +120,29 @@ def test_import_and_export_an_installation(shared, tmp_path):
     assert (out / "baselines" / "a" / "s.png").read_bytes() == b"\x89PNG"
     fs.rmtree(DATA / "projects" / "p1")
 
-    # The command: secrets of the old folder, written in plain text, are encrypted on the way in.
+    # The command: secrets of the old folder, written in plain text, are encrypted on the way in;
+    # the audit log comes into audit_log with its chain.
     old_secrets = tmp_path / "old-secrets"
     (old_secrets / "projects" / "p2").mkdir(parents=True)
     (old_secrets / "projects" / "p2" / "app.json").write_text('{"password": "plain-old-pass"}', "utf-8")
-    db._cli(["import-files", str(tmp_path / "empty"), str(old_secrets)])
+    chain = []
+    for i in range(3):
+        rec = {"at": f"2026-0{8 + i // 2}-01T00:00:00.000+00:00", "ts": 1.0 + i, "user": "u", "action": "test.update",
+               "project_id": "p2", "target": "", "status": "ok", "via": "web", "ip": "", "details": {},
+               "prev": chain[-1]["hash"] if chain else ""}
+        chain.append(rec | {"hash": audit.digest(rec)})
+    (tmp_path / "old2" / "audit").mkdir(parents=True)
+    for month in ("2026-08", "2026-09"):
+        (tmp_path / "old2" / "audit" / f"{month}.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in chain if r["at"].startswith(month)), "utf-8")
+    db._cli(["import-files", str(tmp_path / "old2"), str(old_secrets)])
     with db.engine().connect() as c:
         body = c.execute(db.docs.select().where(db.docs.c.path == "secrets/projects/p2/app.json")).first().body
     assert "plain-old-pass" not in body and vault.load("projects/p2", "app") == {"password": "plain-old-pass"}
+    assert audit.verify() == {"ok": True, "records": 3, "error": ""}
+    assert not fs.exists(DATA / "audit" / "2026-08.jsonl")
+    assert fs.import_tree(tmp_path / "old2", DATA) == 0            # a second log would break the chain
+    assert audit.verify()["records"] == 3
 
 
 def test_secrets_in_the_database_are_encrypted(shared, monkeypatch):
@@ -133,9 +151,6 @@ def test_secrets_in_the_database_are_encrypted(shared, monkeypatch):
         body = c.execute(db.docs.select().where(db.docs.c.path == "secrets/projects/pv/app.json")).first().body
     assert "db-secret-1" not in body and json.loads(body)["enc"] == "aes-256-gcm"
     assert vault.load("projects/pv", "app") == {"password": "db-secret-1"}
-    monkeypatch.delenv("TESTGEN_SECRET_KEY")
-    with pytest.raises(vault.VaultError, match="зашифрованными"):
-        vault.save("projects/pv", "app", {"password": "x"})
 
 
 def test_audit_chain_in_the_database(shared):

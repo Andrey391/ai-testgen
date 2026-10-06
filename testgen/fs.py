@@ -1,16 +1,16 @@
-"""Where the studio's data lives: local folders (default) or a shared database and object storage.
+"""Where the studio's data lives: the PostgreSQL database (db.py) and, for binary files, optionally
+S3-compatible storage. Nothing of it is kept only on the local disk.
 
-Modules address data by paths, as they always did: DATA/projects/<id>/tests/<test>.json,
-SECRETS/users.json and so on. Without TESTGEN_DATABASE_URL every function here is the plain
-file operation. With it (db.py) a path under DATA or SECRETS is the key of a row: "data/<rel>" or
-"secrets/<rel>". JSON and text go into the row; binary files (screenshots, traces, visual
-baselines, files for upload steps) too, or - with TESTGEN_S3_BUCKET - into S3-compatible storage
-(MinIO, Yandex Object Storage, AWS S3) under the same key, the row keeping their size and time.
-DATA/cache stays local.
+Modules address data by paths: DATA/projects/<id>/project.json, SECRETS/users.json and so on
+(paths.py). A path under DATA or SECRETS is the key of a row of `docs`: "data/<rel>" or
+"secrets/<rel>" (tests, tasks, runs and model spending have tables of their own: repo/). JSON and
+text go into the row; binary files (screenshots, traces, visual baselines, files for upload steps)
+too, or - with TESTGEN_S3_BUCKET - into S3-compatible storage (MinIO, Yandex Object Storage, AWS S3)
+under the same key, the row keeping their size and time. Only DATA/cache stays local.
 
-A browser reads and writes binary files on the local disk, so the local folders stay as a cache
-of the shared storage: local_path() brings a file there (when the store has a newer copy),
-push() sends files written there to the store.
+A browser reads and writes binary files on the local disk, so the local folders are a cache of
+the database: local_path() brings a file there (when the store has a newer copy), push() sends
+files written there to the store.
 
 lock(path) serializes read-modify-write of a document across threads, processes and instances
 (a PostgreSQL advisory lock).
@@ -42,11 +42,6 @@ _held = threading.local()
 _s3 = None
 
 
-def remote() -> bool:
-    """Is the data in the shared database (and S3), not in local folders?"""
-    return db.enabled()
-
-
 # ---------- paths <-> keys ----------
 
 def _roots() -> tuple[tuple[str, Path], ...]:
@@ -54,9 +49,7 @@ def _roots() -> tuple[tuple[str, Path], ...]:
 
 
 def key(p: Path | str) -> str | None:
-    """The row key of a path, or None for a path that stays on the local disk."""
-    if not remote():
-        return None
+    """The row key of a path, or None for a path that stays on the local disk (DATA/cache, outside DATA)."""
     ap = Path(os.path.abspath(p))
     for name, root in _roots():
         try:
@@ -350,17 +343,6 @@ def documents(d: Path | str, pattern: str = "*.json") -> list[tuple[Path, str, f
     return sorted(out, key=lambda x: x[2], reverse=True)
 
 
-@contextlib.contextmanager
-def reading(p: Path | str):
-    """Around a read of a document that another thread may be rewriting: local files are written
-    in place, so a reader waits for the writer; rows of the database are always whole."""
-    if remote():
-        yield
-    else:
-        with lock(p):
-            yield
-
-
 def iterdir(d: Path | str) -> list[Path]:
     """Children of a folder: files and sub-folders."""
     k = key(d)
@@ -418,22 +400,23 @@ def _local_lock(name: str) -> threading.RLock:
 
 
 @contextlib.contextmanager
-def lock(p: Path | str):
-    """Exclusive access to a document for a read-modify-write, in this process and (with the
-    shared database) in every process of every instance. Re-entrant in one thread."""
-    name = str(key(p) or os.path.abspath(p))
+def lock(p: Path | str, timeout: float = 120):
+    """Exclusive access to a document for a read-modify-write, in this process and in every process
+    of every instance (a path outside the database: in this process). Re-entrant in one thread."""
+    k = key(p)
+    name = str(k or os.path.abspath(p))
     held = getattr(_held, "names", None)
     if held is None:
         held = _held.names = {}
     with _local_lock(name):
-        if held.get(name) or not remote():
+        if held.get(name) or k is None:
             held[name] = held.get(name, 0) + 1
             try:
                 yield
             finally:
                 held[name] -= 1
             return
-        with _db_lock(name):
+        with _db_lock(name, timeout):
             held[name] = 1
             try:
                 yield
@@ -442,7 +425,7 @@ def lock(p: Path | str):
 
 
 @contextlib.contextmanager
-def _db_lock(name: str):
+def _db_lock(name: str, timeout: float):
     from sqlalchemy import text
     conn = db.engine().connect()
     try:
@@ -460,16 +443,21 @@ def _db_lock(name: str):
 # ---------- moving an installation ----------
 
 def import_tree(src: Path, root: Path) -> int:
-    """Copy every file of a local folder (data/ or secrets/ of a file installation) into the store,
-    as if it were at `root`; tests, tasks, runs and spending go into their tables. -> files copied."""
-    from . import repo
+    """Copy every file of a local folder (data/ or secrets/ of an older version, kept in folders) into
+    the store, as if it were at `root`; tests, tasks, runs and spending go into their tables, the
+    audit log (data/audit/*.jsonl) into audit_log. -> files copied."""
+    from . import audit, repo
     n = 0
+    logs = []
     for f in sorted(Path(src).rglob("*")):
         if not f.is_file() or f.name.startswith(".") or f.suffix == ".tmp":
             continue
         target = root / f.relative_to(src)
         k = key(target)
         if k is None:
+            continue
+        if k.startswith("data/audit/") and k.endswith(".jsonl"):
+            logs.append(f)
             continue
         if repo.owns(k):
             repo.import_text(k, f.read_text("utf-8"))
@@ -478,6 +466,8 @@ def import_tree(src: Path, root: Path) -> int:
         else:
             _put(k, body=f.read_text("utf-8"))
         n += 1
+    if logs:
+        n += audit.import_files(logs)
     return n
 
 

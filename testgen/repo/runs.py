@@ -1,8 +1,7 @@
 """Run history: run records and their summaries (runs.py keeps the logic, this - the storage).
 
-Files:  data/projects/<id>/runs/<test>/<run>.json and index.json - summaries of finished runs,
-        newest last, rewritten under a lock on every finish
-Sql:    the `runs` table; summaries are its columns, history and flaky statistics one query
+The `runs` table: a row per run, summaries are its columns, history and flaky statistics one query.
+The files of a run (screenshots, trace) are files by path: data/projects/<id>/runs/<test>/<run>/.
 """
 from __future__ import annotations
 
@@ -11,7 +10,6 @@ import re
 from sqlalchemy import func, select
 
 from .. import db, fs, projects
-from . import sql
 
 SUMMARY = ("id", "status", "started", "finished", "healed", "proposals", "trigger", "suite_id", "quarantined")
 
@@ -22,49 +20,6 @@ def safe(s: str) -> str:
 
 def test_dir(pid: str, tid: str):
     return projects.path(pid) / "runs" / safe(tid)
-
-
-class Files:
-    @staticmethod
-    def save(run: dict) -> None:
-        fs.write_json(test_dir(run["project_id"], run["test_id"]) / f"{run['id']}.json", run, indent=1)
-
-    @staticmethod
-    def get(rid: str) -> dict | None:
-        for f in fs.glob(projects.ROOT, f"*/runs/*/{rid}.json"):
-            return fs.read_json(f)
-        return None
-
-    @staticmethod
-    def history(pid: str, tid: str, limit: int) -> list[dict]:
-        f = test_dir(pid, tid) / "index.json"
-        try:
-            with fs.reading(f):
-                index = fs.read_json(f, [])
-        except ValueError:
-            index = []
-        return index[-limit:] if limit else index
-
-    @classmethod
-    def histories(cls, pid: str, tids: list[str], limit: int) -> dict[str, list[dict]]:
-        return {tid: cls.history(pid, tid, limit) for tid in tids}
-
-    @classmethod
-    def finished(cls, pid: str, tid: str, summary: dict, keep: int) -> list[str]:
-        """Add the summary of a finished run; drop runs beyond `keep`. -> ids of the dropped runs."""
-        d = test_dir(pid, tid)
-        with fs.lock(d / "index.json"):
-            index = cls.history(pid, tid, 0)
-            index = [x for x in index if x["id"] != summary["id"]] + [summary]
-            drop, index = index[:-keep] if len(index) > keep else [], index[-keep:]
-            fs.write_json(d / "index.json", index, indent=None)
-        for old in drop:
-            fs.unlink(d / f"{old['id']}.json")
-        return [old["id"] for old in drop]
-
-    @staticmethod
-    def delete_test(pid: str, tid: str) -> None:
-        fs.rmtree(test_dir(pid, tid))
 
 
 def _outcomes(run: dict) -> list[bool]:
@@ -170,7 +125,4 @@ class Sql:
         for (_, folder), items in index.items():
             yield f"{folder}/index.json", sorted(items, key=lambda x: x["finished"])
 
-
-def backend():
-    return Sql if sql() else Files
 

@@ -2,9 +2,8 @@
 
 A month's ledger is {"requests": n, "stages": {stage: {model: {tokens by kind..., "requests": n}}}}.
 
-Files:  data/projects/<id>/usage/<YYYY-MM>.json, rewritten under a lock on every request
-Sql:    the `usage` table, a row per request (no lock: workers and instances only insert);
-        the ledger and the monthly budget are a SUM ... GROUP BY
+The `usage` table, a row per request (no lock: workers and instances only insert); the ledger and
+the monthly budget are a SUM ... GROUP BY.
 """
 from __future__ import annotations
 
@@ -14,40 +13,13 @@ import time
 
 from sqlalchemy import func, select
 
-from .. import db, fs
-from ..paths import DATA
-from . import sql
+from .. import db
 
 FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 
 
 def empty() -> dict:
     return {"stages": {}, "requests": 0}
-
-
-class Files:
-    @staticmethod
-    def file(pid: str, month: str):
-        return DATA / "projects" / pid / "usage" / f"{month}.json"
-
-    @classmethod
-    def ledger(cls, pid: str, month: str) -> dict:
-        try:
-            return fs.read_json(cls.file(pid, month)) or empty()
-        except ValueError:
-            return empty()
-
-    @classmethod
-    def add(cls, pid: str, month: str, stage: str, model: str, counts: dict) -> None:
-        f = cls.file(pid, month)
-        with fs.lock(f):             # workers and instances spend on the same project
-            d = cls.ledger(pid, month)
-            d["requests"] = d.get("requests", 0) + 1
-            m = d["stages"].setdefault(stage, {}).setdefault(model, dict.fromkeys(FIELDS, 0) | {"requests": 0})
-            for fld in FIELDS:
-                m[fld] += counts[fld]
-            m["requests"] += 1
-            fs.write_json(f, d, indent=1)
 
 
 class Sql:
@@ -103,6 +75,3 @@ class Sql:
         for (pid, month), d in months.items():
             yield f"data/projects/{pid}/usage/{month}.json", d
 
-
-def backend():
-    return Sql if sql() else Files

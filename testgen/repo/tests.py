@@ -1,21 +1,17 @@
 """Saved tests (storage.py keeps the logic, this - the storage).
 
-Files:  data/projects/<id>/tests/<test>.json; a read-modify-write under fs.lock
-Sql:    the `tests` table: columns for filters (status, role, tags, quarantine, the last run), the
-        test itself in `body`; a read-modify-write holds the row (SELECT ... FOR UPDATE)
+The `tests` table: columns for filters (status, role, tags, quarantine, the last run), the test itself
+in `body`; a read-modify-write holds the row (SELECT ... FOR UPDATE).
 """
 from __future__ import annotations
 
-import json
 import re
 from typing import Callable
 
-from sqlalchemy import func, select, type_coerce
-from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.types import Text
+from sqlalchemy import func, select
 
-from .. import db, fs, projects
-from . import held, sql
+from .. import db
+from . import held
 
 Change = Callable[[dict | None], dict | None]       # the stored test (None: none yet) -> the test to store
 
@@ -36,69 +32,6 @@ def _matches(t: dict, ids, tags, ready: bool, modules: bool) -> bool:
     if ready and status(t) != "ready":
         return False
     return not tags or bool(set(t.get("tags") or []) & set(tags))
-
-
-class Files:
-    @staticmethod
-    def file(pid: str, tid: str):
-        return projects.path(pid) / "tests" / f"{safe(tid)}.json"
-
-    @staticmethod
-    def locate(tid: str) -> str | None:
-        p = next(iter(fs.glob(projects.ROOT, f"*/tests/{safe(tid)}.json")), None)
-        return p.parent.parent.name if p else None
-
-    @classmethod
-    def get(cls, tid: str) -> dict | None:
-        pid = cls.locate(tid)
-        if pid is None:
-            return None
-        f = cls.file(pid, tid)
-        with fs.reading(f):
-            return fs.read_json(f)
-
-    @classmethod
-    def write(cls, pid: str, tid: str, change: Change) -> dict | None:
-        f = cls.file(pid, tid)
-        with fs.lock(f):
-            try:
-                old = fs.read_json(f)
-            except ValueError:
-                old = None
-            new = change(old)
-            if new is not None:
-                fs.write_json(f, new)
-            return new
-
-    @staticmethod
-    def all(pid: str) -> list[dict]:
-        out = []
-        for _, text, _ in fs.documents(projects.path(pid) / "tests"):
-            try:
-                out.append(json.loads(text))
-            except ValueError:
-                continue
-        return out
-
-    @classmethod
-    def query(cls, pid: str, ids=None, tags=None, ready: bool = False, modules: bool = True) -> list[dict]:
-        return [t for t in cls.all(pid) if _matches(t, ids, tags, ready, modules)]
-
-    @classmethod
-    def names(cls, pid: str) -> dict[str, str]:
-        return {t["id"]: t.get("name", t["id"]) for t in cls.all(pid) if "id" in t}
-
-    @staticmethod
-    def counts() -> dict[str, int]:
-        out: dict[str, int] = {}
-        for p in fs.glob(projects.ROOT, "*/tests/*.json"):
-            pid = p.parent.parent.name
-            out[pid] = out.get(pid, 0) + 1
-        return out
-
-    @classmethod
-    def delete(cls, pid: str, tid: str) -> None:
-        fs.unlink(cls.file(pid, tid))
 
 
 class Sql:
@@ -153,7 +86,7 @@ class Sql:
         elif ready:
             q = q.where(t.c.status == "ready")
         if ids is None and tags:
-            q = q.where(type_coerce(t.c.tags, ARRAY(Text())).overlap(list(tags)))
+            q = q.where(t.c.tags.overlap(list(tags)))
         with db.engine().connect() as c:
             return [dict(r.body) for r in c.execute(q)]
 
@@ -178,6 +111,3 @@ class Sql:
         for r in c.execute(select(cls.t.c.project_id, cls.t.c.id, cls.t.c.body)):
             yield f"data/projects/{r.project_id}/tests/{safe(r.id)}.json", r.body
 
-
-def backend():
-    return Sql if sql() else Files

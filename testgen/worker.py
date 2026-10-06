@@ -24,6 +24,7 @@ import traceback
 import uuid
 
 from . import explorer, fs, mutations, pipeline, projects, runs, storage, suite, workqueue
+from .paths import utf8_console
 
 HEARTBEAT = 10
 POLL = 1.0
@@ -233,14 +234,13 @@ def fail_item(item: dict, error: str) -> None:
 
 
 def main() -> None:
-    # The log goes to a file or a pipe (systemd, docker, CI): on Windows that is cp1252 without this.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
+    utf8_console()
+    try:
+        fs.db.check()
+    except fs.db.NotConfigured as e:
+        sys.exit(f"Воркер не запущен: {e}")
     if not workqueue.enabled():
-        sys.exit("Воркеру нужна общая база данных: задайте TESTGEN_DATABASE_URL")
+        sys.exit("Очередь выключена (TESTGEN_QUEUE=off): воркеру нечего делать")
     w = Worker(int(os.environ.get("TESTGEN_WORKER_CONCURRENCY", "2")))
     port = os.environ.get("TESTGEN_METRICS_PORT", "").strip()
     if port:

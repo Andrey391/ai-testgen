@@ -2,60 +2,35 @@
 the documents into them and back, filters in SQL, read-modify-write without lost updates, rotation of
 the run history, import and export of an installation.
 
-Each test gets an empty database on the server of TESTGEN_TEST_DB=postgresql+psycopg://...;
-skipped without it."""
+Each test gets an empty database of its own (conftest.new_database)."""
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import threading
 import time
 import types
 import uuid
 
+import conftest
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
 
 from testgen import db, fs, llm, projects, repo, runs, storage, tasks
-from testgen.paths import DATA
 
 
 @pytest.fixture
-def new_database(monkeypatch, tmp_path):
-    """Switch to an empty database on the PostgreSQL server of TESTGEN_TEST_DB."""
-    server = os.environ.get("TESTGEN_DATABASE_URL", "")
-    if not server.startswith("postgresql"):
-        pytest.skip("needs TESTGEN_TEST_DB (PostgreSQL)")
+def new_database(monkeypatch):
+    """Switch to an empty database (conftest.new_database), dropped after the test."""
     made: list[str] = []
     monkeypatch.setenv("TESTGEN_SECRET_KEY", "repository tests: a long enough key")
     monkeypatch.delenv("TESTGEN_S3_BUCKET", raising=False)
 
     def switch() -> str:
-        name = f"repo_{uuid.uuid4().hex[:10]}"
-        with _admin(server) as c:
-            c.execute(text(f'CREATE DATABASE "{name}"'))
-        url = make_url(server).set(database=name).render_as_string(hide_password=False)
-        made.append(url)
-        monkeypatch.setenv("TESTGEN_DATABASE_URL", url)
-        return url
+        made.append(conftest.new_database("repo"))
+        monkeypatch.setenv("TESTGEN_DATABASE_URL", made[-1])
+        return made[-1]
     yield switch
-    if db._engine and db._engine[0] in made:
-        db._engine[1].dispose()
-    with _admin(server) as c:
-        for url in made:
-            c.execute(text(f'DROP DATABASE IF EXISTS "{make_url(url).database}" WITH (FORCE)'))
-
-
-@contextlib.contextmanager
-def _admin(server: str):
-    e = create_engine(server, isolation_level="AUTOCOMMIT")
-    try:
-        with e.connect() as c:
-            yield c
-    finally:
-        e.dispose()
+    for url in made:
+        conftest.drop_database(url)
 
 
 @pytest.fixture

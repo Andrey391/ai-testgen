@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import sys
 import threading
 import time
 import zipfile
@@ -30,6 +31,7 @@ from testgen import (access, audit, auth, checks, db, defects, explorer, exporte
 from testgen import worker as worker_mod
 from testgen import agent as agent_mod
 from testgen.agent import StudioSession
+from testgen.paths import utf8_console
 from testgen.steps import ALL_ACTIONS, DATA_ACTIONS, check_api, new_step
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +64,11 @@ INSTANCE_URL = os.environ.get("TESTGEN_INSTANCE_URL", "").strip().rstrip("/")
 PROXIED = "X-Testgen-Proxied"
 PROXY_TRANSPORT: httpx.AsyncBaseTransport | None = None     # tests: the other instance
 
+try:
+    db.check()                  # PostgreSQL answers, the schema is current, secrets can be encrypted
+except db.NotConfigured as e:
+    utf8_console()
+    sys.exit(f"Студия не запущена: {e}")
 projects.ensure_default()
 
 # The studio as an MCP server for IDE agents, at /mcp (token auth in require_login).
@@ -137,7 +144,7 @@ async def require_login(request: Request, call_next):
 
 def _elsewhere(request: Request) -> str | None:
     """The instance holding the Studio session or pipeline job this request is about, if not this one."""
-    if not INSTANCE_URL or not fs.remote() or request.headers.get(PROXIED):
+    if not INSTANCE_URL or request.headers.get(PROXIED):
         return None
     m = re.match(r"/api/sessions/([^/]+)", request.url.path)
     if m and m.group(1) not in SESSIONS:
@@ -329,20 +336,17 @@ async def health():
 
 @app.get("/api/ready")
 async def ready():
-    """Readiness: the browser loop, the shared database and S3 (when configured) answer."""
-    checks_ = {"worker_loop": WORKER.is_running()}
-    if fs.remote():
-        checks_["database"] = await asyncio.to_thread(db.ping)
-        if fs.s3_enabled():
-            checks_["s3"] = await asyncio.to_thread(fs.s3_ping)
-        if workqueue.enabled():
-            try:
-                checks_["queue"] = await asyncio.to_thread(workqueue.stats)
-            except Exception:
-                checks_["queue"] = False
+    """Readiness: the browser loop, the database and S3 (when configured) answer."""
+    checks_ = {"worker_loop": WORKER.is_running(), "database": await asyncio.to_thread(db.ping)}
+    if fs.s3_enabled():
+        checks_["s3"] = await asyncio.to_thread(fs.s3_ping)
+    if workqueue.enabled():
+        try:
+            checks_["queue"] = await asyncio.to_thread(workqueue.stats)
+        except Exception:
+            checks_["queue"] = False
     ok = all(v is not False for v in checks_.values())
-    return JSONResponse({"ok": ok, "storage": "database" if fs.remote() else "files"} | checks_,
-                        status_code=200 if ok else 503)
+    return JSONResponse({"ok": ok, "storage": "database"} | checks_, status_code=200 if ok else 503)
 
 
 @app.get("/metrics")
@@ -1070,7 +1074,7 @@ class NewSession(BaseModel):
 
 def _start_session(s: StudioSession, autopilot: bool) -> None:
     SESSIONS[s.id] = s
-    if INSTANCE_URL and fs.remote():
+    if INSTANCE_URL:
         workqueue.set_owner("session", s.id, INSTANCE_URL)
 
     async def boot():
@@ -1226,7 +1230,7 @@ async def save_session(sid: str, body: SaveBody | None = None):
 async def close_session(sid: str):
     s = SESSIONS.pop(sid, None)
     SESSION_TASKS.pop(sid, None)
-    if INSTANCE_URL and fs.remote():
+    if INSTANCE_URL:
         workqueue.drop_owner("session", sid)
     if s:
         submit(s.close())
@@ -1860,7 +1864,7 @@ async def start_job(pid: str, body: JobBody, request: Request):
                        cases=cases)
     pipeline.JOBS[job.id] = job
     job.save()
-    if INSTANCE_URL and fs.remote():
+    if INSTANCE_URL:
         workqueue.set_owner("job", job.id, INSTANCE_URL)
     submit(job.run())
     return {"id": job.id}

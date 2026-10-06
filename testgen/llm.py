@@ -308,13 +308,13 @@ def _month(month: str = "") -> str:
 
 
 def ledger(pid: str, month: str = "") -> dict:
-    return usage_repo.backend().ledger(pid, _month(month))
+    return usage_repo.Sql.ledger(pid, _month(month))
 
 
 def ledger_add(pid: str, stage: str, model: str, usage) -> None:
     if not re.fullmatch(r"[a-z0-9]{4,32}", pid or ""):
         return
-    usage_repo.backend().add(pid, _month(), stage, model, {f: _num(usage, f) for f in FIELDS})
+    usage_repo.Sql.add(pid, _month(), stage, model, {f: _num(usage, f) for f in FIELDS})
 
 
 def _prices(pid: str) -> dict:

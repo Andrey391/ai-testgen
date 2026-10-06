@@ -1,8 +1,6 @@
 """The stage 5 criterion, as real processes: two instances of the studio and three workers on one
 database. A suite started through one instance is spread over the workers and read through the
-other; a Studio session is reached through either instance.
-
-Needs a shared database: TESTGEN_TEST_DB (a PostgreSQL URL); skipped otherwise."""
+other; a Studio session is reached through either instance."""
 from __future__ import annotations
 
 import os
@@ -15,11 +13,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from testgen import db, fs, storage, workqueue
+from testgen import db, storage, workqueue
 from testgen.steps import new_step
 
 ROOT = Path(__file__).resolve().parent.parent
-pytestmark = pytest.mark.skipif(not fs.remote(), reason="needs TESTGEN_TEST_DB (a shared database)")
 
 
 def _port() -> int:

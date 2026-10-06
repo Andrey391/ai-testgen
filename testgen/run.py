@@ -5,12 +5,11 @@
     python -m testgen.run --project Shop --browser firefox --browser webkit
     python -m testgen.run --project Shop --list
 
-Tests, settings and history come from the data folder (TESTGEN_DATA_DIR, by
-default ./data), the application login from the project / test settings or
-TESTGEN_USERNAME / TESTGEN_PASSWORD. Self-healing and failure analysis use the
-project's model (Project -> Model in the studio) and its API key, or ANTHROPIC_API_KEY
-when the secrets folder is not there; without a model a broken locator simply fails
-the step.
+Tests, settings and history come from the studio's database (TESTGEN_DATABASE_URL and
+TESTGEN_SECRET_KEY, as the studio has them); the run is recorded there too. The application
+login comes from the project / test settings or TESTGEN_USERNAME / TESTGEN_PASSWORD.
+Self-healing and failure analysis use the project's model (Project -> Model in the studio) and
+its API key, or ANTHROPIC_API_KEY; without a model a broken locator simply fails the step.
 
 Exit code: 0 - all tests passed (flaky ones and failures in quarantine do not
 count), 1 - failures, 2 - bad arguments or setup.
@@ -25,6 +24,7 @@ import sys
 from pathlib import Path
 
 from . import audit, projects, reports, storage, suite
+from .paths import utf8_console
 
 MARK = {"passed": "PASS ", "flaky": "FLAKY", "failed": "FAIL ", "error": "ERROR"}
 
@@ -48,11 +48,7 @@ def pick_tests(project: dict, tags: list[str], refs: list[str], drafts: bool = F
 
 
 def main(argv: list[str] | None = None) -> int:
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")
-        except (AttributeError, ValueError):
-            pass
+    utf8_console()
     ap = argparse.ArgumentParser(prog="python -m testgen.run", description="Run saved tests of a project.")
     ap.add_argument("--project", required=True, help="project name or id")
     ap.add_argument("--tag", action="append", default=[], help="run tests with this tag (repeatable)")
@@ -67,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--include-drafts", action="store_true", help="also drafts and tests under review")
     args = ap.parse_args(argv)
 
+    from . import db
+    try:
+        db.check()
+    except db.NotConfigured as e:
+        print(e, file=sys.stderr)
+        return 2
     project = find_project(args.project)
     if not project:
         print(f"Project not found: {args.project}", file=sys.stderr)

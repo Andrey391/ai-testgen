@@ -1,62 +1,67 @@
 """Shared fixtures of the studio's own tests.
 
-The data and secrets folders are moved to a temporary directory before testgen is
-imported, so tests never touch the real data/ and secrets/. The LLM is replaced by
-tests/fakes.FakeClient (no API calls); the application under test is tests/stand.py.
+The data lives in PostgreSQL, as in the studio: every xdist worker (each its own process) gets a
+database of its own, created before testgen is imported and dropped at the end. The server is
+TESTGEN_TEST_DB (default: postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen - a role that
+may create databases); TESTGEN_TEST_S3=moto puts binary files into a local S3 (moto). The local
+cache goes to a temporary folder. The LLM is replaced by tests/fakes.FakeClient (no API calls); the
+application under test is tests/stand.py.
 
-Tests that use the stand are marked `browser` automatically: `-m "not browser"` is
-the fast unit part, `-m browser -n 4` (pytest-xdist) the browser part. Every xdist
-worker is its own process with its own temporary data folder and stand.
-
-The same tests on the shared storage of stage 5.5 (fs.py): TESTGEN_TEST_DB is the URL of a
-PostgreSQL server - every xdist worker gets a database of its own there; TESTGEN_TEST_S3=moto puts
-binary files into a local S3 (moto). Tests of the shared storage itself (fresh_database) are skipped
-without TESTGEN_TEST_DB.
+Tests that use the stand are marked `browser` automatically: `-m "not browser"` is the fast unit
+part, `-m browser -n 4` (pytest-xdist) the browser part.
 """
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 import tempfile
 import uuid
 from pathlib import Path
 
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+
 _TMP = Path(tempfile.mkdtemp(prefix="testgen-tests-"))
-os.environ["TESTGEN_DATA_DIR"] = str(_TMP / "data")
-os.environ["TESTGEN_SECRETS_DIR"] = str(_TMP / "secrets")
+os.environ["TESTGEN_CACHE_DIR"] = str(_TMP / "cache")
 for var in ("TESTGEN_USERNAME", "TESTGEN_PASSWORD", "TESTGEN_TOTP_SECRET", "TESTGEN_PROMPT_CACHE", "TESTGEN_BASE_URL",
             "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "TESTGEN_USD_RUB",
             "TESTGEN_OFFLINE", "TESTGEN_DATABASE_URL", "TESTGEN_S3_BUCKET", "TESTGEN_SECRET_KEY", "TESTGEN_VAULT_ADDR",
             "TESTGEN_OIDC_ISSUER", "TESTGEN_LDAP_URL", "TESTGEN_INSTANCE_URL", "TESTGEN_AUDIT_SYSLOG",
             "TESTGEN_AUDIT_FILE"):
     os.environ.pop(var, None)
-_DB = os.environ.get("TESTGEN_TEST_DB", "").strip()
-if _DB and not _DB.startswith("postgresql"):
-    raise SystemExit("TESTGEN_TEST_DB — адрес PostgreSQL (postgresql+psycopg://…)")
+SERVER = os.environ.get("TESTGEN_TEST_DB", "").strip() or "postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen"
 
 
-def _admin_sql(sql: str) -> None:
-    from sqlalchemy import create_engine, text
-    admin = create_engine(_DB, isolation_level="AUTOCOMMIT")
+def _admin(sql: str) -> None:
+    e = create_engine(SERVER, isolation_level="AUTOCOMMIT")
     try:
-        with admin.connect() as c:
+        with e.connect() as c:
             c.execute(text(sql))
     finally:
-        admin.dispose()
+        e.dispose()
 
 
-def _create_database(prefix: str) -> str:
-    """A new empty database on the TESTGEN_TEST_DB server -> its URL."""
-    from sqlalchemy.engine import make_url
-    name = f"{prefix}_{os.environ.get('PYTEST_XDIST_WORKER', 'main')}_{uuid.uuid4().hex[:6]}"
-    _admin_sql(f'CREATE DATABASE "{name}"')
-    return make_url(_DB).set(database=name).render_as_string(hide_password=False)
+def new_database(prefix: str = "testgen") -> str:
+    """A fresh database on the test server. -> its URL (drop_database() when done)."""
+    name = f"{prefix}_{os.environ.get('PYTEST_XDIST_WORKER', 'main')}_{uuid.uuid4().hex[:8]}"
+    _admin(f'CREATE DATABASE "{name}"')
+    return make_url(SERVER).set(database=name).render_as_string(hide_password=False)
 
 
-if _DB:
-    # A database of its own for every xdist worker, as each has its own data folder.
-    os.environ["TESTGEN_DATABASE_URL"] = _create_database("testgen")
-    os.environ["TESTGEN_SECRET_KEY"] = "the studio's own tests: a long enough key"
+def drop_database(url: str) -> None:
+    from testgen import db
+    if db._engine and db._engine[0] == url:
+        db._engine[1].dispose()
+    try:
+        _admin(f'DROP DATABASE IF EXISTS "{make_url(url).database}" WITH (FORCE)')
+    except Exception as err:
+        print(f"conftest: {make_url(url).database} not dropped: {err}", file=sys.stderr)
+
+
+os.environ["TESTGEN_DATABASE_URL"] = new_database()
+atexit.register(drop_database, os.environ["TESTGEN_DATABASE_URL"])
+os.environ["TESTGEN_SECRET_KEY"] = "the studio's own tests: a long enough key"
 _S3 = None
 if os.environ.get("TESTGEN_TEST_S3") == "moto":
     from moto.server import ThreadedMotoServer
@@ -74,29 +79,15 @@ import pytest  # noqa: E402
 
 from fakes import FakeClient  # noqa: E402
 from stand import PASSWORD, USERNAME, Stand  # noqa: E402
-from testgen import llm, projects, storage  # noqa: E402
+from testgen import llm, projects, storage, vault  # noqa: E402
+
+vault.LOCAL_KEY = _TMP / "secret.key"       # tests never make the key of local development of this computer
 
 
 def pytest_collection_modifyitems(items):
     for item in items:
         if {"stand", "_stand"} & set(getattr(item, "fixturenames", ())):
             item.add_marker(pytest.mark.browser)
-
-
-@pytest.fixture
-def fresh_database(monkeypatch):
-    """An empty database of its own for one test (on the TESTGEN_TEST_DB server), dropped after it."""
-    if not _DB:
-        pytest.skip("needs TESTGEN_TEST_DB (PostgreSQL)")
-    from sqlalchemy.engine import make_url
-    from testgen import db
-    url = _create_database("testgen_t")
-    monkeypatch.setenv("TESTGEN_DATABASE_URL", url)
-    yield url
-    if db._engine and db._engine[0] == url:
-        db._engine[1].dispose()
-        db._engine = None
-    _admin_sql(f'DROP DATABASE IF EXISTS "{make_url(url).database}" WITH (FORCE)')
 
 
 @pytest.fixture(scope="session")

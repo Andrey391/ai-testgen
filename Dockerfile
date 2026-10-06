@@ -1,14 +1,16 @@
 # AI Test Generator studio: everything it needs at run time is inside the image, so it works
 # without internet access (TESTGEN_OFFLINE=on): browsers, axe-core, the MCP servers of the presets.
+# The data lives in PostgreSQL (TESTGEN_DATABASE_URL, TESTGEN_SECRET_KEY): the container keeps only
+# a cache in /cache.
 #
 #   docker build -t ai-testgen .
-#   docker compose up          # the studio + a local model (vLLM), see docker-compose.yml
+#   docker compose up          # the studio + PostgreSQL + a local model (vLLM), see docker-compose.yml
 FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
 
 ARG AXE_VERSION=4.13.0
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     HOST=0.0.0.0 PORT=8765 \
-    TESTGEN_DATA_DIR=/data TESTGEN_SECRETS_DIR=/secrets \
+    TESTGEN_CACHE_DIR=/cache \
     TESTGEN_AXE_JS=/opt/testgen/axe.min.js
 
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm curl ca-certificates \
@@ -30,8 +32,7 @@ RUN mkdir -p /opt/testgen \
     && curl -fsSL "https://cdn.jsdelivr.net/npm/axe-core@${AXE_VERSION}/axe.min.js" -o /opt/testgen/axe.min.js
 
 COPY . .
-RUN mkdir -p /data /secrets
-VOLUME ["/data", "/secrets"]
+RUN mkdir -p /cache
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s CMD curl -fs http://127.0.0.1:8765/api/health || exit 1
 CMD ["python", "server.py"]

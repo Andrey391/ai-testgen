@@ -1,72 +1,17 @@
 """Project tasks (tasks.py keeps the logic, this - the storage).
 
-Files:  data/projects/<id>/tasks/<task>.json; a read-modify-write under fs.lock
-Sql:    the `tasks` table: status, priority, assignee, due date and linked tests as columns
+The `tasks` table: status, priority, assignee, due date and linked tests as columns, the task in `body`.
 """
 from __future__ import annotations
 
-import json
 from typing import Callable
 
 from sqlalchemy import func, select
 
-from .. import db, fs, projects
-from . import held, sql
+from .. import db
+from . import held
 
 Change = Callable[[dict | None], dict | None]
-
-
-class Files:
-    @staticmethod
-    def file(pid: str, tid: str):
-        return projects.path(pid) / "tasks" / f"{tid}.json"
-
-    @staticmethod
-    def get(tid: str) -> dict | None:
-        for p in fs.glob(projects.ROOT, f"*/tasks/{tid}.json"):
-            with fs.reading(p):
-                return fs.read_json(p)
-        return None
-
-    @classmethod
-    def write(cls, pid: str, tid: str, change: Change) -> dict | None:
-        f = cls.file(pid, tid)
-        with fs.lock(f):
-            try:
-                old = fs.read_json(f)
-            except ValueError:
-                old = None
-            new = change(old)
-            if new is not None:
-                fs.write_json(f, new)
-            return new
-
-    @staticmethod
-    def all(pid: str, status: list[str] | None = None, assignee: str = "") -> list[dict]:
-        out = []
-        for _, text, _ in fs.documents(projects.path(pid) / "tasks"):
-            try:
-                t = json.loads(text)
-            except ValueError:
-                continue
-            if (status is None or t.get("status") in status) and (not assignee or t.get("assignee") == assignee):
-                out.append(t)
-        return out
-
-    @classmethod
-    def counts(cls, pid: str) -> dict[str, int]:
-        c: dict[str, int] = {}
-        for t in cls.all(pid):
-            c[t["status"]] = c.get(t["status"], 0) + 1
-        return c
-
-    @classmethod
-    def with_test(cls, pid: str, test_id: str) -> list[str]:
-        return [t["id"] for t in cls.all(pid) if test_id in (t.get("test_ids") or [])]
-
-    @classmethod
-    def delete(cls, pid: str, tid: str) -> None:
-        fs.unlink(cls.file(pid, tid))
 
 
 class Sql:
@@ -136,6 +81,3 @@ class Sql:
         for r in c.execute(select(cls.t.c.project_id, cls.t.c.id, cls.t.c.body)):
             yield f"data/projects/{r.project_id}/tasks/{r.id}.json", r.body
 
-
-def backend():
-    return Sql if sql() else Files

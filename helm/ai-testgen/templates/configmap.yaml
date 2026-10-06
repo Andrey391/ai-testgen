@@ -7,8 +7,7 @@ metadata:
 data:
   HOST: "0.0.0.0"
   PORT: {{ .Values.web.port | quote }}
-  TESTGEN_DATA_DIR: /data
-  TESTGEN_SECRETS_DIR: /secrets
+  TESTGEN_CACHE_DIR: /cache
   FORWARDED_ALLOW_IPS: "*"               # behind the ingress: https in cookies and OIDC links
   TESTGEN_ADMINS: {{ .Values.admins | quote }}
   TESTGEN_WORKER_CONCURRENCY: {{ .Values.worker.concurrency | quote }}

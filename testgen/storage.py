@@ -52,7 +52,7 @@ def _stamp(old: dict | None, test: dict) -> dict:
 
 def save(test: dict) -> dict:
     test.setdefault("id", uuid.uuid4().hex[:10])
-    repo.backend().write(test["project_id"], test["id"], lambda old: _stamp(old, test))
+    repo.Sql.write(test["project_id"], test["id"], lambda old: _stamp(old, test))
     return test
 
 
@@ -117,12 +117,12 @@ def restore(test_id: str, n: int) -> dict | None:
 
 
 def load(test_id: str) -> dict | None:
-    return repo.backend().get(test_id)
+    return repo.Sql.get(test_id)
 
 
 def update(test_id: str, change) -> dict | None:
     """Re-read the test, apply `change(test)` and save - atomically w.r.t. other updates."""
-    pid = repo.backend().locate(test_id)
+    pid = repo.Sql.locate(test_id)
     if pid is None:
         return None
 
@@ -132,14 +132,14 @@ def update(test_id: str, change) -> dict | None:
         t = copy.deepcopy(old)          # `old` stays as it was: the version kept if the test changes
         change(t)
         return _stamp(old, t)
-    return repo.backend().write(pid, test_id, apply)
+    return repo.Sql.write(pid, test_id, apply)
 
 
 def delete(test_id: str) -> bool:
-    pid = repo.backend().locate(test_id)
+    pid = repo.Sql.locate(test_id)
     if pid is None:
         return False
-    repo.backend().delete(pid, test_id)
+    repo.Sql.delete(pid, test_id)
     vault.delete(projects.secrets_kind(pid), f"test-{test_id}")
     runs.delete_test(pid, test_id)
     traffic.delete(pid, test_id)
@@ -159,17 +159,17 @@ def normalize_tags(tags) -> list[str]:
 
 
 def all_tests(project_id: str) -> list[dict]:
-    return repo.backend().all(project_id)
+    return repo.Sql.all(project_id)
 
 
 def names(project_id: str) -> dict[str, str]:
     """{test id: name} of a project (without reading the steps from the database)."""
-    return repo.backend().names(project_id)
+    return repo.Sql.names(project_id)
 
 
 def counts() -> dict[str, int]:
     """{project id: number of tests}."""
-    return repo.backend().counts()
+    return repo.Sql.counts()
 
 
 STATUSES = ("draft", "review", "ready")     # a test from the agent goes to regression after a person's review
@@ -180,12 +180,12 @@ def select(project_id: str, tags: list[str] | None = None, test_ids: list[str] |
            include_drafts: bool = False) -> list[dict]:
     """Tests of a suite run: the given ids, else those with any of `tags`, else all. Modules never run on
     their own; drafts and tests under review join only when asked (or named by id)."""
-    return repo.backend().query(project_id, ids=list(test_ids) if test_ids else None, tags=tags or None,
+    return repo.Sql.query(project_id, ids=list(test_ids) if test_ids else None, tags=tags or None,
                                 ready=not include_drafts, modules=False)
 
 
 def list_tests(project_id: str, tag: str = "") -> list[dict]:
-    tests = repo.backend().query(project_id, tags=[tag]) if tag else all_tests(project_id)
+    tests = repo.Sql.query(project_id, tags=[tag]) if tag else all_tests(project_id)
     histories = runs.histories(project_id, [t["id"] for t in tests])
     out = []
     for t in tests:

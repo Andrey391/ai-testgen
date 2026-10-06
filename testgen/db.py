@@ -1,9 +1,9 @@
-"""The shared database (stage 5.5): PostgreSQL through SQLAlchemy, so that several instances of the
-studio and any number of workers use the same data.
+"""The studio's database: PostgreSQL through SQLAlchemy - the only place where its data lives, for one
+instance as for several instances of the studio and any number of workers.
 
-    TESTGEN_DATABASE_URL   postgresql+psycopg://testgen:***@db:5432/testgen
+    TESTGEN_DATABASE_URL   postgresql+psycopg://testgen:***@127.0.0.1:5432/testgen   (required)
 
-Without it the studio keeps everything in files, as before (fs.py).
+Without it the studio, workers and command-line tools do not start (NotConfigured).
 
 Tables (migrations in testgen/migrations, Alembic; `python -m testgen.db upgrade`, also run at
 start under a lock unless TESTGEN_DB_MIGRATE=off):
@@ -13,17 +13,17 @@ start under a lock unless TESTGEN_DB_MIGRATE=off):
     tasks      the team's tasks (tasks.py, repo/tasks.py)
     usage      language model spending: a row per request (llm.py, repo/usage.py)
     docs       everything else by path: JSON documents (projects, suites, jobs, users...), text
-               (skills, notes) and binary files when there is no S3; for files in S3 only their size
-               and time. `body` is JSON text: reports may use body::jsonb.
+               (skills, notes), secrets (encrypted, vault.py) and binary files when there is no S3;
+               for files in S3 only their size and time. `body` is JSON text: reports may use body::jsonb.
     audit_log  the audit log (audit.py), its hash chain in insertion order
     work       the queue of runs, suites, mutation checks and explorations (workqueue.py)
     workers    workers alive: heartbeat, running items
     owners     which instance of the studio holds a live Studio session or pipeline job
-
 Locks between processes are PostgreSQL advisory locks (fs.lock).
 
-Moving an existing installation: `python -m testgen.db import-files` copies data/ and secrets/
-into the database (and S3); `export-files` writes them back to folders (backups, leaving).
+Data of older versions kept in folders: `python -m testgen.db import-files <data> <secrets>` copies
+them into the database (and S3); `export-files <dir>` writes the database out as folders of the same
+layout (a copy to read; pg_dump is the backup to restore).
 """
 from __future__ import annotations
 
@@ -174,12 +174,18 @@ _engine: tuple[str, Engine] | None = None
 _init = threading.Lock()
 
 
+class NotConfigured(RuntimeError):
+    """No TESTGEN_DATABASE_URL, or not a PostgreSQL one."""
+
+
 def url() -> str:
-    return os.environ.get("TESTGEN_DATABASE_URL", "").strip()
-
-
-def enabled() -> bool:
-    return bool(url())
+    u = os.environ.get("TESTGEN_DATABASE_URL", "").strip()
+    if not u:
+        raise NotConfigured("Задайте TESTGEN_DATABASE_URL — адрес базы PostgreSQL, например "
+                            "postgresql+psycopg://testgen:пароль@127.0.0.1:5432/testgen: данные студии хранятся только в ней")
+    if not u.startswith("postgresql"):
+        raise NotConfigured("TESTGEN_DATABASE_URL: студия хранит данные только в PostgreSQL (адрес postgresql+psycopg://...)")
+    return u
 
 
 def engine() -> Engine:
@@ -191,12 +197,12 @@ def engine() -> Engine:
     with _init:
         if _engine and _engine[0] == u:
             return _engine[1]
-        if not u.startswith("postgresql"):
-            raise ValueError("TESTGEN_DATABASE_URL — адрес PostgreSQL (postgresql+psycopg://…)")
         e = create_engine(u, pool_pre_ping=True, pool_size=int(os.environ.get("TESTGEN_DB_POOL", "10")),
                           max_overflow=20)
         if os.environ.get("TESTGEN_DB_MIGRATE", "on").lower() not in ("off", "0", "false", "no"):
             upgrade(e)
+        if _engine:
+            _engine[1].dispose()        # another database (tests switch them): its pooled connections go
         _engine = (u, e)
         return e
 
@@ -234,6 +240,23 @@ def upgrade(e: Engine | None = None, revision: str = "head", down: bool = False)
             conn.commit()
 
 
+def check() -> None:
+    """At the start of the studio, a worker or a command-line tool: the database answers (and is
+    migrated), secrets can be encrypted. -> NotConfigured with what to fix."""
+    from sqlalchemy.exc import SQLAlchemyError
+    from . import vault
+    try:
+        with engine().connect() as c:
+            c.execute(text("SELECT 1"))
+    except SQLAlchemyError as e:
+        raise NotConfigured(f"PostgreSQL по адресу TESTGEN_DATABASE_URL не отвечает: {e.__class__.__name__}: "
+                            f"{str(e.orig if hasattr(e, 'orig') else e).strip()[:300]}")
+    try:
+        vault.check()
+    except vault.VaultError as e:
+        raise NotConfigured(str(e))
+
+
 def ping() -> bool:
     try:
         with engine().connect() as c:
@@ -244,11 +267,14 @@ def ping() -> bool:
 
 
 def _cli(argv: list[str]) -> None:
-    from . import fs
-    from .paths import DATA, SECRETS
+    from . import fs, vault
+    from .paths import DATA, SECRETS, utf8_console
+    utf8_console()
     cmd, *rest = argv or ["help"]
-    if not enabled():
-        sys.exit("Задайте TESTGEN_DATABASE_URL")
+    try:
+        url()
+    except NotConfigured as e:
+        sys.exit(str(e))
     if cmd == "upgrade":
         upgrade(revision=rest[0] if rest else "head")
         print("База данных обновлена до " + (f"версии {rest[0]}" if rest else "последней версии"))
@@ -256,22 +282,25 @@ def _cli(argv: list[str]) -> None:
         os.environ["TESTGEN_DB_MIGRATE"] = "off"
         upgrade(revision=rest[0], down=True)
         print(f"База данных возвращена к версии {rest[0]}")
-    elif cmd == "import-files":
-        from . import vault
-        key = os.environ.get(vault.KEY_ENV)
-        if not key:
-            sys.exit(f"Задайте {vault.KEY_ENV}: секреты в общей базе хранятся только зашифрованными")
-        data = Path(rest[0]) if rest else DATA
-        secrets = Path(rest[1]) if len(rest) > 1 else SECRETS
+    elif cmd == "import-files" and rest:
+        try:
+            key = vault.secret_key()
+        except vault.VaultError as e:
+            sys.exit(str(e))
+        data, secrets = Path(rest[0]), Path(rest[1]) if len(rest) > 1 else None
+        if not data.is_dir() or secrets is not None and not secrets.is_dir():
+            sys.exit("Нет такой папки: " + (str(data) if not data.is_dir() else str(secrets)))
         started = time.time()
-        n = fs.import_tree(data, DATA) + fs.import_tree(secrets, SECRETS)
-        sealed = vault.FileVault(SECRETS).reseal(key, key)      # plain secrets of the old folder: encrypted now
+        n = fs.import_tree(data, DATA) + (fs.import_tree(secrets, SECRETS) if secrets else 0)
+        sealed = vault.DbVault(SECRETS).reseal(key, key)      # plain secrets of the old folder: encrypted now
         print(f"Перенесено файлов: {n} (секретов зашифровано: {sealed}) за {time.time() - started:.0f} с")
     elif cmd == "export-files" and rest:
-        n = fs.export_tree(DATA, Path(rest[0]) / "data") + fs.export_tree(SECRETS, Path(rest[0]) / "secrets")
+        for d in ("data", "secrets"):
+            (Path(rest[0]) / d).mkdir(parents=True, exist_ok=True)     # import-files takes both back
+        n =fs.export_tree(DATA, Path(rest[0]) / "data") + fs.export_tree(SECRETS, Path(rest[0]) / "secrets")
         print(f"Выгружено файлов: {n} в {rest[0]}")
     else:
-        print(__doc__ + "\nCommands: upgrade [revision] | downgrade <revision> | import-files [data_dir [secrets_dir]]"
+        print(__doc__ + "\nCommands: upgrade [revision] | downgrade <revision> | import-files <data_dir> [secrets_dir]"
                         " | export-files <dir>")
 
 

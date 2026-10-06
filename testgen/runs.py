@@ -61,9 +61,8 @@ def public(run: dict) -> dict:
 
 def save(run: dict) -> None:
     run["saved"] = time.time()
-    repo.backend().save(public(run))
-    if fs.remote():
-        fs.push(files_dir(run))           # screenshots of the steps so far, the trace
+    repo.Sql.save(public(run))
+    fs.push(files_dir(run))           # screenshots of the steps so far, the trace
 
 def outcomes(run: dict) -> list[bool]:
     """Pass/fail of each attempt, in order."""
@@ -83,18 +82,18 @@ def finish(run: dict, keep: int = 30) -> None:
     from . import monitoring
     monitoring.RUNS.labels(run.get("status") or "", run.get("trigger") or "").inc()
     d = repo.test_dir(run["project_id"], run["test_id"])
-    for old in repo.backend().finished(run["project_id"], run["test_id"], summary(run), keep):
+    for old in repo.Sql.finished(run["project_id"], run["test_id"], summary(run), keep):
         fs.rmtree(d / old)
 
 
 def history(pid: str, tid: str, limit: int = FLAKY_WINDOW) -> list[dict]:
     """Summaries of finished runs, oldest first (the last `limit`; 0 = all)."""
-    return repo.backend().history(pid, tid, limit)
+    return repo.Sql.history(pid, tid, limit)
 
 
 def histories(pid: str, tids: list[str], limit: int = FLAKY_WINDOW) -> dict[str, list[dict]]:
     """history() of many tests of a project at once (one query with the database)."""
-    return repo.backend().histories(pid, tids, limit)
+    return repo.Sql.histories(pid, tids, limit)
 
 
 def flip_rate(index: list[dict]) -> float | None:
@@ -111,17 +110,15 @@ def get(rid: str) -> dict | None:
         return LIVE[rid]
     if not _RID.fullmatch(rid or ""):
         return None
-    run = repo.backend().get(rid)
+    run = repo.Sql.get(rid)
     if run and run["status"] == "running" and _abandoned(run):
         run.update(status="error", error="Студия была перезапущена во время прогона")
     return run
 
 
 def _abandoned(run: dict) -> bool:
-    """A running run found only in the store: in the file mode nobody runs it any more (it would be in
-    LIVE); with a shared database a worker may still be on it - it saves the run as it goes."""
-    if not fs.remote():
-        return True
+    """A running run found only in the store (not in LIVE): a worker may still be on it - it saves the
+    run as it goes."""
     from . import workqueue
     return not workqueue.active(run["id"]) and time.time() - (run.get("saved") or run["started"]) > STALE
 
@@ -139,4 +136,4 @@ def file(run: dict, name: str) -> Path | None:
 
 
 def delete_test(pid: str, tid: str) -> None:
-    repo.backend().delete_test(pid, tid)
+    repo.Sql.delete_test(pid, tid)

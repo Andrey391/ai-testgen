@@ -1,16 +1,11 @@
-"""Repositories: where runs, tests, tasks and model spending are kept.
+"""Repositories: tables of their own for runs, tests, tasks and model spending (db.py) - columns for
+filters and reports, the document itself in jsonb. Each module has a class `Sql` with the methods
+the logic (runs.py, storage.py, tasks.py, llm.py) calls.
 
-Each entity has two implementations with the same methods:
-    Files   JSON files under data/projects/<id>/ (fs.py) - a single installation, no database
-    Sql     tables of the shared database (db.py): columns for filters and reports, the document
-            itself in jsonb - with TESTGEN_DATABASE_URL
+Everything else (projects, skills, suites, jobs, users...) is documents by path (fs.py); the files of
+a run (screenshots, trace) and the versions of a test are files by path too.
 
-`backend()` of each module picks one per call (the database may be switched on in a test).
-Everything else (projects, skills, suites, jobs, users...) stays in documents by path (fs.py).
-
-The files of a run (screenshots, trace) and the versions of a test are files by path in both modes.
-
-Moving an installation: `import_doc()` takes a file of the old layout into its table and
+Data of older versions kept in folders: `import_doc()` takes a file of that layout into its table and
 `export_docs()` gives the tables back as files of that layout (db.py import-files / export-files,
 migration 0003 and its downgrade).
 """
@@ -25,14 +20,10 @@ from sqlalchemy import select
 from .. import db
 
 
-def sql() -> bool:
-    return db.enabled()
-
-
 @contextlib.contextmanager
 def held(table, where: list):
-    """A transaction with the row of `where` (None if there is none) held for a read-modify-write:
-    SELECT ... FOR UPDATE -> (connection, row). Write the row through this connection: another one
+    """A transaction with the row of `where` (None if there is none) held for a read-modify-write
+    (SELECT ... FOR UPDATE). -> (connection, row). Write the row through this connection: another one
     would wait for it."""
     with db.engine().begin() as c:
         yield c, c.execute(select(table).where(*where).with_for_update()).first()
@@ -40,8 +31,6 @@ def held(table, where: list):
 
 def drop_project(pid: str) -> None:
     """Rows of a deleted project (its files are removed by path)."""
-    if not sql():
-        return
     with db.engine().begin() as c:
         for t in (db.runs, db.tests, db.tasks, db.usage):
             c.execute(t.delete().where(t.c.project_id == pid))

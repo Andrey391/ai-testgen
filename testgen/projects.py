@@ -20,7 +20,6 @@ and model spending: they are rows of their own tables (repo/).
 from __future__ import annotations
 
 import copy
-import json
 import re
 import time
 import uuid
@@ -366,30 +365,30 @@ def clear_llm_key(pid: str) -> None:
 # ---------- first start ----------
 
 def ensure_default() -> None:
-    """Move tests from the old layout (data/<project name>/<id>.json) into projects.
-    With no projects at all the studio opens the new project wizard."""
+    """Move tests from the old layout (data/<project name>/<id>.json, brought by `db import-files`)
+    into projects. With no projects at all the studio opens the new project wizard."""
+    from . import storage
     by_name = {p["name"].lower(): p["id"] for p in list_projects()}
-    if DATA.exists():
-        for old in DATA.iterdir():
-            if not old.is_dir() or old.name == "projects":
-                continue
-            for f in old.glob("*.json"):
-                t = json.loads(f.read_text("utf-8"))
-                name = str(t.get("project") or old.name)
-                if name.lower() not in by_name:
-                    by_name[name.lower()] = create(name)["id"]
-                pid = by_name[name.lower()]
-                t["project_id"] = pid
-                t.setdefault("id", f.stem)
-                from . import storage
-                storage.save(t)
-                # Old per-test login moves with the test.
-                creds = vault.load("sites", t.get("id", ""))
-                if creds:
-                    vault.save(secrets_kind(pid), f"test-{t['id']}", creds)
-                    vault.delete("sites", t["id"])
-                f.unlink()
+    for old in fs.iterdir(DATA):
+        if old.name in ("projects", "audit", "cache") or not fs.is_dir(old):
+            continue
+        for f in fs.glob(old, "*.json"):
             try:
-                old.rmdir()
-            except OSError:
-                pass
+                t = fs.read_json(f)
+            except ValueError:
+                continue
+            if not isinstance(t, dict) or t.get("steps") is None:
+                continue
+            name = str(t.get("project") or old.name)
+            if name.lower() not in by_name:
+                by_name[name.lower()] = create(name)["id"]
+            pid = by_name[name.lower()]
+            t["project_id"] = pid
+            t.setdefault("id", f.stem)
+            storage.save(t)
+            # Old per-test login moves with the test.
+            creds = vault.load("sites", t.get("id", ""))
+            if creds:
+                vault.save(secrets_kind(pid), f"test-{t['id']}", creds)
+                vault.delete("sites", t["id"])
+            fs.unlink(f)

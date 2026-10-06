@@ -66,7 +66,7 @@ def _clean(patch: dict, pid: str) -> dict:
 
 def _write(t: dict) -> dict:
     t["updated"] = time.time()
-    repo.backend().write(t["project_id"], _check_id(t["id"]), lambda old: t)
+    repo.Sql.write(t["project_id"], _check_id(t["id"]), lambda old: t)
     return t
 
 
@@ -82,7 +82,7 @@ def _change(tid: str, change) -> dict | None:
         new = old | change(old)
         new["updated"] = time.time()
         return new
-    return repo.backend().write(t["project_id"], tid, apply)
+    return repo.Sql.write(t["project_id"], tid, apply)
 
 
 def create(pid: str, data: dict, user: str = "") -> dict:
@@ -98,7 +98,7 @@ def create(pid: str, data: dict, user: str = "") -> dict:
 def load(tid: str) -> dict | None:
     if not re.fullmatch(r"[a-f0-9]{10}", tid or ""):
         return None
-    return repo.backend().get(tid)
+    return repo.Sql.get(tid)
 
 
 def update(tid: str, patch: dict) -> dict | None:
@@ -120,12 +120,12 @@ def delete(tid: str) -> bool:
     t = load(tid)
     if not t:
         return False
-    repo.backend().delete(t["project_id"], tid)
+    repo.Sql.delete(t["project_id"], tid)
     return True
 
 
 def all_tasks(pid: str) -> list[dict]:
-    return repo.backend().all(pid)
+    return repo.Sql.all(pid)
 
 
 def _order(t: dict) -> tuple:
@@ -141,14 +141,14 @@ def list_tasks(pid: str, status: str = "", assignee: str = "") -> list[dict]:
     today = datetime.date.today().isoformat()
     only = sorted(OPEN) if status == "open" else [status] if status in STATUSES else None
     out = []
-    for t in sorted(repo.backend().all(pid, only, assignee), key=_order):
+    for t in sorted(repo.Sql.all(pid, only, assignee), key=_order):
         tests = [{"id": x, "name": names[x]} for x in t.get("test_ids") or [] if x in names]
         out.append(t | {"tests": tests, "overdue": bool(t.get("due")) and t["status"] != "done" and t["due"] < today})
     return out
 
 
 def counts(pid: str) -> dict:
-    c = dict.fromkeys(STATUSES, 0) | repo.backend().counts(pid)
+    c = dict.fromkeys(STATUSES, 0) | repo.Sql.counts(pid)
     c["open"] = sum(c[s] for s in OPEN)
     return c
 
@@ -163,5 +163,5 @@ def link_test(tid: str, test_id: str) -> dict | None:
 
 
 def unlink_test(pid: str, test_id: str) -> None:
-    for tid in repo.backend().with_test(pid, test_id):
+    for tid in repo.Sql.with_test(pid, test_id):
         _change(tid, lambda t: {"test_ids": [x for x in t.get("test_ids") or [] if x != test_id]})

@@ -2,16 +2,18 @@
 #
 # Put this file into .github/workflows/ of the application's repository. It expects:
 #   - the studio code available to the job (here: checked out from its repository);
-#   - the tests: the studio's data folder (data/projects/<id>/...) committed next to the
-#     application, e.g. under qa/testgen-data, and pointed to by TESTGEN_DATA_DIR;
-#   - repository secrets: TESTGEN_USERNAME / TESTGEN_PASSWORD (login of the application under
-#     test) and, for self-healing and failure analysis, ANTHROPIC_API_KEY (optional: without it
-#     a broken locator just fails the step). The model itself comes from the project settings
-#     in the data folder (Project -> Model in the studio).
+#   - the studio's database reachable from the runner (a self-hosted runner in the same network,
+#     or a tunnel): tests, settings and the model of the project come from there, the runs are
+#     recorded there and seen in the studio;
+#   - repository secrets: TESTGEN_DATABASE_URL and TESTGEN_SECRET_KEY (the same as the studio's;
+#     a PostgreSQL role for CI is enough), TESTGEN_USERNAME / TESTGEN_PASSWORD (login of the
+#     application under test, unless the project keeps one) and, for self-healing and failure
+#     analysis, ANTHROPIC_API_KEY (optional: the project's own key is used first; without any a
+#     broken locator just fails the step).
 #
-# Result: a JUnit report (shown by the "Test report" step and kept as an artifact) and the
-# run history / traces in the uploaded data folder. The job fails when a test outside
-# quarantine fails; flaky tests (passed on re-run) do not fail it.
+# Result: a JUnit report (shown by the "Test report" step and kept as an artifact); the run
+# history and traces are in the studio. The job fails when a test outside quarantine fails;
+# flaky tests (passed on re-run) do not fail it.
 name: ui-regression
 
 on:
@@ -30,7 +32,8 @@ jobs:
       matrix:
         browser: [chromium]            # add firefox, webkit for a cross-browser regression
     env:
-      TESTGEN_DATA_DIR: ${{ github.workspace }}/qa/testgen-data
+      TESTGEN_DATABASE_URL: ${{ secrets.TESTGEN_DATABASE_URL }}
+      TESTGEN_SECRET_KEY: ${{ secrets.TESTGEN_SECRET_KEY }}
       TESTGEN_USERNAME: ${{ secrets.TESTGEN_USERNAME }}
       TESTGEN_PASSWORD: ${{ secrets.TESTGEN_PASSWORD }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -60,11 +63,9 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         with:
           report_paths: reports/junit-*.xml
-      - name: Keep reports, run history and traces
+      - name: Keep reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: testgen-results-${{ matrix.browser }}
-          path: |
-            reports/
-            qa/testgen-data/projects/*/runs/
+          path: reports/

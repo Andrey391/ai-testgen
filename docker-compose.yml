@@ -2,9 +2,12 @@
 #
 #   1. Put the model weights into ./models (on a machine with internet):
 #        huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct --local-dir ./models/Qwen2.5-VL-7B-Instruct
-#   2. docker compose up -d
-#   3. The first start prints the password of the studio user "admin": docker compose logs studio
-#   4. In "Проект → Модель" set the API address http://vllm:8000 and the model Qwen2.5-VL-7B-Instruct:
+#   2. .env next to this file (keep a copy of TESTGEN_SECRET_KEY: without it secrets cannot be read):
+#        TESTGEN_SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(32))">
+#        POSTGRES_PASSWORD=...
+#   3. docker compose up -d       (the data lives in PostgreSQL, volume pgdata)
+#   4. The first start prints the password of the studio user "admin": docker compose logs studio
+#   5. In "Проект → Модель" set the API address http://vllm:8000 and the model Qwen2.5-VL-7B-Instruct:
 #      the studio speaks the Anthropic Messages API, which vLLM serves on /v1/messages (or put an
 #      Anthropic-compatible proxy such as LiteLLM in front of the model).
 #
@@ -20,11 +23,27 @@ services:
     environment:
       TESTGEN_OFFLINE: "on"                       # no CDN, no npx downloads, models only at a project's own address
       TESTGEN_SIGNUP: "off"
-    volumes:
-      - ./deploy/data:/data
-      - ./deploy/secrets:/secrets
+      TESTGEN_DATABASE_URL: "postgresql+psycopg://testgen:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/testgen"
+      TESTGEN_SECRET_KEY: "${TESTGEN_SECRET_KEY:?set TESTGEN_SECRET_KEY in .env}"
+    shm_size: 1gb                                 # Chromium
     depends_on:
-      - vllm
+      postgres: {condition: service_healthy}
+      vllm: {condition: service_started}
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: testgen
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: testgen
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testgen"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   vllm:
@@ -49,3 +68,6 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+
+volumes:
+  pgdata:

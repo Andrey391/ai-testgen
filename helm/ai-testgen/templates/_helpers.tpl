@@ -31,9 +31,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* Local folders are only a cache of the database and S3; /dev/shm for Chromium. */}}
 {{- define "testgen.volumes" -}}
-- name: data
-  emptyDir: {}
-- name: secrets
+- name: cache
   emptyDir: {}
 - name: dshm
   emptyDir:
@@ -42,10 +40,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "testgen.mounts" -}}
-- name: data
-  mountPath: /data
-- name: secrets
-  mountPath: /secrets
+- name: cache
+  mountPath: /cache
 - name: dshm
   mountPath: /dev/shm
 {{- end -}}

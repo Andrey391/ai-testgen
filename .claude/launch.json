@@ -10,7 +10,8 @@
         "server.py"
       ],
       "env": {
-        "TESTGEN_AUTH": "off"
+        "TESTGEN_AUTH": "off",
+        "TESTGEN_DATABASE_URL": "postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen"
       },
       "port": 8766,
       "autoPort": true

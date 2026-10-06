@@ -235,8 +235,6 @@ def get(sid: str) -> dict | None:
 
 
 def _abandoned(s: dict) -> bool:
-    if not fs.remote():
-        return True
     from . import workqueue
     return not workqueue.active(s["id"]) and not any(workqueue.active(i["run_id"]) for i in s["items"]
                                                      if i.get("run_id") and i["status"] in ("queued", "running"))
