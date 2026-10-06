@@ -77,8 +77,11 @@ def usd_rub() -> float:
 # ---------- the model connection (tests replace make_client) ----------
 
 def make_client(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
-    """Empty values fall back to the SDK's environment (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL)."""
-    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None)
+    """Empty values fall back to the SDK's environment (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL).
+    A gateway of the project's own (base_url) gets the key both as x-api-key and as
+    "Authorization: Bearer": many gateways with the Messages API accept only the latter."""
+    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None,
+                                    auth_token=(api_key or None) if base_url else None)
 
 
 _clients: dict[tuple[str, str], anthropic.AsyncAnthropic] = {}
@@ -163,17 +166,20 @@ def model(project_id: str, stage: dict | None = None) -> Model:
 
 
 async def check(conf: dict) -> list[dict]:
-    """The models the connection offers (model_info dicts). A gateway without the
-    Models API is checked with a one-word request to the chosen model instead."""
+    """The models the connection offers (model_info dicts). With a model chosen it also
+    gets a one-word request: gateways often list models without checking the key, so
+    only a request to the model shows the key and the model really work."""
     c = client_for(conf.get("api_key", ""), conf.get("base_url", ""))
     try:
-        return [model_info(m) async for m in c.models.list(limit=100)]
-    except anthropic.NotFoundError:
+        models = [model_info(m) async for m in c.models.list(limit=100)]
+    except anthropic.NotFoundError:      # a gateway without the Models API
         if not conf.get("model"):
             raise
-    await c.messages.create(model=conf["model"], max_tokens=16,
-                            messages=[{"role": "user", "content": "ping"}])
-    return [{"id": conf["model"], "name": conf["model"], "efforts": None, "missing": []}]
+        models = [{"id": conf["model"], "name": conf["model"], "efforts": None, "missing": []}]
+    if conf.get("model"):
+        await c.messages.create(model=conf["model"], max_tokens=16,
+                                messages=[{"role": "user", "content": "ping"}])
+    return models
 
 
 # ---------- usage ----------

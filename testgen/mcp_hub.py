@@ -131,6 +131,25 @@ PRESETS: dict[str, dict] = {
                 "Команда запуска — переменная TESTGEN_PLAYWRIGHT_MCP или поле «Команда» "
                 "(администратор). По умолчанию берёт Chromium, установленный командой playwright install.",
         "command_env": "TESTGEN_PLAYWRIGHT_MCP",
+        # Shown to the administrator next to the launch settings.
+        "setup": [
+            "Сервер запускает студия на своей машине — пользователям ничего ставить не нужно.",
+            "Установите его там, где работает студия (нужен Node.js): <code>npm install -g @playwright/mcp</code>.",
+            "Укажите команду для всех проектов сразу — переменная <code>TESTGEN_PLAYWRIGHT_MCP</code> в окружении "
+            "студии (после неё перезапустите студию, поле «Команда» оставьте пустым), — или только для этого "
+            "подключения в поле «Команда».",
+            "На Windows пишите полный путь к <code>.cmd</code>: папка из <code>npm config get prefix</code> + "
+            "<code>\\playwright-mcp.cmd</code>. Короткое имя (<code>npx</code>, <code>playwright-mcp</code>) "
+            "не запустится: «The system cannot find the file specified».",
+            "Аргументы не нужны: студия сама добавляет режим без окна, размер окна, Chromium из "
+            "<code>playwright install</code> и, как встроенный движок, запуск без песочницы Chromium. "
+            "Свой браузер — аргументы <code>--browser</code> или <code>--executable-path</code>, "
+            "песочница — <code>--sandbox</code>.",
+            "Проверка подключения запускает только сервер; браузер открывается при генерации теста. Если там "
+            "«Target crashed» — браузер не запустился: проверьте, что <code>python -m playwright install "
+            "chromium</code> выполнен на машине студии и в аргументах нет <code>--sandbox</code>.",
+            "Нажмите «Сохранить и проверить»: в списке инструментов должен появиться <code>browser_navigate</code>.",
+        ],
         "fields": [],
         "env": lambda f: {},
     },
@@ -241,7 +260,8 @@ def presets_public(with_commands: bool = False) -> list[dict]:
         cmd, args = (preset_command(k) if with_commands else None) or ("", [])
         out.append({"id": k, "title": p["title"], "kind": p["kind"], "hint": p["hint"],
                     "admin_only": p.get("admin_only", False), "rest": p.get("rest", False),
-                    "fields": p["fields"], "command": cmd, "args": args, "command_env": p.get("command_env", "")})
+                    "fields": p["fields"], "command": cmd, "args": args, "command_env": p.get("command_env", ""),
+                    "setup": p.get("setup", []) if with_commands else []})
     return out
 
 

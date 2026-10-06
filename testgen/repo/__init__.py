@@ -7,7 +7,7 @@ a run (screenshots, trace) and the versions of a test are files by path too.
 
 Data of older versions kept in folders: `import_doc()` takes a file of that layout into its table and
 `export_docs()` gives the tables back as files of that layout (db.py import-files / export-files,
-migration 0002 and its downgrade).
+migration 0003 and its downgrade).
 """
 from __future__ import annotations
 

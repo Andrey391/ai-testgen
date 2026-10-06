@@ -1,4 +1,4 @@
-"""Tables of their own for runs, tests, tasks and model spending (repo/, migration 0002): the move of
+"""Tables of their own for runs, tests, tasks and model spending (repo/, migration 0003): the move of
 the documents into them and back, filters in SQL, read-modify-write without lost updates, rotation of
 the run history, import and export of an installation.
 
@@ -55,7 +55,7 @@ def _counts(**tokens) -> types.SimpleNamespace:
 
 def test_migration_moves_documents_into_tables_and_back(database, monkeypatch):
     monkeypatch.setenv("TESTGEN_DB_MIGRATE", "off")
-    db.upgrade(db.engine(), "0001")
+    db.upgrade(db.engine(), "0002")
     pid = _pid()
     p = projects.path(pid)
     fs.write_json(p / "project.json", {"id": pid, "name": "Старая схема"})
@@ -84,7 +84,7 @@ def test_migration_moves_documents_into_tables_and_back(database, monkeypatch):
     assert _paths(f"data/projects/{pid}/") == {f"data/projects/{pid}/project.json",
                                                f"data/projects/{pid}/runs/t1/0123456789/step-1.jpg"}
 
-    db.upgrade(db.engine(), "0001", down=True)
+    db.upgrade(db.engine(), "0002", down=True)
     assert fs.read_json(p / "tests" / "t1.json")["name"] == "Вход"
     assert fs.read_json(p / "runs" / "t1" / "index.json") == [runs.summary(run)]
     assert fs.read_json(p / "usage" / "2026-09.json") == ledger

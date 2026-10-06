@@ -1,7 +1,7 @@
-"""PostgreSQL only: the `locks` table of SQLite goes (locks are PostgreSQL advisory locks).
+"""Without the `locks` table: it held locks between processes on SQLite; PostgreSQL uses advisory locks.
 
-Revision ID: 0003
-Revises: 0002
+Revision ID: 0002
+Revises: 0001
 Create Date: 2026-10-06
 """
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0003"
-down_revision = "0002"
+revision = "0002"
+down_revision = "0001"
 branch_labels = None
 depends_on = None
 

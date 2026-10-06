@@ -185,6 +185,16 @@ def test_model_connection_is_a_project_setting(client, open_studio, project, fak
     assert r["models"] == [{"id": "test-model", "name": "Test", "efforts": ["low", "medium"], "missing": []}]
     llm_view = client.get(f"/api/projects/{pid}").json()["llm"]
     assert llm_view["check"]["ok"] and llm_view["models"][0]["id"] == "test-model"
+    assert fake_llm.calls[-1][1]["model"] == "test-model"     # the key is checked by a request to the model
+
+    # A gateway may list models without the key: the check fails when the model does not answer.
+    def no_key(kind, kw):
+        raise TypeError("Could not resolve authentication method")
+    script, fake_llm.script = fake_llm.script, no_key
+    r = client.post(f"/api/projects/{pid}/llm/test")
+    assert r.status_code == 400 and "API-ключ" in r.json()["detail"]
+    assert not client.get(f"/api/projects/{pid}").json()["llm"]["check"]["ok"]
+    fake_llm.script = script
 
     # Without a model nothing that needs one starts.
     client.put(f"/api/projects/{pid}/llm", json={"model": ""})

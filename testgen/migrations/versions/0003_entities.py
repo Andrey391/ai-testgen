@@ -5,8 +5,8 @@ tests/<t>.json, tasks/<t>.json, usage/<YYYY-MM>.json - rows of `docs` by path. A
 `runs`, `tests`, `tasks`, `usage` with columns for filters and reports (repo/). The downgrade
 writes them back as documents.
 
-Revision ID: 0002
-Revises: 0001
+Revision ID: 0003
+Revises: 0002
 Create Date: 2026-10-06
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
-revision = "0002"
-down_revision = "0001"
+revision = "0003"
+down_revision = "0002"
 branch_labels = None
 depends_on = None
 

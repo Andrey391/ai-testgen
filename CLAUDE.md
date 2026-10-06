@@ -106,6 +106,8 @@ PostgreSQL: `tests/conftest.py` создаёт базу на каждый пот
 ```powershell
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements-dev.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -m "not browser"   # быстрая часть; тесты со стендом помечаются browser автоматически
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q tests/test_units.py -k имя_теста   # один тест
 $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
 ```
 
@@ -222,7 +224,8 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 - `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`TESTGEN_PLAYWRIGHT_MCP`).
   Агент и шаги не меняются; снимок — ARIA-снапшот MCP. Локаторы шага: код, сгенерированный MCP
   (`--codegen python`), плюс `ELEMENT_INFO_JS` через `browser_evaluate` (те же поля, что у встроенного
-  снимка). По умолчанию берёт Chromium из `playwright install` (`--executable-path`). Picker/Record
+  снимка). Берёт Chromium из `playwright install` (`--executable-path`) при любой команде stdio, если в
+  аргументах нет своего браузера, и `--no-sandbox`, как встроенный движок (без `--sandbox` в аргументах). Инструкция подключения — `setup` пресета (видит администратор). Picker/Record
   только во встроенном движке. Сохранённые тесты всегда прогоняются встроенным раннером.
 - `testgen/mcp_hub.py` — MCP-подключения проекта: пресеты `PRESETS` (atlassian, zephyr, playwright,
   custom) с полями и маппингом в env, секреты в `secrets/projects/<id>/conn-<cid>.json`.

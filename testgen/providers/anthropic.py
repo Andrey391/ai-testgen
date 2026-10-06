@@ -32,12 +32,25 @@ def _dump(block) -> dict:
 
 
 NO_KEY = "API ИИ: неверный или не заданный API-ключ (укажите его в «Проект → Модель»)."
+NO_CREDITS = ("API ИИ: на балансе аккаунта, к которому относится API-ключ проекта, закончились кредиты. "
+              "Пополните баланс в консоли Anthropic (Plans & Billing) или укажите ключ другого аккаунта "
+              "в «Проект → Модель».")
+
+
+def _no_credits(e: Exception) -> bool:
+    """The API answers 400 invalid_request_error "credit balance is too low" (or a billing_error)."""
+    body = getattr(e, "body", None)
+    err = body.get("error", body) if isinstance(body, dict) else {}
+    kind = err.get("type", "") if isinstance(err, dict) else ""
+    return kind == "billing_error" or "credit balance" in str(getattr(e, "message", "") or e).lower()
 
 
 def error_text(e: Exception) -> str:
     if isinstance(e, anthropic.AuthenticationError) or (isinstance(e, TypeError) and "authentication" in str(e)):
         # The SDK raises the TypeError before sending anything when no credentials are set.
         return NO_KEY
+    if isinstance(e, anthropic.APIStatusError) and _no_credits(e):
+        return NO_CREDITS
     if isinstance(e, anthropic.RateLimitError):
         return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
