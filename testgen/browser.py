@@ -29,7 +29,7 @@ from pathlib import Path
 from playwright.async_api import Browser, BrowserContext, Frame, Page, Playwright, async_playwright
 from playwright.async_api import Error as PlaywrightError
 
-from .testdata import CREDENTIALS, PLACEHOLDER, DataValues, totp
+from .testdata import CREDENTIALS, PLACEHOLDER, DataValues, auth_params, secret_values, totp
 
 VIEWPORT = {"width": 1280, "height": 800}
 MAX_EVENTS = 300
@@ -320,7 +320,7 @@ def group_candidates(e: dict) -> list[dict]:
 
 def expand(credentials: dict, value: str, data: DataValues | None = None, variables: dict | None = None,
            params: dict | None = None) -> str:
-    """Replace {{username}} / {{password}} / {{totp}} with real values, test data placeholders
+    """Replace {{username}} / {{password}} / {{totp}} / {{auth.x}} with real values, test data placeholders
     ({{unique}}, {{faker.email}}...) with generated ones, {{vars.x}} and {{params.x}} with the
     run's values - only when a step executes."""
     def sub(m: re.Match) -> str:
@@ -333,6 +333,12 @@ def expand(credentials: dict, value: str, data: DataValues | None = None, variab
             if not credentials.get(key):
                 raise ValueError(f"No {key} set for this application: add login credentials")
             return credentials[key]
+        if key.startswith("auth."):
+            name, values = key[5:], auth_params(credentials)
+            if name not in values:
+                raise ValueError(f"Login parameter «{name}» is not set for this account: add it to the "
+                                 "project's login settings")
+            return values[name]
         if key.startswith("vars."):
             name = key[5:]
             if variables is None or name not in variables:
@@ -501,7 +507,7 @@ class BrowserSession:
     # ---------- what the page reports ----------
 
     def secrets(self) -> list[str]:
-        return [v for k, v in self.credentials.items() if k in ("password", "totp_secret") and v]
+        return secret_values(self.credentials)
 
     def mask(self, text: str) -> str:
         for s in self.secrets():
@@ -758,9 +764,10 @@ class BrowserSession:
                 if hidden > 0 else "")
         tabs = [p for p in self.context.pages if not p.is_closed()]
         tabs_note = f"Tabs: {len(tabs)} open, this is tab {tabs.index(self.page) + 1}\n" if len(tabs) > 1 else ""
-        return (f"URL: {snap['url']}\nTitle: {snap['title']}\n{tabs_note}\n"
-                f"Elements (interactive ones first, then content for assertions):\n{lines or '(none)'}{more}\n\n"
-                f"Visible page text (truncated):\n{snap['text'][:2500]}")
+        # A secret login parameter typed into a visible field must not reach the model.
+        return self.mask(f"URL: {snap['url']}\nTitle: {snap['title']}\n{tabs_note}\n"
+                         f"Elements (interactive ones first, then content for assertions):\n{lines or '(none)'}"
+                         f"{more}\n\nVisible page text (truncated):\n{snap['text'][:2500]}")
 
     def find_text(self, text: str, limit: int = 20) -> list[dict]:
         """Elements of the latest snapshot whose name, label, placeholder, value or test id contain `text`."""

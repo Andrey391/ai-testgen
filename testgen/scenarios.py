@@ -86,18 +86,31 @@ async def _parse(cfg: dict, system: str, context: str, task: str, fmt: type[Base
 
 
 async def generate(requirements: str, url: str = "", project: dict | None = None,
-                   log=None) -> ScenarioSet:
+                   log=None, progress=None) -> ScenarioSet:
     """`project` (optional) supplies the "scenarios" stage settings: skills, scenario
-    types to cover, model and effort. `log(text)` (optional) reports progress."""
+    types to cover, model and effort. `log(text)` (optional) reports progress;
+    `progress(event)` (optional) gets the intermediate results for a live view:
+    {"type": "log", "text"}, {"type": "plan", "feature", "assumptions", "scenarios"} (the planned
+    titles), {"type": "batch", "start", "scenarios"} (detailed scenarios from position `start`)."""
+    def say(text: str) -> None:
+        if log:
+            log(text)
+        if progress:
+            progress({"type": "log", "text": text})
+
     cfg = project["pipeline"]["scenarios"] if project else {}
     system = SYSTEM + projects.language_rule(project) + (skills.prompt(project["id"], cfg.get("skills", []))
                                                          if project else "")
     context = _context(requirements, url, cfg)
 
     pid = project["id"] if project else ""
+    if progress:
+        say(f"Анализ требований ({len(requirements)} символов) и план покрытия…")
     plan: ScenarioPlan = await _parse(cfg, system, context, PLAN_TASK, ScenarioPlan, pid)
-    if log:
-        log(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
+    if progress:
+        progress({"type": "plan", "feature": plan.feature, "assumptions": plan.assumptions,
+                  "scenarios": [s.model_dump() for s in plan.scenarios]})
+    say(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
     if not plan.scenarios:
         return ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[])
 
@@ -111,15 +124,20 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
                 f"Write out in full only scenarios {start + 1}–{start + len(part)} of this plan, "
                 "in the same order, keeping their titles, types and priorities.")
         async with gate:
+            if progress:
+                say(f"Детализация сценариев {start + 1}–{start + len(part)}: {part[0].title}…")
             batch: ScenarioBatch = await _parse(cfg, system, context, task, ScenarioBatch, pid)
         # The plan is authoritative for what the scenario is; the batch adds the details.
         out = [full.model_copy(update={"title": planned.title, "type": planned.type,
                                        "priority": planned.priority})
                for planned, full in zip(part, batch.scenarios)]
+        if progress and out:
+            progress({"type": "batch", "start": start, "scenarios": [s.model_dump() for s in out]})
+            say(f"Готовы сценарии {start + 1}–{start + len(out)}" + "".join(f"\n  ✓ {s.title}" for s in out))
         if len(out) < len(part) and retry:
             out += await detail(start + len(out), len(part) - len(out), retry=False)
-        elif len(out) < len(part) and log:
-            log(f"Не удалось детализировать сценариев: {len(part) - len(out)}")
+        elif len(out) < len(part):
+            say(f"Не удалось детализировать сценариев: {len(part) - len(out)}")
         return out
 
     batches = await asyncio.gather(*(detail(i, BATCH) for i in range(0, len(plan.scenarios), BATCH)))

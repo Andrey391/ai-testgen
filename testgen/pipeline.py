@@ -24,8 +24,9 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import (audit, explorer, fs, llm, mcp_hub, mutations, notify, projects, publisher, runner, runs, scenarios,
-               sources, storage, vault)
+from . import (analyses, audit, explorer, fs, llm, mcp_hub, mutations, notify, projects, publisher, runner, runs,
+               scenarios, sources, storage, vault)
+from . import agent
 from .agent import StudioSession, has_assertion
 
 JOBS: dict[str, "Job"] = {}
@@ -279,7 +280,8 @@ def _err(e: Exception) -> str:
 
 class Job:
     def __init__(self, project: dict, links: list[str], text: str, url: str, sessions: dict,
-                 user: str = "", explore: bool = False, cases: dict | None = None):
+                 user: str = "", explore: bool = False, cases: dict | None = None,
+                 scenarios: list[dict] | None = None, feature: str = ""):
         self.id = uuid.uuid4().hex[:10]
         self.project_id = project["id"]
         self.links = [l.strip() for l in links if l.strip()]
@@ -287,6 +289,8 @@ class Job:
         self.explore = explore
         # Manual test cases to automate: {"connection": id, "ids": [...]} (no ids = every case, Test IT)
         self.cases = cases or None
+        # Scenarios prepared (and edited) in the Requirements tab: no requirements or test design stage.
+        self.given = [dict(s) for s in scenarios or []]
         self.sessions = sessions
         self.status = "running"     # running | awaiting_selection | done | error | cancelled
         self.stage = "requirements"
@@ -294,7 +298,7 @@ class Job:
         self.finished = None
         self.log: list[dict] = []
         self.requirements: list[dict] = []
-        self.feature, self.assumptions = "", []
+        self.feature, self.assumptions = feature.strip(), []
         self.scenarios: list[dict] = []
         self.items: list[dict] = []
         self.error = ""
@@ -322,8 +326,25 @@ class Job:
 
     def state(self) -> dict:
         return {k: getattr(self, k) for k in (
-            "id", "project_id", "links", "url", "user", "explore", "cases", "status", "stage", "created", "finished",
-            "log", "requirements", "feature", "assumptions", "scenarios", "items", "error", "usage")}
+            "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
+            "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage")}
+
+    @classmethod
+    def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
+        """A run interrupted by a restart of the studio (or stopped, or failed) that goes on from where
+        it stopped: the requirements and scenarios it has are kept, finished items are not redone, an
+        item's authoring continues its session from the checkpoint (agent.restored)."""
+        job = cls(project, j.get("links") or [], j.get("text") or "", j.get("url") or "", sessions,
+                  user=j.get("user") or user, explore=j.get("explore", False), cases=j.get("cases"))
+        job.id, job.created = j["id"], j["created"]
+        for k in ("log", "feature", "assumptions", "given", "scenarios", "items"):
+            setattr(job, k, j.get(k) or getattr(job, k))
+        job.requirements = j.get("requirements") or [] if job.scenarios else []
+        for item in job.items:
+            if item["status"] not in DONE_ITEMS:
+                item["status"], item["error"] = "queued", ""
+        job._log(f"Конвейер продолжен ({user or 'студия'}): готовые сценарии не повторяются")
+        return job
 
     def save(self) -> None:
         fs.write_json(_jobs_dir(self.project_id) / f"{self.id}.json", self.state(), indent=1)
@@ -360,29 +381,41 @@ class Job:
     async def _run(self) -> None:
         project = projects.get(self.project_id)
         cfg = project["pipeline"]
-
-        # 0. Manual test cases to automate: they ARE the scenarios (no test design needed).
-        if self.cases:
-            await self._import_cases(project)
-            if not self.scenarios or self._cancel:
+        # A resumed run already has its scenarios (and maybe the chosen ones): those stages are not redone.
+        if not self.scenarios:
+            if self.given:
+                # 0. Ready scenarios from the Requirements tab: every one of them goes to authoring.
+                self.stage = "scenarios"
+                self.scenarios = self.given
+                self.requirements.append({"source": "Требования", "title": f"Готовые сценарии: {len(self.given)}",
+                                          "chars": 0})
+                self.items = [self._item(s) for s in self.scenarios]
+            elif self.cases:
+                # 0. Manual test cases to automate: they ARE the scenarios (no test design needed).
+                await self._import_cases(project)
+            else:
+                await self._design(project, cfg)
+            if not self.scenarios:
                 return
+        if self._cancel:
+            return
+        if not self.items:
             await self._select(cfg["scenarios"]["select"])
             if self._cancel:
                 return
-            self._log(f"В работу взято кейсов: {len(self.items)}")
-            by_title = {s["title"]: s for s in self.scenarios}
-            for item in self.items:
-                if self._cancel:
-                    item["status"] = "cancelled"
-                    continue
-                try:
-                    await self._process(project, item, by_title[item["title"]])
-                except Exception as e:
-                    item["status"], item["error"] = "error", _err(e)
-                    self._log(f"«{item['title']}»: {item['error']}", "error")
-                self.save()
-            return
+        self._log(f"В работу взято {'кейсов' if self.cases else 'сценариев'}: {len(self.items)}")
 
+        # 3-6. Each scenario: author -> run -> verify -> publish
+        if self.given:
+            pairs = zip(self.items, self.scenarios)
+        else:
+            by_title = {s["title"]: s for s in self.scenarios}
+            pairs = ((item, by_title[item["title"]]) for item in self.items)
+        await self._process_all(project, pairs)
+
+    async def _design(self, project: dict, cfg: dict) -> None:
+        """Requirements -> scenarios (or one scenario of the whole text when the stage is off)."""
+        self.requirements = []
         # 1. Requirements
         parts = []
         for link in self.links:
@@ -417,28 +450,28 @@ class Job:
             self._log(f"Сценариев: {len(self.scenarios)}")
             if not self.scenarios:
                 self._log("По этим требованиям сценариев не получилось", "warn")
-                return
-            await self._select(cfg["scenarios"]["select"])
         else:
             self.scenarios = [{"title": self.requirements[0]["title"] or "Сценарий", "type": "", "priority": "",
                                "preconditions": "", "instructions": requirements, "expected_result": "",
                                "gherkin": ""}]
             self.items = [self._item(self.scenarios[0])]
-        if self._cancel:
-            return
-        self._log(f"В работу взято сценариев: {len(self.items)}")
+        self.save()
 
-        # 3-6. Each scenario: author -> run -> verify -> publish
-        by_title = {s["title"]: s for s in self.scenarios}
-        for item in self.items:
+    async def _process_all(self, project: dict, pairs) -> None:
+        """(item, scenario) one after another; an error of one scenario does not stop the others."""
+        for item, sc in pairs:
+            if item["status"] in DONE_ITEMS:
+                continue
             if self._cancel:
                 item["status"] = "cancelled"
                 continue
             try:
-                await self._process(project, item, by_title[item["title"]])
+                await self._process(project, item, sc)
             except Exception as e:
                 item["status"], item["error"] = "error", _err(e)
                 self._log(f"«{item['title']}»: {item['error']}", "error")
+            if item.get("test_id") and sc.get("analysis_id"):
+                analyses.link_test(self.project_id, sc["analysis_id"], sc["scenario_id"], item["test_id"])
             self.save()
 
     async def _import_cases(self, project: dict) -> None:
@@ -465,82 +498,45 @@ class Job:
             chosen = [s for s in self.scenarios if mode == "all" or s["priority"] == "high"]
             self.items = [self._item(s) for s in chosen]
 
-    async def _author(self, project: dict, item: dict, s: StudioSession) -> str:
-        """Run an authoring session to its end -> done | error | stalled | timeout | cancelled."""
+    async def _author(self, project: dict, item: dict, s: StudioSession, started: bool = False) -> str:
+        """Run an authoring session to its end -> done | error | stalled | timeout | cancelled.
+        `started`: a person already continues it in Studio - just wait for it."""
         a = project["pipeline"]["authoring"]
+        s.origin = {"job": self.id}
         self.sessions[s.id] = s
         self._session = s
         item["session_id"] = s.id
-        try:
-            await s.start()
-        except Exception as e:
-            s.status = "error"
-            s.chat.append({"role": "system", "text": _err(e)})
-            raise
-        if a["autopilot"]:
+        self.save()
+        if not started:
+            try:
+                await s.start()
+            except Exception as e:
+                s.status = "error"
+                s.chat.append({"role": "system", "text": _err(e)})
+                s.checkpoint()
+                raise
+        auto = a["autopilot"] and not started
+        if auto and s.status != "done":
             s.set_autopilot(True)
-        outcome = await self._wait(s, a["autopilot"])
+        outcome = await self._wait(s, auto)
         self._session = None
         return outcome
 
     async def _process(self, project: dict, item: dict, sc: dict) -> None:
         cfg = project["pipeline"]
-        self.stage = "authoring"
-        item["status"] = "authoring"
-        scenario = sc["instructions"]
-        if sc.get("preconditions"):
-            scenario = f"Предусловия: {sc['preconditions']}\n{scenario}"
-        if sc.get("expected_result"):
-            scenario += f"\nОжидаемый результат: {sc['expected_result']}"
-        if not self.url:
-            raise ValueError("Не указан URL приложения (в запуске или в настройках проекта)")
-        a = cfg["authoring"]
-        s = StudioSession(project, sc["title"], self.url, scenario, headless=a["headless"],
-                          credentials=projects.app_credentials(project["id"]))
-        self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
-        outcome = await self._author(project, item, s)
-        item["summary"] = s.summary
-        if outcome != "done":
-            item["status"] = "needs_attention" if outcome != "cancelled" else "cancelled"
-            item["error"] = {"error": "Ошибка агента — откройте сессию в Studio",
-                             "stalled": "Агент ждёт человека — откройте сессию в Studio",
-                             "timeout": "Истекло время ожидания"}.get(outcome, "")
-            self._log(f"«{sc['title']}»: {item['error'] or 'остановлено'}", "warn")
-            return
-
-        test = s.to_test()
-        # Only a scenario the agent completed and verified becomes a test: otherwise the
-        # saved test would pass on replay without checking anything. The session stays
-        # open in Studio so a person can finish it and save by hand.
-        problem = {"failed": "Агент нашёл расхождение с ожидаемым результатом (возможный дефект)",
-                   "blocked": "Агент не смог пройти сценарий"}.get(s.finish_status, "")
-        if not problem and not has_assertion(test["steps"]):
-            problem = "В тесте нет ни одной проверки"
-        if problem:
-            item["status"], item["error"] = "needs_attention", f"{problem} — откройте сессию в Studio"
-            self._log(f"«{sc['title']}»: {problem}", "warn")
-            return
-
-        test.update(priority=sc.get("priority", ""), scenario_type=sc.get("type", ""),
-                    source=", ".join(self.links) or ("Planner" if self.explore else "")
-                    or (sc.get("source_case") or {}).get("name", ""),
-                    gherkin_scenario=sc.get("gherkin", ""), status="draft")
-        case = sc.get("source_case")
-        if case:
-            # The automated test is linked to the manual case it came from.
-            key = case["system"] if case["system"] in publisher.SYSTEMS else case["system"]
-            test.setdefault("external", {})[key] = {"case_id": case["id"], "case_name": case.get("name", "")} | (
-                {"work_item_id": case["id"]} if case["system"] == "testit" else {})
-        storage.save(test)
-        s.save_artifacts(test)
-        s.test_id = item["test_id"] = test["id"]
-        self._log(f"«{sc['title']}»: тест сохранён, шагов {len(test['steps'])}")
-        await s.close()
-        self.sessions.pop(s.id, None)
-        item["session_id"] = None
+        # A resumed item whose test is saved goes on with the stages it has not passed.
+        test = storage.load(item["test_id"]) if item.get("test_id") else None
+        if test:
+            item["session_id"] = None
+        else:
+            test = await self._create_test(project, item, sc)
+            if not test:
+                return
 
         run = None
-        if cfg["run"]["enabled"]:
+        if cfg["run"]["enabled"] and item.get("run"):
+            run = runs.get(item["run"].get("run_id") or "")
+        elif cfg["run"]["enabled"]:
             self.stage = item["status"] = "running"
             self._log(f"«{sc['title']}»: прогон")
             run = await run_and_record(project, test, log=self._log, trigger="pipeline", user=self.user)
@@ -549,12 +545,15 @@ class Job:
             self._log(f"«{sc['title']}»: прогон {({'passed': 'успешен', 'flaky': 'нестабилен (прошёл со второй попытки)'}).get(run['status'], 'упал')}"
                       + (f", самолечение: {run['healed']}" if run["healed"] else ""),
                       "info" if run["status"] == "passed" else "warn")
+            self.save()
+        passed = item["run"]["passed"] if item.get("run") else True
 
-        if cfg["verify"]["enabled"] and (run is None or run["passed"]):
+        if cfg["verify"]["enabled"] and passed and not item.get("verify"):
             self.stage = item["status"] = "verifying"
             await self._verify(project, item, test)
+            self.save()
 
-        if cfg["publish"]["enabled"]:
+        if cfg["publish"]["enabled"] and not (item.get("publish") or {}).get("status") == "ok":
             self.stage = item["status"] = "publishing"
             self._log(f"«{sc['title']}»: публикация в {publisher.title_of(project)}")
             try:
@@ -570,6 +569,83 @@ class Job:
                 item["publish"] = {"status": "failed", "summary": _err(e)}
                 self._log(f"«{sc['title']}»: публикация не удалась: {_err(e)}", "error")
         item["status"] = "done"
+
+    async def _create_test(self, project: dict, item: dict, sc: dict) -> dict | None:
+        """Authoring of an item -> the saved test, or None when a person is needed. A session
+        interrupted by a restart continues from its checkpoint."""
+        cfg = project["pipeline"]
+        self.stage = "authoring"
+        item["status"] = "authoring"
+        a = cfg["authoring"]
+        sid = item.get("session_id") or ""
+        live = self.sessions.get(sid)
+        cp = None if live else agent.load_checkpoint(project["id"], sid)
+        if live:
+            self._log(f"«{sc['title']}»: генерация продолжается в Studio")
+            s = live
+        elif cp:
+            s = agent.restored(project, cp)
+            self._log(f"«{sc['title']}»: продолжение генерации, записано шагов: {len(s.base_steps)}")
+        else:
+            s = None
+        if s:
+            outcome = await self._author(project, item, s, started=bool(live))
+            return await self._authored(project, item, sc, s, outcome)
+        scenario = sc["instructions"]
+        if sc.get("preconditions"):
+            scenario = f"Предусловия: {sc['preconditions']}\n{scenario}"
+        if sc.get("expected_result"):
+            scenario += f"\nОжидаемый результат: {sc['expected_result']}"
+        if not self.url:
+            raise ValueError("Не указан URL приложения (в запуске или в настройках проекта)")
+        s = StudioSession(project, sc["title"], self.url, scenario, headless=a["headless"],
+                          credentials=projects.app_credentials(project["id"]))
+        self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
+        outcome = await self._author(project, item, s)
+        return await self._authored(project, item, sc, s, outcome)
+
+    async def _authored(self, project: dict, item: dict, sc: dict, s: StudioSession, outcome: str) -> dict | None:
+        item["summary"] = s.summary
+        if outcome != "done":
+            item["status"] = "needs_attention" if outcome != "cancelled" else "cancelled"
+            item["error"] = {"error": "Ошибка агента — откройте сессию в Studio",
+                             "stalled": "Агент ждёт человека — откройте сессию в Studio",
+                             "timeout": "Истекло время ожидания"}.get(outcome, "")
+            self._log(f"«{sc['title']}»: {item['error'] or 'остановлено'}", "warn")
+            return None
+
+        test = s.to_test()
+        # Only a scenario the agent completed and verified becomes a test: otherwise the
+        # saved test would pass on replay without checking anything. The session stays
+        # open in Studio so a person can finish it and save by hand.
+        problem = {"failed": "Агент нашёл расхождение с ожидаемым результатом (возможный дефект)",
+                   "blocked": "Агент не смог пройти сценарий"}.get(s.finish_status, "")
+        if not problem and not has_assertion(test["steps"]):
+            problem = "В тесте нет ни одной проверки"
+        if problem:
+            item["status"], item["error"] = "needs_attention", f"{problem} — откройте сессию в Studio"
+            self._log(f"«{sc['title']}»: {problem}", "warn")
+            return None
+
+        test.update(priority=sc.get("priority", ""), scenario_type=sc.get("type", ""),
+                    source=", ".join(self.links) or ("Planner" if self.explore else "")
+                    or (sc.get("source_case") or {}).get("name", ""),
+                    gherkin_scenario=sc.get("gherkin", ""), status="draft")
+        case = sc.get("source_case")
+        if case:
+            # The automated test is linked to the manual case it came from.
+            key = case["system"] if case["system"] in publisher.SYSTEMS else case["system"]
+            test.setdefault("external", {})[key] = {"case_id": case["id"], "case_name": case.get("name", "")} | (
+                {"work_item_id": case["id"]} if case["system"] == "testit" else {})
+        storage.save(test)
+        s.save_artifacts(test)
+        s.test_id = item["test_id"] = test["id"]
+        self._log(f"«{sc['title']}»: тест сохранён, шагов {len(test['steps'])}")
+        await s.close(discard=True)
+        self.sessions.pop(s.id, None)
+        item["session_id"] = None
+        self.save()
+        return test
 
     async def _verify(self, project: dict, item: dict, test: dict) -> None:
         """Mutation testing; weak assertions are strengthened by the agent once."""
@@ -597,7 +673,7 @@ class Job:
         steps = s.to_test()["steps"]
         storage.update(test["id"], lambda t: t.update(steps=steps))
         test["steps"] = steps
-        await s.close()
+        await s.close(discard=True)
         self.sessions.pop(s.id, None)
         item["session_id"] = None
         res = await mutations.verify(project, test, log=self._log)
@@ -621,6 +697,9 @@ class Job:
                 return "stalled"   # asked the user something or hit the step limit
             if time.time() - start > AUTHORING_TIMEOUT:
                 return "timeout"
+
+
+DONE_ITEMS = ("done", "needs_attention")     # a resumed run does not redo them
 
 
 def _verify_summary(res: dict) -> dict:
@@ -650,7 +729,8 @@ def get_job(jid: str) -> dict | None:
     for f in fs.glob(projects.ROOT, f"*/jobs/{jid}.json"):
         j = fs.read_json(f)
         if j["status"] in ("running", "awaiting_selection") and not _job_elsewhere(jid):
-            j["status"], j["error"] = "error", "Студия была перезапущена во время работы конвейера"
+            j["status"], j["error"] = "error", ("Студия была перезапущена во время работы конвейера: нажмите "
+                                                "«Продолжить», чтобы доделать запуск с места остановки")
         return j
     return None
 

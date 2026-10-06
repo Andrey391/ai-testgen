@@ -90,7 +90,7 @@ def test_testit_cases_become_linked_autotests_with_results(stand, project, fake_
         ("fill", {"text": "{{password}}", "press_enter": False, "description": "Ввести пароль"}, "Пароль"),
         ("click", {"description": "Нажать «Войти»"}, "Войти"),
         ("assert_element_text", {"text": "Всего: 2", "description": "Открыт список"}, "Всего: 2"),
-        ("finish", {"status": "passed", "summary": "ok"}, None)])
+        ("finish", {"status": "passed", "summary": "ok", "evidence": "проверка результата"}, None)])
     job = pipeline.Job(p, [], "", f"{stand.url}/login.html", {}, cases={"connection": conn["id"], "ids": []})
     arun(job.run())
     assert job.status == "done", (job.error, job.log)

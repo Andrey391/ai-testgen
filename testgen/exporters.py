@@ -9,7 +9,8 @@ Elements inside iframes are reached with frame_locator().
 Everything that varies between machines comes from fixtures, defined in the file
 itself (single test) or in conftest.py (bundle):
     app_url              TESTGEN_BASE_URL, default: the recorded application URL
-    credentials          TESTGEN_USERNAME / TESTGEN_PASSWORD / TESTGEN_TOTP_SECRET, never the real values
+    credentials          TESTGEN_USERNAME / TESTGEN_PASSWORD / TESTGEN_TOTP_SECRET and TESTGEN_AUTH_<NAME>
+                         for login parameters ({{auth.name}}), never the real values
     testdata             {{unique}}, {{faker.email}}... generated like in the studio (testdata.py)
     console_errors       for "no console errors" checks
     check_accessibility  axe-core, for accessibility checks
@@ -27,7 +28,7 @@ from typing import Callable
 from urllib.parse import parse_qsl, urlparse
 
 from . import checks, steps as steps_mod, testdata
-from .testdata import CREDENTIALS, PLACEHOLDER
+from .testdata import PLACEHOLDER, env_name, is_credential
 
 MAX_ALTERNATIVES = 4
 NO_ELEMENT = ("navigate", "press_key", "scroll", "wait", "assert_text_present", "assert_url_contains",
@@ -49,7 +50,7 @@ def _val(s: str) -> str:
     parts = []
     for i, chunk in enumerate(PLACEHOLDER.split(s or "")):
         if i % 2:
-            if chunk in CREDENTIALS:
+            if is_credential(chunk):
                 parts.append(f"credentials[{chunk!r}]")
             elif chunk.startswith("vars."):
                 parts.append(f"str(data[{chunk[5:]!r}])")
@@ -75,7 +76,7 @@ def _value_obj(v) -> str:
 
 def _needs_of(value: str, needs: set[str]) -> None:
     for key in PLACEHOLDER.findall(value or ""):
-        if key in CREDENTIALS:
+        if is_credential(key):
             needs.add("credentials")
         elif key.startswith("vars."):
             needs.add("data")
@@ -147,7 +148,7 @@ FIXTURE_CREDENTIALS = '''class _Credentials(dict):
     def __missing__(self, key):
         if key == "totp":
             return totp(self["totp_secret"])
-        name = f"TESTGEN_{key.upper()}"
+        name = "TESTGEN_" + re.sub(r"\\W", "_", key).upper()
         if not os.environ.get(name):
             pytest.fail(f"Set the {name} environment variable (login for the application)")
         return os.environ[name]
@@ -155,7 +156,8 @@ FIXTURE_CREDENTIALS = '''class _Credentials(dict):
 
 @pytest.fixture(scope="session")
 def credentials() -> dict:
-    """Login for the application: TESTGEN_USERNAME / TESTGEN_PASSWORD (and TESTGEN_TOTP_SECRET for 2FA)."""
+    """Login for the application: TESTGEN_USERNAME / TESTGEN_PASSWORD (TESTGEN_TOTP_SECRET for 2FA,
+    TESTGEN_AUTH_<NAME> for a login parameter {{auth.name}})."""
     return _Credentials()
 '''
 
@@ -734,6 +736,7 @@ TESTGEN_BASE_URL={app_url or 'https://your-stand'} TESTGEN_USERNAME=... TESTGEN_
 - `TESTGEN_BASE_URL` - the application under test (default: {app_url or 'the recorded URL'});
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` - its login, only for tests that log in;
 - `TESTGEN_TOTP_SECRET` - the 2FA secret, for tests that type a one-time code;
+- `TESTGEN_AUTH_<NAME>` - a login parameter of the account (`{{{{auth.otp}}}}` -> `TESTGEN_AUTH_OTP`);
 - `TESTGEN_MAILPIT_URL` or `TESTGEN_IMAP_HOST` / `TESTGEN_IMAP_USER` / `TESTGEN_IMAP_PASSWORD` - the test mailbox;
 - `TESTGEN_FAKER_LOCALE` - locale of generated test data (default en_US).
 {f"{chr(10)}The session logs in once with the steps of «{login['name']}» (conftest.py), every test starts logged in.{chr(10)}" if login else ""}
@@ -783,7 +786,7 @@ def _api_value(key: str, value, secrets: set[str]) -> str:
             parts = []
             for i, chunk in enumerate(PLACEHOLDER.split(value)):
                 if i % 2:
-                    parts.append(f"env('TESTGEN_{chunk.upper()}')" if chunk in CREDENTIALS
+                    parts.append(f"env({env_name(chunk)!r})" if is_credential(chunk)
                                  else f"testdata[{chunk!r}]")
                 elif chunk:
                     parts.append(repr(chunk))

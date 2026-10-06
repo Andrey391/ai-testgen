@@ -21,10 +21,11 @@ from urllib.parse import quote, urlparse
 import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
+                               StreamingResponse)
 from pydantic import BaseModel
 
-from testgen import (access, audit, auth, checks, db, defects, explorer, exporters, fs, llm, mailbox, mcp_hub,
+from testgen import (access, analyses, audit, auth, checks, db, defects, explorer, exporters, fs, llm, mailbox, mcp_hub,
                      mcp_server, metrics, monitoring, mutations, notify, pipeline, projects, publisher,
                      reports, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic, trackers, vault,
                      workqueue)
@@ -56,7 +57,7 @@ async def call(coro):
 
 
 SESSIONS: dict[str, StudioSession] = {}
-SESSION_TASKS: dict[str, str] = {}   # session id -> project task the test is made for
+SESSION_SCENARIOS: dict[str, tuple[str, str, str]] = {}   # session id -> (project, analysis, scenario) of the test
 # With several instances of the studio (a shared database): this instance's address for the others.
 # Studio sessions and pipeline jobs live in the instance that started them; requests about them that
 # reach another instance are passed here (_elsewhere / _proxy).
@@ -183,6 +184,9 @@ AUDIT_ACTIONS = {
     ("DELETE", "/api/projects/{pid}"): "project.delete",
     ("PUT", "/api/projects/{pid}/access"): "project.access",
     ("PUT", "/api/projects/{pid}/credentials"): "project.credentials",
+    ("POST", "/api/projects/{pid}/accounts"): "account.create",
+    ("PUT", "/api/projects/{pid}/accounts/{aid}"): "account.update",
+    ("DELETE", "/api/projects/{pid}/accounts/{aid}"): "account.delete",
     ("PUT", "/api/projects/{pid}/mailbox"): "project.mailbox",
     ("PUT", "/api/projects/{pid}/llm"): "project.llm",
     ("DELETE", "/api/projects/{pid}/llm/key"): "project.llm",
@@ -201,6 +205,10 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/jobs"): "pipeline.start",
     ("POST", "/api/sessions"): "studio.start",
     ("POST", "/api/sessions/{sid}/save"): "test.save",
+    ("POST", "/api/projects/{pid}/sessions/{sid}/restore"): "studio.restore",
+    ("POST", "/api/projects/{pid}/sessions/{sid}/save"): "test.save",
+    ("DELETE", "/api/projects/{pid}/sessions/{sid}"): "studio.discard",
+    ("POST", "/api/jobs/{jid}/resume"): "pipeline.resume",
     ("PUT", "/api/tests/{tid}"): "test.update",
     ("PATCH", "/api/tests/{tid}/meta"): "test.meta",
     ("DELETE", "/api/tests/{tid}"): "test.delete",
@@ -260,6 +268,9 @@ ROLE_RULES = {
     ("DELETE", "/api/projects/{pid}"): "owner",
     ("PUT", "/api/projects/{pid}/access"): "owner",
     ("PUT", "/api/projects/{pid}/credentials"): "owner",
+    ("POST", "/api/projects/{pid}/accounts"): "owner",
+    ("PUT", "/api/projects/{pid}/accounts/{aid}"): "owner",
+    ("DELETE", "/api/projects/{pid}/accounts/{aid}"): "owner",
     ("PUT", "/api/projects/{pid}/mailbox"): "owner",
     ("PUT", "/api/projects/{pid}/llm"): "owner",
     ("DELETE", "/api/projects/{pid}/llm/key"): "owner",
@@ -284,6 +295,7 @@ RESOURCES = {
     "/api/runs/{rid}": ("rid", lambda v: (runs.get(v) or {}).get("project_id"), "Прогон не найден"),
     "/api/suites/{sid}": ("sid", lambda v: (suite.get(v) or {}).get("project_id"), "Прогон набора не найден"),
     "/api/jobs/{jid}": ("jid", lambda v: (pipeline.get_job(v) or {}).get("project_id"), "Запуск не найден"),
+    "/api/analyses/{aid}": ("aid", lambda v: (analyses.get(v) or {}).get("project_id"), "Анализ не найден"),
     "/api/sessions/{sid}": ("sid", lambda v: SESSIONS[v].project["id"] if v in SESSIONS else None,
                             "Session not found"),
 }
@@ -511,10 +523,12 @@ def project(pid: str, need: str = "viewer") -> dict:
 def _project_view(p: dict) -> dict:
     role = access.role(access.USER.get(), p)
     c = projects.app_credentials(p["id"])
+    editor = access.RANK[role] >= access.RANK["editor"]
     return p | {"role": role, "visibility": p.get("visibility", "open"),
                 "connections": [mcp_hub.public_view(p["id"], x) for x in p["connections"]],
                 # Secrets are for editors: a viewer does not even see the login.
-                "app_username": c.get("username", "") if access.RANK[role] >= access.RANK["editor"] else "",
+                "app_username": c.get("username", "") if editor else "",
+                "accounts": projects.accounts_view(p["id"], full=editor),
                 "app_has_password": bool(c.get("password")),
                 "app_has_totp": bool(c.get("totp_secret")), "mailbox_has_password": bool(mailbox.password(p["id"])),
                 "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p),
@@ -734,15 +748,66 @@ class Credentials(BaseModel):
     username: str = ""
     password: str = ""   # empty = keep the saved one
     totp_secret: str | None = None   # None = keep, "" = remove (2FA: the base32 secret of the authenticator)
+    account: str | None = None       # a test: the project account it runs with ("" = the default one)
+
+
+def _check_totp(secret: str | None) -> None:
+    if secret and not re.fullmatch(r"[A-Za-z2-7\s=]{16,128}", secret):
+        raise HTTPException(400, "Секрет TOTP — строка base32 (буквы A–Z и цифры 2–7)")
 
 
 @app.put("/api/projects/{pid}/credentials")
 async def set_project_credentials(pid: str, body: Credentials):
+    """The default account's login (the wizard); the accounts themselves: /accounts."""
     project(pid)
-    if body.totp_secret and not re.fullmatch(r"[A-Za-z2-7\s=]{16,128}", body.totp_secret):
-        raise HTTPException(400, "Секрет TOTP — строка base32 (буквы A–Z и цифры 2–7)")
+    _check_totp(body.totp_secret)
     projects.set_app_credentials(pid, body.username, body.password, body.totp_secret)
     return {"ok": True}
+
+
+class AuthParam(BaseModel):
+    name: str
+    value: str = ""      # a secret one: empty = keep the saved value
+    secret: bool = False
+
+
+class AccountBody(BaseModel):
+    name: str | None = None
+    username: str | None = None
+    password: str = ""                # empty = keep the saved one
+    totp_secret: str | None = None    # None = keep, "" = remove
+    params: list[AuthParam] | None = None   # extra login parameters: {{auth.<name>}}
+    default: bool = False
+
+
+def _save_account(pid: str, body: AccountBody, aid: str = "") -> dict:
+    _check_totp(body.totp_secret)
+    try:
+        acc = projects.save_account(pid, body.model_dump(), aid)
+    except KeyError:
+        raise HTTPException(404, "Учётная запись не найдена")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"id": acc["id"], "accounts": projects.accounts_view(pid)}
+
+
+@app.post("/api/projects/{pid}/accounts")
+async def create_account(pid: str, body: AccountBody):
+    """Any number of accounts of the application under test, each with its own login parameters."""
+    return _save_account(pid, body)
+
+
+@app.put("/api/projects/{pid}/accounts/{aid}")
+async def update_account(pid: str, aid: str, body: AccountBody):
+    return _save_account(pid, body, aid)
+
+
+@app.delete("/api/projects/{pid}/accounts/{aid}")
+async def delete_account(pid: str, aid: str):
+    """Tests of a deleted account run with the default one."""
+    if not projects.delete_account(pid, aid):
+        raise HTTPException(404, "Учётная запись не найдена")
+    return {"accounts": projects.accounts_view(pid)}
 
 
 class MailboxBody(BaseModel):
@@ -1056,6 +1121,7 @@ async def _guard(s: StudioSession, coro) -> None:
         s.autopilot = False
         text = str(e) if isinstance(e, (mcp_hub.McpError, ValueError)) else llm.api_error_text(e)
         s.chat.append({"role": "system", "text": text})
+        s.checkpoint()
 
 
 class NewSession(BaseModel):
@@ -1066,9 +1132,12 @@ class NewSession(BaseModel):
     autopilot: bool = False
     headless: bool = True
     engine: str = ""       # builtin | playwright-mcp; empty = project setting
-    username: str = ""     # login for the app under test; empty = the project's
+    username: str = ""     # login for the app under test; empty = the project account
     password: str = ""
+    account: str = ""      # the project account to log in with; empty = the default one
     task_id: str = ""      # project task the test is made for: linked on save
+    analysis_id: str = ""  # the scenario of a requirements analysis the test is made from: linked on save
+    scenario_id: str = ""
     fresh_login: bool = False   # do not start with the project's saved login (e.g. a new login test)
 
 
@@ -1090,18 +1159,25 @@ async def create_session(body: NewSession, request: Request):
     p = project(body.project_id, "editor")
     url = body.url if "://" in body.url else "https://" + body.url
     creds = {"username": body.username.strip(), "password": body.password}
+    account = ""
     if not any(creds.values()):
-        creds = projects.app_credentials(p["id"])
+        if body.account and not projects.account_exists(p["id"], body.account):
+            raise HTTPException(400, "Учётная запись не найдена")
+        account = body.account
+        creds = projects.account_credentials(p["id"], account)
     engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
     if body.scenario.strip() or body.autopilot:
         _require_model(p)
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
-                      engine=engine, use_login_state=not body.fresh_login)
+                      engine=engine, use_login_state=not body.fresh_login, account=account)
     request.state.project_id = p["id"]
     _start_session(s, body.autopilot)
     t = tasks.load(body.task_id)
     if t and t["project_id"] == p["id"]:
-        SESSION_TASKS[s.id] = t["id"]
+        s.task_id = t["id"]
+    a = analyses.get(body.analysis_id) if body.analysis_id else None
+    if a and a["project_id"] == p["id"] and body.scenario_id:
+        SESSION_SCENARIOS[s.id] = (p["id"], a["id"], body.scenario_id)
     return {"id": s.id}
 
 
@@ -1155,6 +1231,14 @@ async def resume(sid: str):
 
 class Toggle(BaseModel):
     on: bool
+
+
+@app.post("/api/sessions/{sid}/stop")
+async def stop_session(sid: str):
+    """Stop generating: Auto-Pilot off, the request to the model cancelled; the browser stays open."""
+    s = sess(sid)
+    WORKER.call_soon_threadsafe(s.stop)
+    return {"ok": True}
 
 
 @app.post("/api/sessions/{sid}/autopilot")
@@ -1211,6 +1295,7 @@ async def set_steps(sid: str, body: StepsBody):
     s = sess(sid)
     s.steps = body.steps
     s.edits += 1           # a person corrected the agent (authoring_stats)
+    s.checkpoint()
     return {"ok": True}
 
 
@@ -1220,20 +1305,88 @@ class SaveBody(BaseModel):
 
 @app.post("/api/sessions/{sid}/save")
 async def save_session(sid: str, body: SaveBody | None = None):
-    t, warnings = sess(sid).save((body or SaveBody()).status)
-    if sid in SESSION_TASKS:
-        tasks.link_test(SESSION_TASKS[sid], t["id"])
+    s = sess(sid)
+    t, warnings = s.save((body or SaveBody()).status)
+    if s.task_id:
+        tasks.link_test(s.task_id, t["id"])
+    if sid in SESSION_SCENARIOS:
+        analyses.link_test(*SESSION_SCENARIOS[sid], t["id"])
     return t | {"warnings": warnings}
 
 
 @app.delete("/api/sessions/{sid}")
 async def close_session(sid: str):
     s = SESSIONS.pop(sid, None)
-    SESSION_TASKS.pop(sid, None)
+    SESSION_SCENARIOS.pop(sid, None)
     if INSTANCE_URL:
         workqueue.drop_owner("session", sid)
     if s:
-        submit(s.close())
+        submit(s.close(discard=True))
+    return {"ok": True}
+
+
+# ---------- Interrupted Studio sessions (their checkpoints outlive a restart of the studio) ----------
+
+def _alive(cp: dict) -> bool:
+    """The session runs here or on another live instance (or its pipeline run does)."""
+    if cp["id"] in SESSIONS:
+        return True
+    if not INSTANCE_URL:
+        return False
+    job = (cp.get("origin") or {}).get("job")
+    return bool(workqueue.owner("session", cp["id"]) or (job and workqueue.owner("job", job)))
+
+
+def _checkpoint_or_404(pid: str, sid: str) -> dict:
+    cp = agent_mod.load_checkpoint(pid, sid)
+    if not cp:
+        raise HTTPException(404, "Сессия не найдена")
+    return cp
+
+
+@app.get("/api/projects/{pid}/sessions")
+async def interrupted_sessions(pid: str):
+    """Sessions of the project that were interrupted (the studio restarted): continue or save them."""
+    project(pid)
+    return [cp for cp in agent_mod.list_checkpoints(pid) if not _alive(cp)]
+
+
+class RestoreBody(BaseModel):
+    autopilot: bool = False
+
+
+@app.post("/api/projects/{pid}/sessions/{sid}/restore")
+async def restore_session(pid: str, sid: str, body: RestoreBody | None = None):
+    p = project(pid)
+    cp = _checkpoint_or_404(pid, sid)
+    if _alive(cp):
+        return {"id": sid}
+    _require_model(p)
+    _start_session(agent_mod.restored(p, cp), (body or RestoreBody()).autopilot)
+    return {"id": sid}
+
+
+@app.post("/api/projects/{pid}/sessions/{sid}/save")
+async def save_interrupted(pid: str, sid: str, body: SaveBody | None = None):
+    p = project(pid)
+    cp = _checkpoint_or_404(pid, sid)
+    if _alive(cp):
+        raise HTTPException(409, "Сессия идёт: сохраните тест в Studio")
+    if not agent_mod.recorded_steps(cp.get("steps") or []):
+        raise HTTPException(400, "В сессии нет выполненных шагов")
+    t, warnings = agent_mod.save_checkpoint(p, cp, (body or SaveBody()).status)
+    if cp.get("task_id"):
+        tasks.link_test(cp["task_id"], t["id"])
+    return t | {"warnings": warnings}
+
+
+@app.delete("/api/projects/{pid}/sessions/{sid}")
+async def discard_session(pid: str, sid: str):
+    project(pid)
+    cp = _checkpoint_or_404(pid, sid)
+    if _alive(cp):
+        raise HTTPException(409, "Сессия идёт: закройте её в Studio")
+    agent_mod.drop_checkpoint(pid, sid)
     return {"ok": True}
 
 
@@ -1415,14 +1568,25 @@ async def delete_test(tid: str):
 
 @app.get("/api/tests/{tid}/credentials")
 async def get_credentials(tid: str):
-    c = storage.own_credentials(test_or_404(tid))
+    t = test_or_404(tid)
+    c = storage.own_credentials(t)
     return {"username": c.get("username", ""), "has_password": bool(c.get("password")),
-            "has_totp": bool(c.get("totp_secret"))}
+            "has_totp": bool(c.get("totp_secret")), "account": t.get("account") or ""}
 
 
 @app.put("/api/tests/{tid}/credentials")
 async def set_credentials(tid: str, body: Credentials):
+    """The test's project account (`account`) or its own login (username / password / totp_secret)."""
     t = test_or_404(tid)
+    if body.account is not None:
+        if body.account and not projects.account_exists(t["project_id"], body.account):
+            raise HTTPException(400, "Учётная запись не найдена")
+        storage.update(tid, lambda x: x.update(account=body.account))
+        if body.account:
+            # An own login would take precedence over the chosen account.
+            storage.set_own_credentials(t, {})
+            return {"ok": True}
+    _check_totp(body.totp_secret)
     c = storage.own_credentials(t)
     c["username"] = body.username.strip()
     if body.password:
@@ -1799,17 +1963,138 @@ class ReqBody(BaseModel):
     project_id: str
     requirements: str
     url: str = ""
+    stream: bool = False    # NDJSON events with the intermediate results (scenarios.generate `progress`)
 
 
 @app.post("/api/scenarios")
-async def gen_scenarios(body: ReqBody):
+async def gen_scenarios(body: ReqBody, request: Request):
+    """Requirements -> scenarios; every generation is kept in the project's analysis history."""
     p = project(body.project_id, "editor")
     _require_model(p)
+    a = analyses.create(p["id"], body.requirements, body.url, request.state.user)
+    if not body.stream:
+        try:
+            res = await call(scenarios.generate(body.requirements, body.url, project=p))
+        except Exception as e:
+            analyses.finish(p["id"], a["id"], error=llm.api_error_text(e))
+            raise HTTPException(502, llm.api_error_text(e))
+        analyses.set_plan(p["id"], a["id"], res.feature, res.assumptions, [s.model_dump() for s in res.scenarios])
+        analyses.finish(p["id"], a["id"], res.model_dump())
+        return res.model_dump() | {"analysis_id": a["id"]}
+
+    # One response streams the whole generation: it stays on this instance, so no job to poll.
+    loop, queue = asyncio.get_running_loop(), asyncio.Queue()
+
+    def send(event: dict) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event | {"at": time.time()})
+
+    def emit(event: dict) -> None:
+        """Intermediate results go to the analysis first: the page gets the scenarios with their ids."""
+        if event["type"] == "plan":
+            event = event | {"scenarios": analyses.set_plan(p["id"], a["id"], event["feature"], event["assumptions"],
+                                                            event["scenarios"])}
+        elif event["type"] == "batch":
+            event = event | {"scenarios": analyses.set_batch(p["id"], a["id"], event["start"], event["scenarios"])}
+        send(event)
+
+    async def work():
+        try:
+            res = await scenarios.generate(body.requirements, body.url, project=p, progress=emit)
+            done = analyses.finish(p["id"], a["id"], res.model_dump())
+            send({"type": "done", "analysis": analyses.view(done)})
+        except asyncio.CancelledError:
+            analyses.finish(p["id"], a["id"], error="Остановлено", status="cancelled")
+            raise
+        except Exception as e:
+            analyses.finish(p["id"], a["id"], error=llm.api_error_text(e))
+            send({"type": "error", "text": llm.api_error_text(e)})
+
+    send({"type": "analysis", "analysis": analyses.view(a)})
+    future = submit(work())
+
+    async def events():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), 15)
+                except asyncio.TimeoutError:
+                    yield "\n"      # keeps proxies from closing a quiet connection
+                    continue
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if event["type"] in ("done", "error"):
+                    return
+        finally:
+            future.cancel()      # the page went away: stop spending tokens
+
+    return StreamingResponse(events(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/projects/{pid}/analyses")
+async def list_analyses(pid: str):
+    """The history of requirement analyses, newest first."""
+    project(pid)
+    return analyses.list_analyses(pid)
+
+
+def _analysis(aid: str) -> dict:
+    a = analyses.get(aid)
+    if not a:
+        raise HTTPException(404, "Анализ не найден")
+    return a
+
+
+@app.get("/api/analyses/{aid}")
+async def get_analysis(aid: str):
+    return analyses.view(_analysis(aid))
+
+
+@app.delete("/api/analyses/{aid}")
+async def delete_analysis(aid: str):
+    """The analysis only: the tests made from its scenarios stay."""
+    a = _analysis(aid)
+    return {"ok": analyses.delete(a["project_id"], aid)}
+
+
+class ScenarioPatch(BaseModel):
+    title: str | None = None
+    type: str | None = None
+    priority: str | None = None
+    preconditions: str | None = None
+    instructions: str | None = None
+    expected_result: str | None = None
+    gherkin: str | None = None
+
+
+def _scenario_call(fn):
     try:
-        res = await call(scenarios.generate(body.requirements, body.url, project=p))
-    except Exception as e:
-        raise HTTPException(502, llm.api_error_text(e))
-    return res.model_dump()
+        return fn()
+    except KeyError:
+        raise HTTPException(404, "Сценарий не найден")
+    except analyses.Conflict as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/analyses/{aid}/scenarios")
+async def add_scenario(aid: str, body: ScenarioPatch):
+    a = _analysis(aid)
+    return _scenario_call(lambda: analyses.add_scenario(a["project_id"], aid, body.model_dump()))
+
+
+@app.put("/api/analyses/{aid}/scenarios/{scid}")
+async def update_scenario(aid: str, scid: str, body: ScenarioPatch):
+    a = _analysis(aid)
+    return _scenario_call(lambda: analyses.update_scenario(a["project_id"], aid, scid, body.model_dump()))
+
+
+@app.delete("/api/analyses/{aid}/scenarios/{scid}")
+async def delete_scenario(aid: str, scid: str):
+    a = _analysis(aid)
+    if not _scenario_call(lambda: analyses.delete_scenario(a["project_id"], aid, scid)):
+        raise HTTPException(404, "Сценарий не найден")
+    return {"ok": True}
 
 
 class FetchBody(BaseModel):
@@ -1840,6 +2125,9 @@ async def requirements_file(file: UploadFile):
 
 # ---------- Pipeline jobs ----------
 
+ScenarioIn = scenarios.Scenario
+
+
 class JobBody(BaseModel):
     links: list[str] = []
     text: str = ""
@@ -1847,6 +2135,10 @@ class JobBody(BaseModel):
     explore: bool = False
     case_connection: str = ""   # automate manual test cases of this connection (Test IT, Allure, Zephyr)
     case_ids: str = ""          # their ids; empty = every test case (Test IT)
+    scenarios: list[ScenarioIn] = []   # ready scenarios: straight to authoring
+    feature: str = ""
+    analysis_id: str = ""               # or scenarios of a requirements analysis (all, or `scenario_ids`)
+    scenario_ids: list[str] = []
 
 
 @app.post("/api/projects/{pid}/jobs")
@@ -1857,11 +2149,30 @@ async def start_job(pid: str, body: JobBody, request: Request):
         if not any(c["id"] == body.case_connection for c in p["connections"]):
             raise HTTPException(400, "Подключение для импорта кейсов не найдено")
         cases = {"connection": body.case_connection, "ids": publisher.parse_ids(body.case_ids)}
-    if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases:
+    ready = [s.model_dump() for s in body.scenarios if s.title.strip() and s.instructions.strip()]
+    feature = body.feature
+    if body.analysis_id:
+        a = analyses.get(body.analysis_id)
+        if not a or a["project_id"] != p["id"]:
+            raise HTTPException(404, "Анализ не найден")
+        chosen = [s for s in a["scenarios"] if not s.get("pending")
+                  and (not body.scenario_ids or s["id"] in body.scenario_ids)]
+        empty = [s["title"] or "без названия" for s in chosen if not s["title"].strip() or not s["instructions"].strip()]
+        if empty:
+            raise HTTPException(400, "Заполните название и шаги сценариев: " + ", ".join(f"«{t}»" for t in empty))
+        # The tests made by the run are linked back to their scenarios.
+        ready = [{k: s[k] for k in analyses.FIELDS} | {"analysis_id": a["id"], "scenario_id": s["id"]} for s in chosen]
+        feature = feature or a["feature"]
+        if not ready:
+            raise HTTPException(400, "В анализе нет готовых сценариев")
+    if body.scenarios and not ready:
+        raise HTTPException(400, "У сценариев нет названия или шагов")
+    if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases \
+            and not ready:
         raise HTTPException(400, "Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта")
     _require_model(p)
     job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore,
-                       cases=cases)
+                       cases=cases, scenarios=ready, feature=feature)
     pipeline.JOBS[job.id] = job
     job.save()
     if INSTANCE_URL:
@@ -1874,6 +2185,25 @@ async def start_job(pid: str, body: JobBody, request: Request):
 async def list_jobs(pid: str):
     project(pid)
     return pipeline.list_jobs(pid)
+
+
+@app.post("/api/jobs/{jid}/resume")
+async def resume_job(jid: str, request: Request):
+    """Go on with a run interrupted by a restart of the studio (or stopped, or failed)."""
+    j = pipeline.get_job(jid)
+    if not j:
+        raise HTTPException(404, "Запуск не найден")
+    if jid in pipeline.JOBS or j["status"] not in ("error", "cancelled"):
+        raise HTTPException(409, "Запуск ещё идёт")
+    p = project(j["project_id"])
+    _require_model(p)
+    job = pipeline.Job.resumed(p, j, SESSIONS, user=request.state.user or "")
+    pipeline.JOBS[job.id] = job
+    job.save()
+    if INSTANCE_URL:
+        workqueue.set_owner("job", job.id, INSTANCE_URL)
+    submit(job.run())
+    return {"id": job.id}
 
 
 @app.get("/api/jobs/{jid}")

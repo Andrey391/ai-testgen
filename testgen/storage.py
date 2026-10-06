@@ -23,7 +23,7 @@ import re
 import time
 import uuid
 
-from . import fs, projects, runs, tasks, traffic, vault
+from . import analyses, fs, projects, runs, tasks, traffic, vault
 from .repo import tests as repo
 
 TAG = re.compile(r"[\w.-]{1,40}")
@@ -144,6 +144,7 @@ def delete(test_id: str) -> bool:
     runs.delete_test(pid, test_id)
     traffic.delete(pid, test_id)
     tasks.unlink_test(pid, test_id)
+    analyses.unlink_test(pid, test_id)
     fs.rmtree(projects.path(pid) / "baselines" / _safe(test_id))
     fs.rmtree(_history_dir(pid, test_id))
     return True
@@ -192,7 +193,7 @@ def list_tests(project_id: str, tag: str = "") -> list[dict]:
         hist = histories.get(t["id"]) or []
         out.append({k: t.get(k) for k in ("id", "project_id", "name", "url", "scenario", "updated",
                                           "last_run", "external", "engine", "quarantine", "verify",
-                                          "authoring_usage")}
+                                          "authoring_usage", "account")}
                    | {"steps": len(t.get("steps", [])), "tags": t.get("tags") or [], "role": t.get("role") or "",
                       "status": status(t), "comments": len(t.get("comments") or []),
                       "data_steps": len(t.get("before") or []) + len(t.get("after") or []),
@@ -205,12 +206,13 @@ def list_tests(project_id: str, tag: str = "") -> list[dict]:
 # ---------- login for the application under test ----------
 
 def credentials(test: dict) -> dict:
-    """Test's own login, else the project's, else TESTGEN_USERNAME / TESTGEN_PASSWORD /
-    TESTGEN_TOTP_SECRET (the same variables the exported code reads)."""
-    src = own_credentials(test) or projects.app_credentials(test["project_id"])
+    """Test's own login, else its project account (test["account"], else the default one), else
+    TESTGEN_USERNAME / TESTGEN_PASSWORD / TESTGEN_TOTP_SECRET (the same variables the exported code reads)."""
+    src = own_credentials(test) or projects.account_credentials(test["project_id"], test.get("account") or "")
     c = {}
-    for key in ("username", "password", "totp_secret"):
+    for key in projects.CRED_KEYS:
         c[key] = src.get(key) or os.environ.get(f"TESTGEN_{key.upper()}", "")
+    c["params"] = src.get("params") or []
     return {k: v for k, v in c.items() if v}
 
 

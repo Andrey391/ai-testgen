@@ -38,6 +38,8 @@ ACTIONS = {
     "user.create": "Пользователь создан", "user.delete": "Пользователь удалён",
     "project.create": "Проект создан", "project.update": "Настройки проекта", "project.delete": "Проект удалён",
     "project.access": "Участники и доступ", "project.credentials": "Учётные данные приложения",
+    "account.create": "Учётная запись добавлена", "account.update": "Учётная запись изменена",
+    "account.delete": "Учётная запись удалена",
     "project.mailbox": "Почтовый ящик", "project.llm": "Модель ИИ", "project.notify": "Уведомления", "project.export": "Экспорт проекта",
     "connection.create": "Подключение добавлено", "connection.update": "Подключение изменено",
     "connection.delete": "Подключение удалено", "connection.secret_clear": "Секрет подключения удалён",

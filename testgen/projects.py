@@ -25,9 +25,9 @@ import time
 import uuid
 from pathlib import Path
 
-from . import fs, repo, vault
+from . import fs, repo, testdata, vault
 from .llm import EFFORTS
-from .paths import DATA
+from .paths import DATA, SECRETS
 
 ROOT = DATA / "projects"
 
@@ -303,25 +303,144 @@ def list_projects() -> list[dict]:
     return sorted(out, key=lambda p: p["name"].lower())
 
 
-# ---------- login for the application under test (project default) ----------
+# ---------- accounts of the application under test ----------
+# Any number of accounts per project (secret "app"): {"accounts": [{"id", "name", "username",
+# "password", "totp_secret", "params": [{"name", "value", "secret"}]}], "default": id}. `params` are
+# extra login parameters - an OTP code of the test stand, a tenant, a PIN - typed as {{auth.<name>}}.
+# A test runs with its account (test["account"]), else the default one.
+
+CRED_KEYS = ("username", "password", "totp_secret")
+
+
+def _load_accounts(pid: str) -> dict:
+    data = vault.load(secrets_kind(pid), "app") or {}
+    if "accounts" not in data:     # one login of earlier versions
+        acc = {k: data[k] for k in CRED_KEYS if data.get(k)}
+        data = {"accounts": [acc | {"id": "main", "name": "Основная"}] if acc else [], "default": "main"}
+    if data["accounts"] and data.get("default") not in {a["id"] for a in data["accounts"]}:
+        data["default"] = data["accounts"][0]["id"]
+    return data
+
+
+def _save_accounts(pid: str, data: dict) -> None:
+    if data["accounts"]:
+        vault.save(secrets_kind(pid), "app", data)
+    else:
+        vault.delete(secrets_kind(pid), "app")
+
+
+def runtime_credentials(acc: dict) -> dict:
+    """What a run substitutes: username / password / totp_secret and the login parameters."""
+    c = {k: acc[k] for k in CRED_KEYS if acc.get(k)}
+    params = [p for p in acc.get("params") or [] if p.get("name") and p.get("value")]
+    return c | ({"params": params} if params else {})
+
+
+def account_credentials(pid: str, account_id: str = "") -> dict:
+    """The account `account_id` of the project, else its default account ({} without accounts)."""
+    data = _load_accounts(pid)
+    by_id = {a["id"]: a for a in data["accounts"]}
+    acc = by_id.get(account_id) or by_id.get(data.get("default"))
+    return runtime_credentials(acc) if acc else {}
+
 
 def app_credentials(pid: str) -> dict:
-    return vault.load(secrets_kind(pid), "app") or {}
+    """The default account."""
+    return account_credentials(pid)
+
+
+def accounts_view(pid: str, full: bool = True) -> list[dict]:
+    """Accounts for the API: secrets only as "set" flags. Without `full` (a viewer) only the names."""
+    data = _load_accounts(pid)
+    out = []
+    for a in data["accounts"]:
+        item = {"id": a["id"], "name": a.get("name") or a.get("username") or a["id"],
+                "default": a["id"] == data.get("default")}
+        if full:
+            item |= {"username": a.get("username", ""), "has_password": bool(a.get("password")),
+                     "has_totp": bool(a.get("totp_secret")),
+                     "params": [{"name": p["name"], "secret": bool(p.get("secret")),
+                                 "value": "" if p.get("secret") else p.get("value", ""),
+                                 "has_value": bool(p.get("value"))} for p in a.get("params") or []]}
+        out.append(item)
+    return out
+
+
+def _clean_params(params: list[dict], old: list[dict]) -> list[dict]:
+    """A secret parameter sent without a value keeps the saved one (the API never returns it)."""
+    saved = {p["name"]: p.get("value", "") for p in old}
+    out, seen = [], set()
+    for p in params:
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        if not testdata.PARAM_NAME.fullmatch(name):
+            raise ValueError(f"Имя параметра «{name}»: латинские буквы, цифры и _, не с цифры")
+        if name in seen:
+            raise ValueError(f"Параметр «{name}» указан дважды")
+        seen.add(name)
+        value = str(p.get("value") or "")
+        if p.get("secret") and not value:
+            value = saved.get(name, "")
+        out.append({"name": name, "value": value, "secret": bool(p.get("secret"))})
+    return out
+
+
+def save_account(pid: str, body: dict, account_id: str = "") -> dict:
+    """Create (no `account_id`) or change an account. Empty password keeps the saved one;
+    totp_secret: None keeps, "" removes. `default`: make it the project's default account."""
+    with fs.lock(SECRETS / secrets_kind(pid) / "app.json"):
+        data = _load_accounts(pid)
+        if account_id:
+            acc = next((a for a in data["accounts"] if a["id"] == account_id), None)
+            if acc is None:
+                raise KeyError(account_id)
+        else:
+            acc = {"id": uuid.uuid4().hex[:8]}
+            data["accounts"].append(acc)
+        if body.get("name") is not None:
+            acc["name"] = str(body["name"]).strip()[:120]
+        if body.get("username") is not None:
+            acc["username"] = str(body["username"]).strip()
+        if body.get("password"):
+            acc["password"] = body["password"]
+        if body.get("totp_secret") is not None:
+            acc["totp_secret"] = re.sub(r"\s+", "", body["totp_secret"]).upper()
+        if body.get("params") is not None:
+            acc["params"] = _clean_params(body["params"], acc.get("params") or [])
+        for k in [k for k in CRED_KEYS if not acc.get(k)]:
+            acc.pop(k, None)
+        if not acc.get("name"):
+            acc["name"] = acc.get("username") or f"Учётная запись {len(data['accounts'])}"
+        if body.get("default") or len(data["accounts"]) == 1:
+            data["default"] = acc["id"]
+        _save_accounts(pid, data)
+    return acc
+
+
+def delete_account(pid: str, account_id: str) -> bool:
+    with fs.lock(SECRETS / secrets_kind(pid) / "app.json"):
+        data = _load_accounts(pid)
+        left = [a for a in data["accounts"] if a["id"] != account_id]
+        if len(left) == len(data["accounts"]):
+            return False
+        data["accounts"] = left
+        if data.get("default") == account_id:
+            data["default"] = left[0]["id"] if left else ""
+        _save_accounts(pid, data)
+    return True
+
+
+def account_exists(pid: str, account_id: str) -> bool:
+    return any(a["id"] == account_id for a in _load_accounts(pid)["accounts"])
 
 
 def set_app_credentials(pid: str, username: str, password: str = "", totp_secret: str | None = None) -> None:
-    """Empty password keeps the saved one; totp_secret: None keeps, "" removes the 2FA secret."""
-    c = app_credentials(pid)
-    c["username"] = username.strip()
-    if password:
-        c["password"] = password
-    if totp_secret is not None:
-        c["totp_secret"] = re.sub(r"\s+", "", totp_secret).upper()
-    c = {k: v for k, v in c.items() if v}
-    if c:
-        vault.save(secrets_kind(pid), "app", c)
-    else:
-        vault.delete(secrets_kind(pid), "app")
+    """The default account's login (created when the project has none); empty password keeps
+    the saved one, totp_secret: None keeps, "" removes the 2FA secret."""
+    data = _load_accounts(pid)
+    save_account(pid, {"username": username, "password": password, "totp_secret": totp_secret},
+                 data["default"] if data["accounts"] else "")
 
 
 # ---------- model connection ----------

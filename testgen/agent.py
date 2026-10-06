@@ -12,6 +12,11 @@ weak assertions found by mutation testing (mutations.py).
 With the built-in engine the XHR/fetch traffic of the session is recorded
 (traffic.py) and saved with the test, for API tests and mocks.
 
+A session lives in the memory of its studio instance; its progress (steps, chat, scenario)
+is checkpointed to the database after every step (`checkpoint`). After a restart of the studio
+an interrupted session is continued (`restored`: its steps are replayed and the agent goes on
+from there) or saved as a test as it is (`save_checkpoint`).
+
 The project's model drives it (llm.py). For a weaker model the "authoring" stage offers:
 - a compact system prompt plus example turns (the "authoring-examples" skill);
 - text mode: the element list is the main input and a screenshot is sent only when
@@ -24,12 +29,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import re
 import time
 import uuid
 from urllib.parse import urlparse
 
-from . import fs, llm, mailbox, mcp_hub, projects, skills, storage, traffic
+from . import fs, llm, mailbox, mcp_hub, projects, skills, storage, testdata, traffic, vault
 from .browser import BrowserSession, describe_element
 from .mcp_browser import McpBrowser
 from .providers.base import check_call
@@ -54,7 +60,8 @@ The user gives you a web application and a test scenario in plain language. You 
 - Data that must be new on every run (a registration e-mail or login, a name of something you create) must not be a literal, or the second run fails with "already exists". Type these placeholders instead: {{faker.email}}, {{faker.name}}, {{faker.first_name}}, {{faker.last_name}}, {{faker.phone}}, {{faker.company}}, {{faker.city}}, {{faker.address}}, {{faker.user_name}}, {{unique}} (a unique number, e.g. "Order {{unique}}"), {{today}}. Each gets a fresh value on every run and the same value within one run, so you can type {{faker.email}} at registration and again at login, and assert on it.
 - A step that fails is not kept in the recorded test. If a step fails, fix the cause (e.g. close an overlay, pick another element) and do it again.
 - If you are blocked (CAPTCHA, login you have no credentials for, the site is down), call finish with status "blocked" and explain. If the application does not behave as the scenario expects (a product bug), call finish with status "failed" and describe the bug.
-- When the scenario is fully covered and its expected result is asserted, call finish with status "passed" and a short summary. Keep any text outside tool calls to one short sentence.
+- When the scenario is fully covered and its expected result is asserted, call finish with status "passed" and a short summary. In `evidence` name the assertion steps (by their numbers) that prove the expected result and what each one checks.
+- A person watches you work. Before every tool call write exactly one short sentence in the language of the scenario: which part of the scenario you are on and why this step (e.g. "Логин введён, теперь пароль"). No other text outside tool calls.
 - Tools whose names contain "__" come from the project's connected systems (Jira, Confluence, test management...). They are read-only helpers for context, e.g. to read the requirements of an issue; they are not test steps. Use them only when the scenario needs that information."""
 
 # For weaker models: fewer words, numbered rules; examples come from a skill.
@@ -69,7 +76,8 @@ Rules:
 6. Never pay, place orders, send messages or delete data: stop before it, assert, finish.
 7. Blocked (CAPTCHA, no access): finish with status "blocked". The application behaves wrongly: finish with status "failed".
 8. If a step fails, fix the cause (close a pop-up, pick another element) and try again.
-9. Tools with "__" in the name are read-only helpers of connected systems, not test steps."""
+9. Tools with "__" in the name are read-only helpers of connected systems, not test steps.
+10. Before every tool call write one short sentence in the language of the scenario: what you do and why. In finish, `evidence` lists the assertion steps (numbers) that prove the result."""
 
 LOOK_NOTE = ("\n- You get the page as a list of elements. Call `look` when you need to SEE the page (layout, "
              "images, a result that is only visible). `look` is not a test step.")
@@ -151,9 +159,12 @@ TOOLS = [
     _tool("assert_download", "Assertion: the previous step downloaded a file whose name matches the pattern "
                              "(e.g. 'report*.xlsx') and whose size is at least min_bytes.", {
         "name": {"type": "string"}, "min_bytes": {"type": "integer"}, "description": _DESC}),
-    _tool("finish", "End test authoring.", {
+    _tool("finish", "End test authoring: passed - the scenario is done and its expected result asserted; "
+                    "failed - the application does not behave as the scenario expects; blocked - you cannot go on.", {
         "status": {"type": "string", "enum": ["passed", "failed", "blocked"]},
-        "summary": {"type": "string"}}),
+        "summary": {"type": "string"},
+        "evidence": {"type": "string", "description": "Which assertion steps (numbers) prove the expected result "
+                                                      "and what each checks; for failed/blocked - what you saw."}}),
 ]
 UPLOAD_TOOL = _tool("upload_file", "Choose a file in a file input: one of the project's test files listed in the "
                                    "task.", {"ref": _REF, "file": {"type": "string"}, "description": _DESC})
@@ -234,6 +245,12 @@ def tool_to_step(name: str, inp: dict) -> dict:
     return step
 
 
+def expected_result(scenario: str) -> str:
+    """The expected result stated in a scenario ("Ожидаемый результат: ..." / "Expected result: ..."), or ""."""
+    m = re.search(r"(?:ожидаемый результат|expected result)\s*[:\-—]\s*(.+)", scenario or "", re.I | re.S)
+    return m.group(1).strip()[:500] if m else ""
+
+
 def _origin(url: str) -> str:
     u = urlparse(url or "")
     return f"{u.scheme}://{u.netloc}" if u.netloc else ""
@@ -242,6 +259,71 @@ def _origin(url: str) -> str:
 def project_files(pid: str) -> list[str]:
     """Files of the project for upload_file steps: data/projects/<id>/files/."""
     return sorted(f.name for f in fs.glob(projects.path(pid) / "files", "*") if fs.is_file(f))
+
+
+RESUME_TASK = ("The authoring session was interrupted (the studio restarted) and is being continued. Do not repeat "
+               "the steps above: continue the test scenario from the current page.")
+
+
+# ---------- checkpoints of sessions (survive a restart of the studio) ----------
+
+def _checkpoints(pid: str):
+    return projects.path(pid) / "sessions"
+
+
+def load_checkpoint(pid: str, sid: str) -> dict | None:
+    if not re.fullmatch(r"[0-9a-f]{10}", sid or ""):
+        return None
+    cp = fs.read_json(_checkpoints(pid) / f"{sid}.json")
+    return cp if cp and cp.get("project_id") == pid else None
+
+
+def list_checkpoints(pid: str) -> list[dict]:
+    """Checkpoints of the project's sessions, newest first (live ones too: the caller filters)."""
+    out = []
+    for _, text, updated in fs.documents(_checkpoints(pid)):
+        try:
+            cp = json.loads(text)
+        except ValueError:
+            continue
+        out.append({k: cp.get(k) for k in ("id", "name", "url", "scenario", "status", "test_id", "task_id", "origin",
+                                           "summary", "created")}
+                   | {"updated": cp.get("updated") or updated, "steps": len(recorded_steps(cp.get("steps") or []))})
+    return out
+
+
+def drop_checkpoint(pid: str, sid: str) -> None:
+    fs.unlink(_checkpoints(pid) / f"{sid}.json")
+    vault.delete(projects.secrets_kind(pid), f"session-{sid}")
+
+
+def restored(project: dict, cp: dict) -> "StudioSession":
+    """A session that continues an interrupted one (same id): the recorded steps are replayed,
+    then the agent goes on with the scenario."""
+    creds = vault.load(projects.secrets_kind(project["id"]), f"session-{cp['id']}") if cp.get("own_credentials") \
+        else None
+    account = cp.get("account") or ""
+    if account and not projects.account_exists(project["id"], account):
+        account = ""
+    s = StudioSession(project, cp["name"], cp["url"], cp.get("scenario", ""), headless=cp.get("headless", True),
+                      credentials=creds or projects.account_credentials(project["id"], account),
+                      base_steps=recorded_steps(cp.get("steps") or []), task=RESUME_TASK, account=account,
+                      session_id=cp["id"])
+    s.restored, s.origin = True, cp.get("origin")
+    s.test_id, s.task_id = cp.get("test_id"), cp.get("task_id") or ""
+    s.chat = list(cp.get("chat") or []) + [{"role": "system", "text": "Сессия восстановлена после перезапуска студии: "
+                                            "записанные шаги воспроизводятся в новом браузере, затем агент продолжит."}]
+    s.summary, s.finish_status = cp.get("summary", ""), cp.get("finish_status", "")
+    return s
+
+
+def save_checkpoint(project: dict, cp: dict, status: str = "") -> tuple[dict, list[str]]:
+    """Save an interrupted session's steps as a test without a browser -> (test, warnings)."""
+    s = restored(project, cp)
+    s.steps = copy.deepcopy(cp.get("steps") or [])
+    s.chat = list(cp.get("chat") or [])
+    s.status = cp.get("status") or "idle"
+    return s.save(status)
 
 
 def recorded_steps(steps: list[dict]) -> list[dict]:
@@ -266,8 +348,13 @@ class StudioSession:
 
     def __init__(self, project: dict, name: str, url: str, scenario: str, headless: bool = True,
                  credentials: dict | None = None, engine: str = "", base_steps: list[dict] | None = None,
-                 task: str = "", use_login_state: bool = True):
-        self.id = uuid.uuid4().hex[:10]
+                 task: str = "", use_login_state: bool = True, account: str = "", session_id: str = ""):
+        self.id = session_id or uuid.uuid4().hex[:10]
+        self.created = time.time()
+        self.restored = False               # continues an interrupted session (restored)
+        self.origin: dict | None = None     # {"job": id} for a session of a pipeline run
+        self.task_id = ""                   # project task the test is made for (server.py)
+        self._creds_kept = False
         self.project_id, self.project_name = project["id"], project["name"]
         self.cfg = project["pipeline"]["authoring"]
         self.run_cfg = project["pipeline"]["run"]
@@ -308,8 +395,10 @@ class StudioSession:
         self.use_login_state = use_login_state
         self.logged_in = False
         self.project = project
-        # {"username", "password"} for the app under test; the password never goes to the LLM.
+        # {"username", "password", "totp_secret", "params"} for the app under test: the password and
+        # secret login parameters never go to the LLM. `account`: the project account they come from.
         self.credentials = {k: v for k, v in (credentials or {}).items() if v}
+        self.account = account
         self.autopilot = False
         self.status = "starting"   # starting|thinking|awaiting_approval|executing|idle|done|error
         self.steps: list[dict] = []
@@ -320,6 +409,7 @@ class StudioSession:
         self.notes: list[str] = []          # manual actions to tell the LLM about
         self.summary = ""
         self.finish_status = ""             # passed|failed|blocked from the agent's finish
+        self.finish: dict | None = None     # the agent's finish: status, summary, evidence, assertions
         self.screenshot = ""
         self.page_url = ""
         self.bs: BrowserSession | McpBrowser | None = None
@@ -332,6 +422,8 @@ class StudioSession:
         self.started = None
         self.lock = asyncio.Lock()
         self._auto_task: asyncio.Task | None = None
+        self._llm_task: asyncio.Task | None = None    # the task waiting for the model: Stop cancels it
+        self.max_steps = self.cfg["max_steps"]
 
     # ---------- public API (called from the server) ----------
 
@@ -341,7 +433,8 @@ class StudioSession:
             "name": self.name, "url": self.url, "engine": self.engine, "test_id": self.test_id,
             "scenario": self.scenario, "status": self.status, "autopilot": self.autopilot,
             "steps": self.steps, "chat": self.chat, "summary": self.summary,
-            "finish_status": self.finish_status,
+            "finish_status": self.finish_status, "finish": self.finish, "max_steps": self.max_steps,
+            "expected": expected_result(self.scenario),
             "pending": self.pending and {k: self.pending[k] for k in ("name", "input", "step")},
             "page_url": self.page_url, "has_credentials": bool(self.credentials),
             "usage": self.usage.as_dict(), "traffic": len(getattr(self.bs, "traffic", None) or []),
@@ -367,7 +460,7 @@ class StudioSession:
         t["status"] = "draft"
         if old:
             for key in ("external", "last_run", "priority", "scenario_type", "source", "gherkin_scenario", "tags",
-                        "quarantine", "role", "before", "after", "status", "comments", "review"):
+                        "quarantine", "role", "before", "after", "status", "comments", "review", "account"):
                 if key in old:
                     t[key] = old[key]
         if status in storage.STATUSES:
@@ -377,10 +470,13 @@ class StudioSession:
             if old.get("verify") and [(s["id"], s.get("value")) for s in old["steps"]] == \
                     [(s["id"], s.get("value")) for s in t["steps"]]:
                 t["verify"] = old["verify"]
+        if self.account:
+            t["account"] = self.account
         storage.save(t)
         self.test_id = t["id"]
-        # A login typed for this session (not the project's) stays with the test.
-        if self.credentials and self.credentials != projects.app_credentials(self.project_id):
+        self.checkpoint()
+        # A login typed for this session (not a project account) stays with the test.
+        if self.credentials and not self.account and self.credentials != projects.app_credentials(self.project_id):
             storage.set_own_credentials(t, self.credentials)
         self.save_artifacts(t)
         warnings = []
@@ -432,8 +528,19 @@ class StudioSession:
                 for err in self.toolbox.errors:
                     self._say("system", f"Инструменты подключения недоступны: {err}")
             if self.base_steps:
-                await self._replay()
-                self._say("user", self.task)
+                try:
+                    await self._replay()
+                except ValueError as e:
+                    if not self.restored:
+                        raise
+                    # The steps stay in the session: a person saves, corrects or continues them.
+                    self.steps = copy.deepcopy(self.base_steps)
+                    self.status = "idle"
+                    self._say("system", f"{e}. Записанные шаги сохранены в сессии: их можно сохранить как тест, "
+                                        "исправить или продолжить с текущей страницы («Продолжить ИИ» или вручную).")
+                    return
+                if not self.restored:
+                    self._say("user", self.task)
                 done = "\n".join(f"{i + 1}. [{s['action']}] {s['description']}"
                                  + (f" | value: {s['value']}" if s.get("value") else "")
                                  for i, s in enumerate(self.steps))
@@ -494,8 +601,20 @@ class StudioSession:
     async def resume(self) -> None:
         """Hand control back to the AI (after an error or manual steps)."""
         async with self.lock:
-            await self._think([{"type": "text", "text": "Continue the scenario. Current page state:"}]
+            await self._think([{"type": "text", "text": self._lead() + "Continue the scenario. Current page state:"}]
                               + await self._page_state())
+
+    def _lead(self) -> str:
+        """The context of a conversation that has not started yet (a restored session whose replay
+        stopped): the scenario and the steps recorded so far."""
+        if self.messages:
+            return ""
+        done = "\n".join(f"{i + 1}. [{s['action']}] {s['description']}"
+                         + (f" | value: {s['value']}" if s.get("value") else "")
+                         for i, s in enumerate(recorded_steps(self.steps)))
+        return (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
+                f"{self._credentials_note()}{self._context_note()}The test steps recorded so far:\n{done}\n\n"
+                f"{RESUME_TASK}\n\n")
 
     async def reject(self, feedback: str) -> None:
         async with self.lock:
@@ -518,8 +637,20 @@ class StudioSession:
             return
         async with self.lock:
             self._say("user", text)
-            await self._think([{"type": "text", "text": text + "\n\nCurrent page state:"}]
+            await self._think([{"type": "text", "text": self._lead() + text + "\n\nCurrent page state:"}]
                               + await self._page_state())
+
+    def stop(self) -> None:
+        """Stop generating: Auto-Pilot off and the request to the model in flight cancelled. A browser
+        step being executed finishes (stopping it halfway would leave the page in between); a
+        proposed step stays for the person. "Continue with AI" goes on from here."""
+        self.autopilot = False
+        if self._llm_task and not self._llm_task.done():
+            self._llm_task.cancel()
+        elif self.status == "executing":
+            self._say("system", "Остановлено: текущий шаг доделается, дальше агент не пойдёт.")
+        elif self.status not in ("done", "error"):
+            self._say("system", "Остановлено.")
 
     def set_autopilot(self, on: bool) -> None:
         self.autopilot = on
@@ -600,7 +731,36 @@ class StudioSession:
                 self.screenshot = await self.bs.screenshot_b64()
                 self.page_url = self.bs.url
 
-    async def close(self) -> None:
+    def checkpoint(self) -> None:
+        """The session's progress in the database: after a restart of the studio it is continued
+        (restored) or saved as a test. The LLM conversation is not kept - a restored session replays
+        the steps. Real credentials typed for this session go to the vault, never here."""
+        if self.status == "closed":
+            return
+        own = bool(self.credentials) and not self.account             and self.credentials != projects.app_credentials(self.project_id)
+        chat = self.chat
+        for secret in (self.credentials.get("password"), self.credentials.get("totp_secret")):
+            if secret:
+                chat = [m | {"text": m["text"].replace(secret, "***")} for m in chat]
+        try:
+            if own and not self._creds_kept:
+                vault.save(projects.secrets_kind(self.project_id), f"session-{self.id}", self.credentials)
+                self._creds_kept = True
+            fs.write_json(_checkpoints(self.project_id) / f"{self.id}.json", {
+                "id": self.id, "project_id": self.project_id, "name": self.name, "url": self.url,
+                "scenario": self.scenario, "engine": self.engine, "headless": self.headless,
+                "test_id": self.test_id, "task_id": self.task_id, "origin": self.origin, "account": self.account,
+                "steps": self.steps, "chat": chat[-300:], "summary": self.summary,
+                "finish_status": self.finish_status, "status": self.status, "own_credentials": own,
+                "created": self.created, "updated": time.time()}, indent=None)
+        except Exception as e:      # the checkpoint must not break the session
+            logging.getLogger("testgen.agent").warning("Не удалось сохранить снимок сессии %s: %s", self.id, e)
+
+    async def close(self, discard: bool = False) -> None:
+        """Stop the browser. `discard`: the session is done with (closed by a person, its test
+        saved by the pipeline) - its checkpoint goes too; otherwise it stays for a restore."""
+        if discard:
+            drop_checkpoint(self.project_id, self.id)
         self.autopilot = False
         if self.status != "done":
             self.status = "closed"
@@ -645,23 +805,26 @@ class StudioSession:
             parts.append("password (type {{password}})")
         if self.credentials.get("totp_secret"):
             parts.append("the current one-time 2FA code (type {{totp}})")
+        for p in self.credentials.get("params") or []:
+            parts.append(f"login parameter '{p['name']}' (type {{{{auth.{p['name']}}}}}"
+                         + (")" if p.get("secret") else f", its value is '{p['value']}')"))
         return ("Login credentials for this application are available: " + ", ".join(parts) +
                 ". Log in with them when the scenario or the site requires it.\n\n")
 
     def _mask(self, step: dict) -> None:
         """Recorded steps never contain real credentials, only placeholders."""
-        password, username = self.credentials.get("password"), self.credentials.get("username")
-        for secret, placeholder in ((password, "{{password}}"), (self.credentials.get("totp_secret"), "***")):
-            if secret:
-                step["value"] = (step.get("value") or "").replace(secret, placeholder)
-                step["description"] = step["description"].replace(secret, "***")
-                step["error"] = (step.get("error") or "").replace(secret, "***")
+        username = self.credentials.get("username")
+        for secret, placeholder in testdata.secret_pairs(self.credentials):
+            step["value"] = (step.get("value") or "").replace(secret, placeholder)
+            step["description"] = step["description"].replace(secret, "***")
+            step["error"] = (step.get("error") or "").replace(secret, "***")
         if username and step.get("value") == username:
             step["value"] = "{{username}}"
 
     def _say(self, role: str, text: str) -> None:
         if text:
             self.chat.append({"role": role, "text": text})
+            self.checkpoint()
 
     async def _page_state(self) -> list[dict]:
         text = await self.bs.describe()
@@ -745,6 +908,7 @@ class StudioSession:
                                   "step).")
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
+        self.checkpoint()
 
     async def _run_module(self, step: dict) -> None:
         """use_module while authoring: the module's steps run in place with its parameters."""
@@ -785,6 +949,7 @@ class StudioSession:
                 self.status = "idle"
                 return
             self.status = "thinking"
+            self._llm_task = asyncio.current_task()
             try:
                 # Tools + rules + skills are cached for the whole session; old screenshots
                 # and snapshots are dropped: they are useless once the page moved on.
@@ -800,6 +965,15 @@ class StudioSession:
                 # Put the unsent user turn back in the queue so Retry can resend it.
                 self.unanswered = self.messages.pop()["content"]
                 return
+            except asyncio.CancelledError:
+                # Stop: the turn goes back to the queue, "Continue with AI" sends it again.
+                self.unanswered = self.messages.pop()["content"]
+                self.status, self.autopilot = "idle", False
+                self._say("system", "Генерация остановлена. Можно поправить шаги, подсказать агенту в чате или "
+                                    "нажать «Продолжить с AI».")
+                raise
+            finally:
+                self._llm_task = None
 
             self.messages.append({"role": "assistant", "content": reply.content})
             if reply.stop == "refusal":
@@ -840,6 +1014,9 @@ class StudioSession:
             if name == "finish":
                 if inp.get("status") == "passed" and not has_assertion(self.steps):
                     # A test without a passing assertion is green whatever the app does.
+                    self._say("system", "Агент хотел завершить тест, но в нём ещё нет проверки ожидаемого "
+                                        "результата: тест без проверки зелёный при любом поведении приложения. "
+                                        "Агент добавит проверку.")
                     self.unanswered.append({
                         "type": "tool_result", "tool_use_id": tid, "is_error": True,
                         "content": "Not finished: the test has no passing assertion of the result yet. Add an "
@@ -848,7 +1025,11 @@ class StudioSession:
                     continue
                 self.finish_status = inp.get("status", "")
                 self.summary = f"[{inp.get('status')}] {inp.get('summary', '')}"
-                self._say("agent", self.summary)
+                self.finish = {"status": self.finish_status, "summary": inp.get("summary", ""),
+                               "evidence": inp.get("evidence", ""),
+                               "assertions": [i + 1 for i, st in enumerate(self.steps)
+                                              if st["action"].startswith("assert") and st.get("status") == "passed"]}
+                self._say("agent", self.summary + (f"\nПодтверждение: {inp['evidence']}" if inp.get("evidence") else ""))
                 self.unanswered.append({"type": "tool_result", "tool_use_id": tid,
                                         "content": "Authoring finished."})
                 self.status = "done"
@@ -864,7 +1045,7 @@ class StudioSession:
 
     async def _autopilot_loop(self) -> None:
         n = 0
-        while self.autopilot and n < self.cfg["max_steps"]:
+        while self.autopilot and n < self.max_steps:
             if self.status == "awaiting_approval" and self.pending:
                 await self.approve()
                 n += 1
@@ -872,4 +1053,8 @@ class StudioSession:
                 break
             else:
                 await asyncio.sleep(0.3)
+        if self.autopilot and n >= self.max_steps and self.status != "done":
+            self._say("system", f"Auto-Pilot остановлен: достигнут лимит шагов ({self.max_steps}, «Проект → Процесс "
+                                "генерации»). Агент не завершил сценарий — продолжите с подтверждением шагов или "
+                                "включите Auto-Pilot снова.")
         self.autopilot = False

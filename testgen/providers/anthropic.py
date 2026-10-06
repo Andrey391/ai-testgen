@@ -64,6 +64,19 @@ def is_error(e: Exception) -> bool:
     return isinstance(e, anthropic.APIError) or (isinstance(e, TypeError) and "authentication" in str(e))
 
 
+def _context_editing_failed(e: Exception) -> bool:
+    """A gateway (e.g. LiteLLM) took context_management but failed on it - its polyfill does not
+    know image blocks - instead of answering that the feature is unsupported."""
+    if not isinstance(e, anthropic.APIStatusError):
+        return False
+    text = f"{getattr(e, 'message', '')} {getattr(e, 'body', '')}".lower()
+    return any(k in text for k in ("context_management", "context-management", CLEAR_TOOL_USES))
+
+
+# Connections (API address, model) where context editing failed: the studio cuts old screenshots itself.
+NO_CONTEXT_EDITING: set[tuple[str, str]] = set()
+
+
 class AnthropicProvider:
     def __init__(self, client, features: set[str]):
         self._client = client
@@ -71,6 +84,9 @@ class AnthropicProvider:
 
     def client(self):
         return self._client
+
+    def _key(self, model: str) -> tuple[str, str]:
+        return str(getattr(self._client, "base_url", "")), model
 
     def _params(self, req: Request) -> tuple[dict, list[str]]:
         cache = req.cache and "cache" in self.features
@@ -94,7 +110,7 @@ class AnthropicProvider:
             p["tools"] = req.tools
             p["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": req.one_tool}
         if req.keep_images:
-            if "context_editing" in self.features:
+            if "context_editing" in self.features and self._key(req.model) not in NO_CONTEXT_EDITING:
                 betas.append(CONTEXT_BETA)
                 # Old screenshots/snapshots are useless once the page moved on.
                 p["context_management"] = {"edits": [{
@@ -120,15 +136,26 @@ class AnthropicProvider:
                                       getattr(u, "cache_read_input_tokens", 0)),
                      parsed=getattr(resp, "parsed_output", None))
 
-    async def chat(self, req: Request) -> Reply:
+    async def _send(self, req: Request, call) -> Reply:
         p, betas = self._params(req)
         try:
-            resp = await self.client().beta.messages.create(**p, **({"betas": betas} if betas else {}))
+            try:
+                resp = await call(p, betas)
+            except anthropic.APIStatusError as e:
+                if "context_management" not in p or not _context_editing_failed(e):
+                    raise
+                NO_CONTEXT_EDITING.add(self._key(req.model))
+                p, betas = self._params(req)          # now without context editing
+                resp = await call(p, betas)
         except Exception as e:
             if is_error(e):
                 raise ProviderError(error_text(e), status=getattr(e, "status_code", None)) from e
             raise
         return self._reply(resp)
+
+    async def chat(self, req: Request) -> Reply:
+        return await self._send(req, lambda p, betas: self.client().beta.messages.create(
+            **p, **({"betas": betas} if betas else {})))
 
     @property
     def structured(self) -> bool:
@@ -136,12 +163,5 @@ class AnthropicProvider:
 
     async def parse(self, req: Request, schema) -> Reply:
         """Server-side structured output; the caller falls back to the prompt when it is off."""
-        p, betas = self._params(req)
-        try:
-            resp = await self.client().beta.messages.parse(**p, output_format=schema,
-                                                           **({"betas": betas} if betas else {}))
-        except Exception as e:
-            if is_error(e):
-                raise ProviderError(error_text(e), status=getattr(e, "status_code", None)) from e
-            raise
-        return self._reply(resp)
+        return await self._send(req, lambda p, betas: self.client().beta.messages.parse(
+            **p, output_format=schema, **({"betas": betas} if betas else {})))

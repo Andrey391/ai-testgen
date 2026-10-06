@@ -11,7 +11,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from helpers import arun
-from testgen import auth, fs, mcp_server, pipeline, projects, runs, storage, suite, tasks
+from testgen import analyses, auth, fs, mcp_server, pipeline, projects, runs, storage, suite, tasks
 from testgen.steps import new_step
 
 BASE = "http://127.0.0.1:8765"
@@ -54,22 +54,23 @@ def _resources(studio) -> dict:
     job_id = "ab" * 5
     fs.write_json(pipeline._jobs_dir(p["id"]) / f"{job_id}.json",
                   {"id": job_id, "project_id": p["id"], "status": "done", "created": 0, "items": []})
+    an = analyses.create(p["id"], "Требования А")
     sid = "sess-" + p["id"]
     studio.server.SESSIONS[sid] = types.SimpleNamespace(project=p, id=sid)
     return {"pid": p["id"], "test": t["id"], "task": task["id"], "run": run["id"], "suite": s["id"], "job": job_id,
-            "session": sid}
+            "session": sid, "analysis": an["id"]}
 
 
 def _url(path: str, ids: dict) -> str:
     kinds = {"/api/tasks/": "task", "/api/suites/": "suite", "/api/sessions/": "session", "/api/runs/": "run",
-             "/api/jobs/": "job", "/api/tests/": "test"}
+             "/api/jobs/": "job", "/api/tests/": "test", "/api/analyses/": "analysis"}
     first = next((ids[k] for prefix, k in kinds.items() if path.startswith(prefix)), None)
 
     def value(m: re.Match) -> str:
         name = m.group(1)
         if name == "pid":
             return ids["pid"]
-        if name in ("tid", "rid", "sid", "jid") and first:
+        if name in ("tid", "rid", "sid", "jid", "aid") and first:
             return first
         return "1" if name in ("n", "index") else "x"
     return re.sub(r"\{(\w+)\}", value, path)

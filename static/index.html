@@ -73,6 +73,10 @@ button:disabled{opacity:.5;cursor:default}
 .badge.bad{background:none;border:1px solid var(--bad);color:var(--bad)}
 .badge.warn{background:none;border:1px solid var(--warn);color:var(--warn)}
 .badge.off{background:none;border:1px solid var(--line);color:var(--muted)}
+.acc-param{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;gap:6px;align-items:center;margin-top:6px}
+.acc-param input[type=text],.acc-param input[type=password]{margin:0}
+#credDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:520px;width:calc(100% - 32px)}
+#credDlg::backdrop{background:rgba(0,0,0,.35)}
 .st-passed{border-left:3px solid var(--ok)}
 .st-failed{border-left:3px solid var(--bad)}
 .err{color:var(--bad);font-size:12px}
@@ -82,6 +86,48 @@ th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-a
 th{font-size:12px;color:var(--muted);font-weight:500}
 tr.click{cursor:pointer}
 tr.click:hover td{background:var(--bg)}
+.live-log{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;height:calc(5 * 1.5em + 16px);overflow:hidden;margin-top:8px}
+.live-log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:slidein .25s ease-out}
+.live-log div:nth-last-child(n+3){opacity:.55}
+.live-log .t{color:var(--muted);margin-right:8px}
+@keyframes slidein{from{opacity:0;transform:translateY(6px)}}
+.pbar{height:6px;background:var(--soft);border-radius:3px;overflow:hidden;margin-top:8px}
+.pbar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
+.card.pending{opacity:.65;border-style:dashed}
+.genbox{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px;background:var(--bg)}
+.genbox .now{font-weight:600}
+.genbox ul{list-style:none;padding:0;margin:6px 0 0}
+.genbox li{display:flex;gap:6px;align-items:baseline;margin:2px 0}
+.genbox li .ck{width:16px;text-align:center;color:var(--muted)}
+.genbox li.ok .ck{color:var(--ok)}
+.genbox li.bad .ck{color:var(--bad)}
+.genbox .goal{color:var(--muted);margin-top:4px}
+.finish{border-radius:8px;padding:8px 10px;margin:6px 0;border:1px solid var(--line)}
+.finish.passed{border-color:var(--ok)}
+.finish.failed{border-color:var(--bad)}
+.finish.blocked{border-color:var(--warn)}
+.step.evidence{box-shadow:inset 3px 0 0 var(--ok)}
+details.an{border:1px solid var(--line);border-radius:8px;margin-top:8px;background:var(--panel)}
+details.an[open]{border-color:var(--accent)}
+details.an>summary{list-style:none;cursor:pointer;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+details.an>summary::-webkit-details-marker{display:none}
+details.an>summary .arrow{color:var(--muted);transition:transform .15s;display:inline-block}
+details.an[open]>summary .arrow{transform:rotate(90deg)}
+details.an>summary .an-title{font-weight:600;flex:1;min-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.an>.an-body{padding:0 12px 12px}
+.sc-tests{margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.sc-tests a{font-size:12px}
+.scen-list tr.sc-row{cursor:pointer}
+.scen-list tr.sc-row:hover td{background:var(--soft)}
+.scen-list tr.sc-row.open td{background:var(--soft);border-bottom-color:transparent}
+.scen-list tr.sc-row.pending{cursor:default;opacity:.65}
+.scen-list tr.sc-row.fresh td{animation:slidein .3s ease-out}
+.scen-list td.num{color:var(--muted);width:28px}
+.scen-list td.chk,.scen-list th.chk{width:24px}
+.scen-list .sc-title{font-weight:600}
+.scen-list tr.sc-edit td{background:var(--soft);padding:4px 12px 14px}
+.scen-list tr.sc-edit textarea.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+.card.fresh{animation:slidein .3s ease-out}
 .scen{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin-top:14px}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;font-size:12px;margin:6px 0}
 .runlog{margin-top:10px}
@@ -314,6 +360,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <label>URL приложения</label><input id="fUrl" placeholder="https://staging.example.com">
     <label>Название теста</label><input id="fName" placeholder="Покупка товара">
     <div class="hint hidden" id="fTask"></div>
+    <div class="hint hidden" id="fScen"></div>
     <label>Сценарий</label>
     <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
     <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div>
@@ -327,6 +374,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     </div>
     <details class="opt">
       <summary>Учётные данные для входа в приложение (по умолчанию — из настроек проекта)</summary>
+      <label>Учётная запись проекта</label><select id="fAccount"></select>
+      <div class="hint">Или введите логин и пароль только для этого теста — тогда учётная запись не используется.</div>
       <div class="row">
         <div class="grow"><label>Логин</label><input id="fLogin" autocomplete="off"></div>
         <div class="grow"><label>Пароль</label><input id="fPass" type="password" autocomplete="new-password"></div>
@@ -342,16 +391,27 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     </div>
   </div>
 
+  <div id="resumeBox" class="card start hidden">
+    <h3 style="margin-top:0">Прерванные сессии</h3>
+    <div class="hint">Студия перезапускалась, пока шла генерация. Шаги сохраняются после каждого действия: сессию можно продолжить (шаги воспроизведутся в новом браузере, затем агент продолжит сценарий) или сразу сохранить записанные шаги как тест.</div>
+    <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Изменена</th><th></th></tr></thead>
+      <tbody id="resumeBody"></tbody></table>
+  </div>
+
   <div id="workspace" class="studio hidden">
     <div class="card col">
       <div class="row"><b id="wsTitle" class="grow"></b>
         <label class="inline"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
+        <button class="btn small danger hidden" id="stopBtn" title="Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
       </div>
       <div class="status"><span class="dot" id="stDot"></span><span id="stText"></span></div>
+      <div class="genbox" id="genBox"></div>
+      <div class="finish hidden" id="finishBox"></div>
       <div class="chat" id="chat"></div>
       <div id="pendingBox" class="pending hidden">
         <div class="muted" style="font-size:12px">Агент предлагает шаг:</div>
         <div id="pendingText" style="margin:4px 0 8px"></div>
+        <div id="pendingWhy" class="hint" style="margin:-4px 0 8px"></div>
         <div class="row">
           <button class="btn primary" id="contBtn">Continue</button>
           <button class="btn" id="rejBtn">Отклонить</button>
@@ -560,8 +620,18 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <button class="btn" id="reqToPipe">В конвейер →</button>
       <button class="btn primary" id="reqBtn">Сгенерировать сценарии</button></div>
   </div>
-  <div id="reqAssume" class="muted" style="margin-top:12px"></div>
-  <div class="scen" id="scenList"></div>
+  <div id="reqLive" class="card hidden" style="margin-top:12px">
+    <div class="row"><span class="dot run" id="reqDot"></span><b class="grow" id="reqStage">Анализ требований…</b>
+      <span class="muted" id="reqTimer">0 с</span>
+      <button class="btn small" id="reqStop">Остановить</button></div>
+    <div class="pbar"><i id="reqBar"></i></div>
+    <div class="live-log" id="reqLog" aria-live="polite"></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div class="row"><h3 class="grow" style="margin:0">История анализа требований</h3><span class="muted" id="anCount"></span></div>
+    <div class="hint">Каждая генерация сценариев сохраняется здесь вместе с требованиями. Раскройте анализ, чтобы посмотреть и изменить сценарии (изменения сохраняются сразу) и сгенерировать по ним тесты; под каждым сценарием — тесты, созданные по нему.</div>
+    <div id="anList"></div>
+  </div>
 </section>
 
 <!-- ============ PIPELINE ============ -->
@@ -625,17 +695,33 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <button class="btn primary" id="pSave">Сохранить</button></div>
         </div>
         <div class="card">
-          <h3>Учётные данные тестируемого приложения</h3>
-          <div class="muted">Используются по умолчанию при генерации и прогонах тестов проекта. Агент видит только <code>{{username}}</code>/<code>{{password}}</code>; пароль хранится на сервере и не попадает в модель, шаги и экспорт.</div>
-          <div class="row">
-            <div class="grow"><label>Логин</label><input id="pLogin" autocomplete="off"></div>
-            <div class="grow"><label>Пароль</label><input id="pPass" type="password" autocomplete="new-password"></div>
-            <div class="grow"><label>Секрет 2FA (TOTP, base32)</label><input id="pTotp" type="password" autocomplete="off"></div>
+          <h3>Учётные записи тестируемого приложения</h3>
+          <div class="muted">Сколько угодно учётных записей (администратор, покупатель, менеджер…). Тест и сессия Studio входят под выбранной записью, без выбора — под записью по умолчанию. Агент видит только плейсхолдеры <code>{{username}}</code>, <code>{{password}}</code>, <code>{{totp}}</code> и <code>{{auth.имя}}</code>; секреты хранятся на сервере зашифрованными и не попадают в модель, шаги, trace и экспорт.</div>
+          <table style="margin-top:8px"><thead><tr><th>Название</th><th>Логин</th><th>Вход</th><th></th></tr></thead>
+            <tbody id="accList"></tbody></table>
+          <div class="row" style="margin-top:8px"><span class="muted grow" id="pcMsg"></span>
+            <button class="btn" id="accAdd">+ Учётная запись</button></div>
+          <div id="accForm" class="hidden" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+            <h4 id="accFormTitle" style="margin:0 0 6px">Новая учётная запись</h4>
+            <div class="row">
+              <div class="grow"><label>Название</label><input id="accName" placeholder="Администратор" maxlength="120" autocomplete="off"></div>
+              <div class="grow"><label>Логин</label><input id="pLogin" autocomplete="off"></div>
+              <div class="grow"><label>Пароль</label><input id="pPass" type="password" autocomplete="new-password"></div>
+            </div>
+            <label>Секрет 2FA (TOTP, base32)</label>
+            <div class="row"><input id="pTotp" type="password" autocomplete="off" class="grow">
+              <button class="btn small" id="pcTotpClear">Удалить секрет 2FA</button></div>
+            <div class="hint">Секрет из QR-кода приложения-аутентификатора: агент вводит одноразовый код как <code>{{totp}}</code>, код вычисляется в момент шага (в экспорте — <code>TESTGEN_TOTP_SECRET</code>).</div>
+            <label style="margin-top:10px">Параметры авторизации</label>
+            <div class="hint">Всё, что ещё нужно для входа: OTP-код тестового стенда, PIN, организация, телефон… Агент вводит значение как <code>{{auth.имя}}</code>. Секретный параметр, как пароль, не показывается модели и маскируется в шагах, trace и трафике; в экспорте — переменная <code>TESTGEN_AUTH_ИМЯ</code>.</div>
+            <div id="accParams"></div>
+            <button class="btn small" id="accParamAdd" style="margin-top:6px">+ Параметр</button>
+            <div class="row" style="margin-top:10px">
+              <label class="inline"><input type="checkbox" id="accDefault"> По умолчанию для проекта</label>
+              <span class="grow"></span>
+              <button class="btn" id="accCancel">Отмена</button>
+              <button class="btn primary" id="pcSave">Сохранить</button></div>
           </div>
-          <div class="hint">Секрет из QR-кода приложения-аутентификатора. Агент вводит одноразовый код как <code>{{totp}}</code>: код вычисляется в момент шага, секрет не попадает в модель, шаги, trace и экспорт (в экспорте — <code>TESTGEN_TOTP_SECRET</code>).</div>
-          <div class="row" style="margin-top:10px"><span class="muted grow" id="pcMsg"></span>
-            <button class="btn" id="pcTotpClear">Удалить секрет 2FA</button>
-            <button class="btn primary" id="pcSave">Сохранить</button></div>
         </div>
         <div class="card">
           <h3>Тестовый почтовый ящик</h3>
@@ -986,12 +1072,30 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
 <datalist id="llmModels"></datalist>
 
+<dialog id="credDlg">
+  <h3 style="margin-top:0">Учётная запись теста</h3>
+  <label>Учётная запись проекта</label><select id="cdAccount"></select>
+  <label class="inline" style="margin-top:10px"><input type="checkbox" id="cdOwn"> Свой логин и пароль только для этого теста</label>
+  <div id="cdOwnBox" class="row">
+    <div class="grow"><label>Логин</label><input id="cdLogin" autocomplete="off"></div>
+    <div class="grow"><label>Пароль</label><input id="cdPass" type="password" autocomplete="new-password"></div>
+  </div>
+  <div class="row" style="margin-top:12px"><span class="err grow" id="cdErr"></span>
+    <button class="btn" onclick="$('#credDlg').close()">Отмена</button>
+    <button class="btn primary" id="cdSave">Сохранить</button></div>
+</dialog>
 <script>
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const api = async (method, url, body) => {
-  const r = await fetch(url, {method, headers: {'Content-Type': 'application/json'},
-                              body: body ? JSON.stringify(body) : undefined});
+  let r;
+  try {
+    r = await fetch(url, {method, headers: {'Content-Type': 'application/json'},
+                          body: body ? JSON.stringify(body) : undefined});
+  } catch {
+    throw new Error('Сервер студии не отвечает: он остановлен или перезапущен. Сессии Studio хранятся в памяти ' +
+                    'сервера — после перезапуска несохранённые шаги пропадают. Запустите студию и обновите страницу.');
+  }
   if (r.status === 401 && !url.startsWith('/api/auth/')) { showLogin(); throw new Error('Требуется вход'); }
   if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
   return r.status === 204 ? null : r.json();
@@ -1088,9 +1192,12 @@ async function switchProject(pid) {
   if (!$('#fUrl').value || $('#fUrl').dataset.auto) { $('#fUrl').value = PROJ.base_url; $('#fUrl').dataset.auto = '1'; }
   $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
   $('#fLogin').placeholder = PROJ.app_username || '';
+  fillAccountSelect($('#fAccount'), '');
   api('GET', `/api/tests?project_id=${pid}`).then(ts => $('#fFreshBox').classList.toggle('hidden',
     !(PROJ.pipeline.run.login_once && ts.some(t => t.role === 'login')))).catch(() => {});
   $('#pipeUrl').placeholder = PROJ.base_url || 'https://…';
+  AN = null; SCEN = [];
+  if ($('nav button.on')?.dataset.tab === 'req') loadAnalyses();
   const tab = $('nav button.on').dataset.tab;
   if (tab === 'home' && WIZ && WIZ.pid !== pid) showHomeList();
   else if (tab === 'home' && !WIZ) renderHome();
@@ -1099,6 +1206,7 @@ async function switchProject(pid) {
   if (tab === 'tasks') { closeTask(); loadTasks(); }
   if (tab === 'pipe') loadPipe();
   if (tab === 'proj') loadSettings();
+  if (tab === 'studio') loadInterrupted();
   setStudioTask(null);
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
@@ -1112,9 +1220,11 @@ function showTab(t) {
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   ['home', 'studio', 'tests', 'dash', 'tasks', 'req', 'pipe', 'proj'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
   if (t === 'home') showHomeList();
+  if (t === 'studio') loadInterrupted();
   if (t === 'tests') loadTests();
   if (t === 'dash') loadDash();
   if (t === 'tasks') loadTasks();
+  if (t === 'req') loadAnalyses();
   if (t === 'pipe') loadPipe();
   if (t === 'proj') loadSettings();
 }
@@ -1132,16 +1242,17 @@ $('#startBtn').onclick = async () => {
   try {
     const r = await api('POST', '/api/sessions', {project_id: PID, url, scenario,
       name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
-      engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value,
-      task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked});
-    setStudioTask(null);
+      engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value, account: $('#fAccount').value,
+      task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked,
+      analysis_id: STUDIO_SCEN?.analysis_id || '', scenario_id: STUDIO_SCEN?.scenario_id || ''});
+    setStudioTask(null); setStudioScen(null);
     openSession(r.id);
   } catch (e) { alert(e.message) } finally { $('#startBtn').disabled = false; }
 };
 
 function openSession(sid) {
   SID = sid; TEST_ID = null; STATE = null;
-  $('#startForm').classList.add('hidden'); $('#workspace').classList.remove('hidden');
+  $('#startForm').classList.add('hidden'); $('#resumeBox').classList.add('hidden'); $('#workspace').classList.remove('hidden');
   $('#savedBar').classList.add('hidden');
   $('#chat').innerHTML = $('#steps').innerHTML = ''; $('#shot').removeAttribute('src');
   showTab('studio');
@@ -1152,8 +1263,46 @@ async function poll() {
   clearTimeout(pollTimer);
   if (!SID) return;
   try { STATE = await api('GET', `/api/sessions/${SID}`); render(); refreshShot(); }
-  catch (e) { if (/not found/i.test(e.message)) { closeWorkspace(); return; } }
+  catch (e) { if (/not found/i.test(e.message)) { sessionLost(SID); return; } }
   pollTimer = setTimeout(poll, 900);
+}
+
+// The studio restarted under an open session: its checkpoint can be continued or saved.
+async function sessionLost(sid) {
+  closeWorkspace();
+  const cps = await api('GET', `/api/projects/${PID}/sessions`).catch(() => []);
+  const cp = cps.find(c => c.id === sid);
+  if (cp && confirm(`Студия была перезапущена, сессия «${cp.name}» прервалась. Записано шагов: ${cp.steps}.\n\nПродолжить её? Шаги воспроизведутся в новом браузере, затем агент продолжит сценарий. «Отмена» — сессия останется в списке «Прерванные сессии».`))
+    restoreSession(sid);
+}
+async function loadInterrupted() {
+  if (!PID) return;
+  const cps = await api('GET', `/api/projects/${PID}/sessions`).catch(() => []);
+  $('#resumeBox').classList.toggle('hidden', !cps.length || !!SID);
+  $('#resumeBody').innerHTML = cps.map(c => `<tr>
+    <td><b>${esc(c.name)}</b>${c.origin?.job ? ' <span class="badge">конвейер</span>' : ''}${c.test_id ? ' <span class="badge ok">тест сохранён</span>' : ''}
+      <div class="hint">${esc((c.scenario || '').slice(0, 160))}</div></td>
+    <td>${c.steps}</td><td>${fmtTime(c.updated)}</td>
+    <td style="white-space:nowrap"><button class="btn primary small" onclick="restoreSession('${c.id}')">Продолжить</button>
+      <button class="btn small" onclick="saveInterrupted('${c.id}', this)" ${c.steps ? '' : 'disabled'}>Сохранить как тест</button>
+      <button class="btn small danger" onclick="discardInterrupted('${c.id}')">Удалить</button></td></tr>`).join('');
+}
+async function restoreSession(sid) {
+  try { await api('POST', `/api/projects/${PID}/sessions/${sid}/restore`, {}); openSession(sid); }
+  catch (e) { alert(e.message); }
+}
+async function saveInterrupted(sid, btn) {
+  btn.disabled = true;
+  try {
+    const t = await api('POST', `/api/projects/${PID}/sessions/${sid}/save`, {});
+    alert(`Тест «${t.name}» сохранён как черновик (шагов: ${t.steps.length}).` + (t.warnings?.length ? '\n\n' + t.warnings.join('\n') : ''));
+    loadInterrupted();
+  } catch (e) { alert(e.message); } finally { btn.disabled = false; }
+}
+async function discardInterrupted(sid) {
+  if (!confirm('Удалить прерванную сессию? Несохранённые шаги пропадут.')) return;
+  try { await api('DELETE', `/api/projects/${PID}/sessions/${sid}`); } catch (e) { alert(e.message); }
+  loadInterrupted();
 }
 
 function refreshShot() {
@@ -1192,10 +1341,59 @@ function render() {
   $('#pendingBox').classList.toggle('hidden', !p || s.autopilot);
   if (p) $('#pendingText').innerHTML = `<span class="badge">${esc(p.name)}</span>${esc(p.step.description)}` +
       (p.step.value ? ` <span class="muted">(${esc(p.step.value)})</span>` : '');
+  const why = [...s.chat].reverse().find(m => m.role === 'agent');
+  $('#pendingWhy').textContent = p && why ? `Зачем: ${why.text}` : '';
+  $('#stopBtn').classList.toggle('hidden', !(busy || s.autopilot));
+  renderProgress(s);
   $('#resumeBtn').classList.toggle('hidden', !(['idle', 'error'].includes(s.status)) || s.autopilot);
 
   if (!editing) renderSteps(s.steps);
 }
+
+// What the agent is doing now and when the test counts as finished: the scenario is walked through,
+// its expected result is asserted (a passing assert_* step) and the agent calls "finish".
+const FINISH_TEXT = {passed: ['Тест готов', 'сценарий пройден, ожидаемый результат проверен'],
+  failed: ['Похоже на дефект', 'приложение ведёт себя не так, как ожидает сценарий'],
+  blocked: ['Агент не смог продолжить', 'например, CAPTCHA, нет доступа или стенд недоступен']};
+function renderProgress(s) {
+  const done = s.steps.filter(st => st.status === 'passed');
+  const asserts = done.filter(st => st.action.startsWith('assert'));
+  const n = done.length;
+  const now = {starting: 'Запускает браузер и открывает приложение…',
+    thinking: `Выбирает следующий шаг (${n + 1}-й) по сценарию…`,
+    executing: 'Выполняет шаг в браузере…',
+    awaiting_approval: s.autopilot ? 'Выполняет предложенный шаг…' : 'Ждёт вашего решения: Continue — выполнить шаг, «Отклонить» — подсказать другой',
+    idle: 'Ждёт вас: подскажите агенту в чате, добавьте шаг или нажмите «Продолжить с AI»',
+    done: 'Генерация завершена — проверьте шаги и сохраните тест',
+    error: 'Ошибка — см. сообщение в чате; можно «Продолжить с AI»',
+    closed: 'Сессия закрыта'}[s.status] || s.status;
+  const f = s.finish;
+  const item = (cls, text) => `<li class="${cls}"><span class="ck">${cls === 'ok' ? '✓' : cls === 'bad' ? '✕' : '○'}</span><span>${text}</span></li>`;
+  $('#genBox').innerHTML = `<div><span class="muted">Сейчас:</span> <span class="now">${esc(now)}</span>
+      ${s.autopilot ? `<span class="muted"> · Auto-Pilot: до ${s.max_steps} шагов</span>` : ''}</div>
+    <div class="goal">Цель: ${s.expected ? esc(s.expected) : 'ожидаемый результат сценария'}</div>
+    <div class="muted" style="margin-top:6px">Тест будет готов, когда:</div>
+    <ul>
+      ${item(n ? 'ok' : '', `агент пройдёт сценарий в браузере — выполнено шагов: ${n}`)}
+      ${item(asserts.length ? 'ok' : '', `ожидаемый результат проверен шагом-проверкой (assert) — проверок: ${asserts.length}` +
+        (asserts.length ? '' : ' <span class="muted">(без проверки агенту не дадут завершить: такой тест зелёный при любом поведении приложения)</span>'))}
+      ${item(f ? (f.status === 'passed' ? 'ok' : 'bad') : '', f ? `агент завершил: ${esc(FINISH_TEXT[f.status]?.[0] || f.status)}` : 'агент подтвердит завершение (сам решает, что сценарий пройден целиком)')}
+    </ul>`;
+  const box = $('#finishBox');
+  box.classList.toggle('hidden', !f);
+  if (f) {
+    const [title, hint] = FINISH_TEXT[f.status] || [f.status, ''];
+    box.className = `finish ${f.status}`;
+    box.innerHTML = `<b>${esc(title)}</b> <span class="muted">— ${esc(hint)}</span>
+      ${f.summary ? `<div style="margin-top:4px">${esc(f.summary)}</div>` : ''}
+      ${f.evidence ? `<div style="margin-top:4px"><span class="muted">Чем подтверждено:</span> ${esc(f.evidence)}</div>` : ''}
+      ${f.assertions?.length ? `<div class="hint">Проверки в тесте: шаги ${f.assertions.join(', ')} (отмечены зелёным слева)</div>` : ''}
+      <div class="hint">Дальше: просмотрите шаги, при необходимости поправьте их и нажмите «Сохранить тест».</div>`;
+  }
+}
+$('#stopBtn').onclick = async () => {
+  try { await api('POST', `/api/sessions/${SID}/stop`); } catch (e) { alert(e.message); }
+};
 
 function candText(c) { return c.kind === 'role' ? `role=${c.role}[name="${c.name}"]` : `${c.kind}=${c.value}`; }
 function locText(l) { return l && l.length ? candText(l[0]) : ''; }
@@ -1211,7 +1409,7 @@ function usageText(u) {
 function renderSteps(steps) {
   $('#stepCount').textContent = steps.length ? `(${steps.length})` : '';
   $('#steps').innerHTML = steps.map((st, i) => `
-    <div class="step st-${st.status}" data-i="${i}">
+    <div class="step st-${st.status}${(STATE?.finish?.assertions || []).includes(i + 1) ? ' evidence' : ''}" data-i="${i}">
       <div class="n">${i + 1}</div>
       <div>
         <span class="badge ${st.action.startsWith('assert') ? 'assert' : ''}">${esc(st.action)}</span>
@@ -1360,6 +1558,7 @@ $('#readyBtn').onclick = async () => {
 function closeWorkspace() {
   SID = null; clearTimeout(pollTimer);
   $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
+  loadInterrupted();
 }
 $('#newBtn').onclick = async () => {
   if (!confirm('Закрыть текущую сессию? Несохранённые шаги пропадут.')) return;
@@ -1434,7 +1633,7 @@ async function loadTests() {
           ${t.role !== 'module' ? `<button onclick="setRole('${t.id}', 'module')" title="Другие тесты смогут вызывать его одним шагом; самолечение чинит модуль один раз">Сделать модулем</button>` : ''}
           ${t.role ? `<button onclick="setRole('${t.id}', '')">Сделать обычным тестом</button>` : ''}
           ${(PROJ.pipeline.run.browsers || []).concat(PROJ.pipeline.run.devices || []).length > 1 ? (PROJ.pipeline.run.browsers || []).map(b => `<button onclick="runTest('${t.id}', '${b}')">Запустить в ${esc(b)}</button>`).join('') : ''}
-          <button onclick="editCreds('${t.id}')">Свой логин и пароль для теста</button>
+          <button onclick="editCreds('${t.id}')">Учётная запись теста${t.account ? ': ' + esc(accountName(t.account)) : ''}</button>
           <button onclick="delTest('${t.id}')" style="color:var(--bad)">Удалить</button>
         </div></details></td></tr>`;
   }).join('') || `<tr><td colspan="6" class="muted">${tag ? 'Нет тестов с этим тегом.' : 'В проекте пока нет тестов. Создайте тест в Studio или запустите конвейер.'}</td></tr>`;
@@ -1472,13 +1671,36 @@ async function publishTest(id, btn) {
   } catch (e) { alert(e.message); }
   loadTests();
 }
+function accountName(id) { return ((PROJ.accounts || []).find(a => a.id === id) || {}).name || 'удалена — по умолчанию'; }
+function fillAccountSelect(sel, value) {
+  const accs = PROJ.accounts || [];
+  sel.innerHTML = `<option value="">${accs.length ? 'По умолчанию' + (accs.find(a => a.default) ? ` (${esc(accs.find(a => a.default).name)})` : '') : 'Учётных записей нет — добавьте в «Проект»'}</option>` +
+    accs.filter(a => !a.default).map(a => `<option value="${esc(a.id)}">${esc(a.name)}${a.username ? ' — ' + esc(a.username) : ''}</option>`).join('');
+  sel.value = accs.some(a => a.id === value && !a.default) ? value : '';
+}
 async function editCreds(id) {
   const c = await api('GET', `/api/tests/${id}/credentials`);
-  const username = prompt('Логин для этого теста (пусто — логин проекта):', c.username);
-  if (username === null) return;
-  const password = prompt(c.has_password ? 'Новый пароль (пусто — оставить сохранённый):' : 'Пароль (пусто — пароль проекта):', '');
-  if (password === null) return;
-  await api('PUT', `/api/tests/${id}/credentials`, {username, password});
+  const dlg = $('#credDlg');
+  fillAccountSelect($('#cdAccount'), c.account);
+  if (c.account && (PROJ.accounts || []).some(a => a.id === c.account && a.default)) $('#cdAccount').value = '';
+  $('#cdOwn').checked = !!(c.username || c.has_password);
+  $('#cdLogin').value = c.username; $('#cdPass').value = '';
+  $('#cdPass').placeholder = c.has_password ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#cdErr').textContent = '';
+  const sync = () => { $('#cdOwnBox').classList.toggle('hidden', !$('#cdOwn').checked); $('#cdAccount').disabled = $('#cdOwn').checked; };
+  $('#cdOwn').onchange = sync; sync();
+  $('#cdSave').onclick = async () => {
+    try {
+      if ($('#cdOwn').checked)
+        await api('PUT', `/api/tests/${id}/credentials`, {account: '', username: $('#cdLogin').value, password: $('#cdPass').value});
+      else if ($('#cdAccount').value)
+        await api('PUT', `/api/tests/${id}/credentials`, {account: $('#cdAccount').value});
+      else   // the default account: no own login
+        await api('PUT', `/api/tests/${id}/credentials`, {account: '', username: '', password: ''});
+      dlg.close(); loadTests();
+    } catch (e) { $('#cdErr').textContent = e.message; }
+  };
+  dlg.showModal();
 }
 async function delTest(id) {
   if (!confirm('Удалить тест вместе с историей прогонов, эталонами и записанным трафиком?')) return;
@@ -2025,33 +2247,347 @@ $('#exploreBtn').onclick = async () => {
 };
 
 // ---- requirements -> scenarios
-let SCEN = [];
+// Generation streams its intermediate results (NDJSON): the plan of titles appears first as
+// placeholder cards, each detailed batch fills them in, the last 5 lines of the log show what is going on.
+// The history of analyses: one is open at a time (AN, its scenarios in SCEN); a scenario is edited in place
+// and saved at once; "Generate all" runs the pipeline with its scenarios, the tests made show under each.
+let ANALYSES = [], AN = null, SCEN = [], SCEN_OPEN = new Set(), REQ_ABORT = null, STUDIO_SCEN = null;
+const LOG_LINES = 5;
+const SC_TYPES = {positive: 'позитивный', negative: 'негативный', edge: 'крайний случай', boundary: 'граничные значения',
+  accessibility: 'доступность', security: 'безопасность'};
+const SC_PRIOS = {high: 'высокий', medium: 'средний', low: 'низкий'};
+const SC_FIELDS = ['title', 'type', 'priority', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
+const AN_STATUS = {running: ['генерация…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
+const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
+const isReady = s => !s.pending;
+function reqLog(text) {
+  const box = $('#reqLog'), t = new Date().toLocaleTimeString();
+  String(text).split('\n').filter(Boolean).forEach(line => {
+    const d = document.createElement('div');
+    d.innerHTML = `<span class="t">${t}</span>${esc(line)}`;
+    box.appendChild(d);
+  });
+  while (box.children.length > LOG_LINES) box.firstChild.remove();
+}
+
+// ---- the list of analyses
+async function loadAnalyses() {
+  if (!PID) return;
+  try { ANALYSES = await api('GET', `/api/projects/${PID}/analyses`); } catch { return; }
+  if (AN && AN.project_id !== PID) AN = null;
+  renderAnalyses();
+}
+function anSummary(a) {
+  const [st, cls] = AN_STATUS[a.status] || [a.status, 'off'];
+  const n = AN && AN.id === a.id ? SCEN.filter(isReady).length : a.scenarios;
+  const tests = AN && AN.id === a.id ? SCEN.reduce((k, s) => k + (s.tests || []).length, 0) : a.tests;
+  return `<span class="arrow">▸</span>
+    <span class="muted" style="font-size:12px;white-space:nowrap">${fmtTime(a.created)}</span>
+    <span class="an-title" title="${esc(a.title)}">${esc(a.feature || a.title || 'Требования')}${a.feature && a.title && a.feature !== a.title ? ` <span class="muted" style="font-weight:400">— ${esc(a.title)}</span>` : ''}</span>
+    <span class="badge">сценариев: ${n}</span><span class="badge ${tests ? 'ok' : 'off'}">тестов: ${tests}</span>
+    <span class="badge ${cls}" title="${esc(a.error || '')}">${esc(st)}</span>
+    ${a.user ? `<span class="muted" style="font-size:12px">${esc(a.user)}</span>` : ''}`;
+}
+function renderAnalyses() {
+  $('#anCount').textContent = ANALYSES.length ? `${ANALYSES.length}` : '';
+  $('#anList').innerHTML = ANALYSES.map(a => `<details class="an" data-aid="${a.id}" ${AN && AN.id === a.id ? 'open' : ''}>
+      <summary>${anSummary(a)}</summary><div class="an-body" id="an-body-${a.id}"></div></details>`).join('')
+    || '<div class="muted" style="margin-top:8px">Анализов пока нет: вставьте требования выше и нажмите «Сгенерировать сценарии».</div>';
+  if (AN && $(`#an-body-${AN.id}`)) renderAnalysis();
+}
+function refreshSummary() {
+  if (!AN) return;
+  const a = ANALYSES.find(x => x.id === AN.id), el = $(`details.an[data-aid="${AN.id}"] > summary`);
+  if (a && el) { Object.assign(a, {feature: AN.feature, status: AN.status, error: AN.error}); el.innerHTML = anSummary(a); }
+}
+$('#anList').addEventListener('toggle', async e => {
+  const d = e.target;
+  if (!d.matches || !d.matches('details.an')) return;
+  const aid = d.dataset.aid;
+  if (!d.open) { if (AN && AN.id === aid && !REQ_ABORT) { AN = null; SCEN = []; } return; }
+  $$('details.an[open]').forEach(x => { if (x !== d) x.open = false; });
+  if (AN && AN.id === aid) return renderAnalysis();
+  $(`#an-body-${aid}`).innerHTML = '<div class="muted">Загрузка…</div>';
+  try { openAnalysis(await api('GET', `/api/analyses/${aid}`)); }
+  catch (err) { $(`#an-body-${aid}`).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+}, true);
+function openAnalysis(a) {
+  AN = a; SCEN = a.scenarios.map(s => ({...s, sel: true})); SCEN_OPEN = new Set();
+  renderAnalysis(); refreshSummary();
+}
+function renderAnalysis() {
+  const body = AN && $(`#an-body-${AN.id}`);
+  if (!body) return;
+  body.innerHTML = `
+    <details class="opt"><summary>Требования${AN.url ? ` · ${esc(AN.url)}` : ''}</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
+      <button class="btn small" onclick="reuseRequirements()">Вставить в поле требований</button></details>
+    ${AN.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${AN.assumptions.map(esc).join('; ')}</div>` : ''}
+    ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
+    <div class="row" style="margin-top:8px"><span class="grow muted" id="scenCount"></span>
+      <button class="btn small" id="scenAdd">+ Сценарий</button>
+      <button class="btn small" id="anDelete" style="color:var(--bad)">Удалить анализ</button>
+      <button class="btn primary" id="scenGenAll">Сгенерировать все</button></div>
+    <table class="scen-list" style="margin-top:8px"><thead><tr><th class="chk"><input type="checkbox" id="scenAll" title="Отметить все"></th><th>#</th><th>Сценарий и тесты по нему</th><th>Тип</th><th>Приоритет</th><th></th></tr></thead>
+      <tbody id="scenList"></tbody></table>`;
+  $('#scenAdd').onclick = addScenario;
+  $('#anDelete').onclick = deleteAnalysis;
+  $('#scenGenAll').onclick = generateAll;
+  $('#scenAll').onchange = () => {
+    SCEN.filter(isReady).forEach(x => x.sel = $('#scenAll').checked);
+    $$('.sc-sel').forEach(c => c.checked = $('#scenAll').checked);
+    updateScenCounts();
+  };
+  renderScenarios();
+}
+function reuseRequirements() {
+  $('#reqText').value = AN.requirements; $('#reqUrl').value = AN.url || '';
+  $('#reqText').scrollIntoView({behavior: 'smooth'}); $('#reqText').focus();
+}
+async function deleteAnalysis() {
+  if (!confirm('Удалить анализ из истории? Тесты, созданные по его сценариям, останутся.')) return;
+  try { await api('DELETE', `/api/analyses/${AN.id}`); AN = null; SCEN = []; loadAnalyses(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---- scenarios of the open analysis
+function testsHtml(s) {
+  const tests = s.tests || [];
+  if (!tests.length) return '';
+  return `<div class="sc-tests"><span class="muted" style="font-size:12px">Тесты:</span>${tests.map(t =>
+    `<a href="#" data-test="${t.id}" title="Открыть тест">${esc(t.name)}</a>
+     <span class="badge off">${esc(TEST_STATUS[t.status] || t.status)}</span>${t.last_run ? runBadge(t.last_run.status || (t.last_run.passed ? 'passed' : 'failed')) : ''}`).join(' ')}</div>`;
+}
+function scenRow(s, i) {
+  if (!isReady(s)) return `<tr class="sc-row pending" id="sc-row-${s.id}"><td class="chk"></td><td class="num">${i + 1}</td>
+    <td><span class="sc-title">${esc(s.title)}</span><div class="hint">${esc(s.covers || '')}</div></td>
+    <td>${esc(SC_TYPES[s.type] || s.type)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
+    <td class="muted" style="white-space:nowrap"><span class="dot run"></span>детализируется…</td></tr>`;
+  const open = SCEN_OPEN.has(s.id);
+  const row = `<tr class="sc-row${open ? ' open' : ''}${s.fresh ? ' fresh' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
+    <td class="chk"><input type="checkbox" class="sc-sel" data-id="${s.id}" ${s.sel !== false ? 'checked' : ''}></td>
+    <td class="num">${i + 1}</td>
+    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">${esc(s.instructions)}</div>`}${testsHtml(s)}</td>
+    <td>${esc(SC_TYPES[s.type] || s.type)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
+    <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">
+      <button class="btn small" data-act="studio" data-id="${s.id}" title="Создать тест по этому сценарию в Studio">Тест в Studio</button>
+      ${REQ_ABORT ? '' : `<button class="btn small" data-act="del" data-id="${s.id}" title="Удалить сценарий">✕</button>`}</div></td></tr>`;
+  if (!open) return row;
+  const opt = (map, v) => Object.entries(map).map(([k, t]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${t}</option>`).join('');
+  return row + `<tr class="sc-edit" id="sc-edit-${s.id}"><td colspan="6">
+    <div class="grid3">
+      <div><label>Название</label><input data-f="title" data-id="${s.id}" value="${esc(s.title)}"></div>
+      <div><label>Тип</label><select data-f="type" data-id="${s.id}">${opt(SC_TYPES, s.type)}</select></div>
+      <div><label>Приоритет</label><select data-f="priority" data-id="${s.id}">${opt(SC_PRIOS, s.priority)}</select></div>
+    </div>
+    <label>Предусловия</label><textarea data-f="preconditions" data-id="${s.id}" rows="2">${esc(s.preconditions)}</textarea>
+    <label>Шаги сценария (их получит агент)</label><textarea data-f="instructions" data-id="${s.id}" rows="5">${esc(s.instructions)}</textarea>
+    <label>Ожидаемый результат</label><textarea data-f="expected_result" data-id="${s.id}" rows="2">${esc(s.expected_result)}</textarea>
+    <label>Gherkin</label><textarea class="mono" data-f="gherkin" data-id="${s.id}" rows="5">${esc(s.gherkin)}</textarea>
+    <div class="row" style="margin-top:8px"><span class="muted grow" id="sc-msg-${s.id}"></span><button class="btn small" data-act="close" data-id="${s.id}">Свернуть</button></div>
+  </td></tr>`;
+}
+function renderScenarios() {
+  if (!$('#scenList')) return;
+  $('#scenList').innerHTML = SCEN.map(scenRow).join('') ||
+    `<tr><td colspan="6" class="muted">${AN?.status === 'running' ? 'Модель составляет план сценариев…' : 'Сценариев нет.'}</td></tr>`;
+  SCEN.forEach(x => delete x.fresh);
+  updateScenCounts();
+}
+// One scenario changed (a detailed batch arrived): the rows being edited keep their focus.
+function updateScenRow(id) {
+  const i = SCEN.findIndex(x => x.id === id), old = $('#sc-row-' + id);
+  if (i < 0 || !old) return renderScenarios();
+  $('#sc-edit-' + id)?.remove();
+  old.insertAdjacentHTML('afterend', scenRow(SCEN[i], i)); old.remove();
+  delete SCEN[i].fresh;
+}
+function updateScenCounts() {
+  const ready = SCEN.filter(isReady), chosen = ready.filter(x => x.sel !== false);
+  if ($('#scenGenAll')) {
+    $('#scenCount').textContent = SCEN.length ? `Сценариев: ${SCEN.length}${ready.length < SCEN.length ? `, готово ${ready.length}` : ''}` : '';
+    $('#scenGenAll').textContent = chosen.length === ready.length ? `Сгенерировать все (${ready.length})` : `Сгенерировать выбранные (${chosen.length})`;
+    $('#scenGenAll').disabled = !chosen.length || !!REQ_ABORT;
+    $('#scenAll').checked = !!ready.length && chosen.length === ready.length;
+    $('#scenAll').indeterminate = !!chosen.length && chosen.length < ready.length;
+  }
+  if (REQ_ABORT && AN) {
+    $('#reqBar').style.width = SCEN.length ? `${Math.round(10 + 90 * ready.length / SCEN.length)}%` : '5%';
+    if (SCEN.length) $('#reqStage').textContent = ready.length < SCEN.length ? `Детализация сценариев: ${ready.length} из ${SCEN.length}` : `Готово: сценариев ${SCEN.length}`;
+  }
+  refreshSummary();
+}
+const scenById = id => SCEN.find(x => x.id === id);
+const SAVE_TIMERS = {};
+function saveScenario(id) {
+  clearTimeout(SAVE_TIMERS[id]);
+  SAVE_TIMERS[id] = setTimeout(async () => {
+    delete SAVE_TIMERS[id];
+    const sc = scenById(id), msg = $('#sc-msg-' + id);
+    if (!sc) return;
+    try {
+      await api('PUT', `/api/analyses/${AN.id}/scenarios/${id}`, Object.fromEntries(SC_FIELDS.map(k => [k, sc[k] ?? ''])));
+      if (msg) msg.textContent = 'Сохранено';
+    } catch (e) { if (msg) msg.textContent = e.message; }
+  }, 500);
+}
+$('#anList').addEventListener('click', async e => {
+  const link = e.target.closest('[data-test]');
+  if (link) { e.preventDefault(); showTab('tests'); openTest(link.dataset.test); return; }
+  const btn = e.target.closest('[data-act]');
+  if (btn) {
+    const id = btn.dataset.id, sc = scenById(id);
+    if (btn.dataset.act === 'studio') toStudio(id);
+    if (btn.dataset.act === 'close') { SCEN_OPEN.delete(id); updateScenRow(id); }
+    if (btn.dataset.act === 'del' && sc && confirm(`Удалить сценарий «${sc.title}»? Тесты по нему останутся.`)) {
+      try {
+        await api('DELETE', `/api/analyses/${AN.id}/scenarios/${id}`);
+        SCEN = SCEN.filter(x => x.id !== id); SCEN_OPEN.delete(id); renderScenarios();
+      } catch (err) { alert(err.message); }
+    }
+    return;
+  }
+  if (e.target.closest('input, select, textarea, label, summary, details.opt')) return;
+  const row = e.target.closest('tr.sc-row[data-sc]');
+  if (!row) return;
+  const id = row.dataset.sc;
+  SCEN_OPEN.has(id) ? SCEN_OPEN.delete(id) : SCEN_OPEN.add(id);
+  updateScenRow(id);
+  if (SCEN_OPEN.has(id)) $(`#sc-edit-${id} [data-f="instructions"]`)?.focus();
+});
+$('#anList').addEventListener('input', e => {
+  const el = e.target, sc = el.dataset.id && scenById(el.dataset.id);
+  if (!sc) return;
+  if (el.classList.contains('sc-sel')) { sc.sel = el.checked; updateScenCounts(); return; }
+  if (!el.dataset.f) return;
+  sc[el.dataset.f] = el.value;
+  if (el.dataset.f === 'title') $(`#sc-row-${sc.id} .sc-title`).textContent = el.value || 'Без названия';
+  if (el.dataset.f === 'type') $(`#sc-row-${sc.id} td:nth-child(4)`).textContent = SC_TYPES[el.value];
+  if (el.dataset.f === 'priority') $(`#sc-row-${sc.id} td:nth-child(5)`).textContent = SC_PRIOS[el.value];
+  const msg = $('#sc-msg-' + sc.id); if (msg) msg.textContent = 'Сохранение…';
+  saveScenario(sc.id);
+});
+async function addScenario() {
+  try {
+    const sc = await api('POST', `/api/analyses/${AN.id}/scenarios`, {title: 'Новый сценарий', type: 'positive', priority: 'medium'});
+    SCEN.push({...sc, tests: [], sel: true}); SCEN_OPEN.add(sc.id); renderScenarios();
+    $(`#sc-edit-${sc.id} [data-f="title"]`).select();
+  } catch (e) { alert(e.message); }
+}
+async function generateAll() {
+  const chosen = SCEN.filter(x => isReady(x) && x.sel !== false);
+  const empty = chosen.filter(x => !x.title.trim() || !x.instructions.trim());
+  if (empty.length) return alert(`Заполните название и шаги у сценариев: ${empty.map(x => '«' + (x.title || 'без названия') + '»').join(', ')}`);
+  if (!confirm(`Сгенерировать тесты по ${chosen.length} сценариям? Агент пройдёт их в браузере по очереди — это запуск конвейера с расходом модели. Тесты появятся под сценариями.`)) return;
+  $('#scenGenAll').disabled = true;
+  try {
+    await Promise.all(Object.keys(SAVE_TIMERS).map(id => { clearTimeout(SAVE_TIMERS[id]); delete SAVE_TIMERS[id];
+      const sc = scenById(id); return sc && api('PUT', `/api/analyses/${AN.id}/scenarios/${id}`, Object.fromEntries(SC_FIELDS.map(k => [k, sc[k] ?? '']))); }));
+    const r = await api('POST', `/api/projects/${PID}/jobs`, {url: AN.url || $('#reqUrl').value, analysis_id: AN.id,
+      scenario_ids: chosen.length === SCEN.filter(isReady).length ? [] : chosen.map(x => x.id)});
+    showTab('pipe'); openJob(r.id);
+  } catch (e) { alert(e.message); }
+  finally { updateScenCounts(); }
+}
+
+// ---- generation: a new analysis at the top of the history, filled in live
+function reqEvent(ev) {
+  if (ev.type === 'log') reqLog(ev.text);
+  else if (ev.type === 'analysis') {
+    const a = ev.analysis;
+    ANALYSES = [{id: a.id, created: a.created, user: a.user, title: a.title, feature: '', status: 'running', scenarios: 0, tests: 0},
+                ...ANALYSES.filter(x => x.id !== a.id)];
+    AN = a; SCEN = []; SCEN_OPEN = new Set();
+    renderAnalyses();
+  } else if (ev.type === 'plan') {
+    if (!AN) return;
+    AN.feature = ev.feature; AN.assumptions = ev.assumptions;
+    SCEN = ev.scenarios.map(x => ({...x, tests: [], sel: true}));
+    renderAnalysis();
+  } else if (ev.type === 'batch') {
+    ev.scenarios.forEach(x => {
+      const i = SCEN.findIndex(y => y.id === x.id);
+      if (i >= 0) { SCEN[i] = {...x, tests: SCEN[i].tests || [], sel: true, fresh: true}; updateScenRow(x.id); }
+    });
+    updateScenCounts();
+  } else if (ev.type === 'done') {
+    // What the person changed meanwhile stays: only the scenarios still being detailed are taken.
+    const a = ev.analysis, mine = new Map(SCEN.filter(isReady).map(x => [x.id, x]));
+    AN = {...a, scenarios: []};
+    SCEN = a.scenarios.map(x => mine.get(x.id) || {...x, sel: true});
+    REQ_ABORT = null; renderAnalysis(); refreshSummary();
+    reqLog(`Готово: сценариев ${SCEN.length}`);
+  } else if (ev.type === 'error') throw new Error(ev.text);
+}
 $('#reqBtn').onclick = async () => {
   const requirements = $('#reqText').value.trim(); if (!requirements) return;
-  $('#reqBtn').disabled = true; $('#reqStatus').textContent = 'Анализ требований…';
+  $('#reqBtn').disabled = true; $('#reqStatus').textContent = '';
+  $('#reqLog').innerHTML = '';
+  $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
+  $('#reqStage').textContent = 'Анализ требований и план покрытия…'; $('#reqBar').style.width = '5%';
+  const started = Date.now();
+  const timer = setInterval(() => $('#reqTimer').textContent = `${Math.round((Date.now() - started) / 1000)} с`, 1000);
+  $('#reqTimer').textContent = '0 с';
+  REQ_ABORT = new AbortController();
+  let finished = false;
   try {
-    const r = await api('POST', '/api/scenarios', {project_id: PID, requirements, url: $('#reqUrl').value});
-    SCEN = r.scenarios;
-    $('#reqStatus').textContent = `Фича: ${r.feature}`;
-    $('#reqAssume').innerHTML = r.assumptions.length ? '<b>Допущения:</b> ' + r.assumptions.map(esc).join('; ') : '';
-    $('#scenList').innerHTML = SCEN.map((s, i) => scenarioCard(s, `<button class="btn primary" onclick="toStudio(${i})">Сгенерировать тест в Studio</button>`)).join('');
-  } catch (e) { $('#reqStatus').textContent = e.message; }
-  finally { $('#reqBtn').disabled = false; }
+    const r = await fetch('/api/scenarios', {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: REQ_ABORT.signal,
+      body: JSON.stringify({project_id: PID, requirements, url: $('#reqUrl').value, stream: true})});
+    if (r.status === 401) { showLogin(); throw new Error('Требуется вход'); }
+    if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        reqEvent(ev);
+        if (ev.type === 'done') finished = true;
+      }
+    }
+    if (!finished) throw new Error('Соединение прервано до окончания генерации');
+    $('#reqDot').className = 'dot'; $('#reqDot').style.background = 'var(--ok)'; $('#reqBar').style.width = '100%';
+  } catch (e) {
+    const msg = e.name === 'AbortError' ? 'Остановлено' : e.message;
+    $('#reqStatus').textContent = msg; reqLog(msg);
+    $('#reqStage').textContent = SCEN.some(isReady) ? `${msg}: готовые сценарии сохранены в истории` : msg;
+    $('#reqDot').className = 'dot'; $('#reqDot').style.background = e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)';
+    REQ_ABORT = null;
+    if (AN) { AN.status = e.name === 'AbortError' ? 'cancelled' : 'error'; SCEN = SCEN.filter(isReady); renderAnalysis(); }
+  } finally {
+    clearInterval(timer); REQ_ABORT = null;
+    $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
+    updateScenCounts(); setTimeout(loadAnalyses, 500);
+  }
 };
-function scenarioCard(s, footer) {
-  return `<div class="card"><div class="row"><b class="grow">${esc(s.title)}</b>
+$('#reqStop').onclick = () => REQ_ABORT?.abort();
+function scenarioCard(s, footer, fresh) {
+  return `<div class="card${fresh ? ' fresh' : ''}"><div class="row"><b class="grow">${esc(s.title)}</b>
     <span class="badge">${esc(s.type)}</span><span class="badge">${esc(s.priority)}</span></div>
     ${s.preconditions ? `<div class="muted" style="font-size:12px;margin-top:4px">Предусловия: ${esc(s.preconditions)}</div>` : ''}
     <div style="margin-top:6px">${esc(s.instructions)}</div>
     <div style="margin-top:6px"><b style="font-size:12px">Ожидаемый результат:</b> ${esc(s.expected_result)}</div>
     ${s.gherkin ? `<pre>${esc(s.gherkin)}</pre>` : ''}${footer}</div>`;
 }
-function toStudio(i) {
-  const s = SCEN[i];
+function setStudioScen(v) {
+  STUDIO_SCEN = v;
+  $('#fScen').classList.toggle('hidden', !v);
+  $('#fScen').innerHTML = v ? `Тест будет показан под сценарием «${esc(v.title)}» в истории анализа <button class="linkbtn" onclick="setStudioScen(null)">отвязать</button>` : '';
+}
+function toStudio(id) {
+  const sc = scenById(id);
+  if (!sc) return;
   if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
-  if ($('#reqUrl').value) { $('#fUrl').value = $('#reqUrl').value; delete $('#fUrl').dataset.auto; }
-  $('#fName').value = s.title;
-  $('#fScenario').value = (s.preconditions ? `Предусловия: ${s.preconditions}\n` : '') + s.instructions + '\nОжидаемый результат: ' + s.expected_result;
+  const url = AN.url || $('#reqUrl').value;
+  if (url) { $('#fUrl').value = url; delete $('#fUrl').dataset.auto; }
+  $('#fName').value = sc.title;
+  $('#fScenario').value = (sc.preconditions ? `Предусловия: ${sc.preconditions}\n` : '') + sc.instructions +
+    (sc.expected_result ? '\nОжидаемый результат: ' + sc.expected_result : '');
+  setStudioScen({analysis_id: AN.id, scenario_id: sc.id, title: sc.title});
   showTab('studio');
 }
 
@@ -2118,7 +2654,8 @@ function renderJob() {
   const live = ['running', 'awaiting_selection'].includes(j.status);
   let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
     ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
-    ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}</div>
+    ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}
+    ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}</div>
     <div class="flow">${flowHtml(live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '')}</div>`;
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
   if (j.requirements.length) html += `<div class="hint">Требования: ${j.requirements.map(r => esc(r.title || r.source)).join(' · ')}</div>`;
@@ -2160,6 +2697,9 @@ async function selectScenarios() {
   if (!indices.length) return alert('Выберите хотя бы один сценарий');
   await api('POST', `/api/jobs/${JOB.id}/select`, {indices});
   openJob(JOB.id);
+}
+async function resumeJob() {
+  try { await api('POST', `/api/jobs/${JOB.id}/resume`); openJob(JOB.id); } catch (e) { alert(e.message); }
 }
 async function cancelJob() {
   if (!confirm('Остановить конвейер?')) return;
@@ -2399,7 +2939,7 @@ function renderMembers() {
     || '<tr><td colspan="3" class="muted">Участников нет.</td></tr>';
 }
 const AUDIT_TITLES = {'auth.login': 'Вход', 'project.access': 'Участники и доступ', 'project.update': 'Настройки проекта',
-  'project.credentials': 'Учётные данные приложения', 'connection.create': 'Подключение добавлено', 'connection.update': 'Подключение изменено',
+  'project.credentials': 'Учётные данные приложения', 'account.create': 'Учётная запись добавлена', 'account.update': 'Учётная запись изменена', 'account.delete': 'Учётная запись удалена', 'connection.create': 'Подключение добавлено', 'connection.update': 'Подключение изменено',
   'connection.delete': 'Подключение удалено', 'test.save': 'Тест сохранён', 'test.update': 'Тест изменён', 'test.meta': 'Теги, статус, карантин',
   'test.delete': 'Тест удалён', 'test.restore': 'Откат версии', 'test.data': 'Подготовка данных', 'test.export': 'Экспорт теста',
   'heal.accept': 'Самолечение принято', 'heal.reject': 'Самолечение отклонено', 'heal.auto': 'Самолечение без ревью',
@@ -2448,10 +2988,7 @@ function loadSettings() {
   if (!PROJ) return;
   $('#pName').value = PROJ.name; $('#pDesc').value = PROJ.description || ''; $('#pUrl').value = PROJ.base_url || '';
   $('#pLang').value = PROJ.language || '';
-  $('#pLogin').value = PROJ.app_username || ''; $('#pPass').value = ''; $('#pTotp').value = '';
-  $('#pPass').placeholder = PROJ.app_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
-  $('#pTotp').placeholder = PROJ.app_has_totp ? 'сохранён — введите новый, чтобы заменить' : '';
-  $('#pcTotpClear').classList.toggle('hidden', !PROJ.app_has_totp);
+  renderAccounts();
   const mb = PROJ.mailbox || {};
   $('#mbKind').value = mb.kind || ''; $('#mbUrl').value = mb.url || ''; $('#mbHost').value = mb.host || '';
   $('#mbPort').value = mb.port || 993; $('#mbUser').value = mb.user || ''; $('#mbPass').value = '';
@@ -2470,18 +3007,87 @@ $('#pSave').onclick = async () => {
     const keep = PID; await loadProjects(keep);
   } catch (e) { $('#pMsg').textContent = e.message; }
 };
+// ---- accounts of the application under test: any number, each with login parameters ({{auth.name}})
+let ACC_EDIT = null;   // the account being edited: null - none, '' - a new one
+function renderAccounts() {
+  const accs = PROJ.accounts || [], owner = canRole('owner');
+  $('#accList').innerHTML = accs.map(a => `<tr>
+      <td>${esc(a.name)} ${a.default ? '<span class="badge ok">по умолчанию</span>' : ''}</td>
+      <td>${esc(a.username || '—')}</td>
+      <td>${a.has_password ? '<span class="badge">пароль</span>' : ''}${a.has_totp ? '<span class="badge">2FA</span>' : ''}${(a.params || []).map(p =>
+        `<span class="badge${p.secret ? ' warn' : ''}" title="${p.secret ? 'секрет' : esc(p.value)}">{{auth.${esc(p.name)}}}</span>`).join('')}</td>
+      <td class="row" style="justify-content:flex-end">${owner ? `<button class="btn small" onclick="editAccount('${a.id}')">Изменить</button>
+        <button class="btn small" onclick="deleteAccount('${a.id}')" style="color:var(--bad)">Удалить</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Учётных записей нет: агент и прогоны не смогут войти в приложение.</td></tr>';
+  $('#accAdd').classList.toggle('hidden', !owner);
+  if (ACC_EDIT !== null && ACC_EDIT !== '' && !accs.some(a => a.id === ACC_EDIT)) ACC_EDIT = null;
+  $('#accForm').classList.toggle('hidden', ACC_EDIT === null);
+}
+function addParamRow(p = {}) {
+  const row = document.createElement('div');
+  row.className = 'acc-param';
+  row.innerHTML = `<input type="text" class="ap-name" placeholder="otp" maxlength="64" autocomplete="off" value="${esc(p.name || '')}">
+    <input type="${p.secret ? 'password' : 'text'}" class="ap-value" autocomplete="new-password" value="${esc(p.secret ? '' : p.value || '')}"
+      placeholder="${p.secret && p.has_value ? 'сохранено — введите новое, чтобы заменить' : 'значение'}">
+    <label class="inline" title="Не показывать модели, маскировать в шагах, trace и трафике"><input type="checkbox" class="ap-secret" ${p.secret ? 'checked' : ''}> секрет</label>
+    <button class="btn small" title="Удалить параметр">✕</button>`;
+  row.querySelector('.ap-secret').onchange = e => row.querySelector('.ap-value').type = e.target.checked ? 'password' : 'text';
+  row.querySelector('button').onclick = () => row.remove();
+  $('#accParams').appendChild(row);
+}
+function editAccount(id) {
+  const a = (PROJ.accounts || []).find(x => x.id === id) || {};
+  ACC_EDIT = id || '';
+  $('#accFormTitle').textContent = id ? `Учётная запись «${a.name}»` : 'Новая учётная запись';
+  $('#accName').value = a.name || ''; $('#pLogin').value = a.username || ''; $('#pPass').value = ''; $('#pTotp').value = '';
+  $('#pPass').placeholder = a.has_password ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#pTotp').placeholder = a.has_totp ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#pcTotpClear').classList.toggle('hidden', !a.has_totp);
+  $('#accDefault').checked = !!a.default || !(PROJ.accounts || []).length;
+  $('#accParams').innerHTML = '';
+  (a.params || []).forEach(p => addParamRow(p));
+  $('#pcMsg').textContent = '';
+  $('#accForm').classList.remove('hidden');
+  $('#accName').focus();
+}
+async function saveAccount(extra = {}) {
+  const body = {name: $('#accName').value, username: $('#pLogin').value, password: $('#pPass').value,
+    default: $('#accDefault').checked,
+    params: [...$$('#accParams .acc-param')].map(r => ({name: r.querySelector('.ap-name').value.trim(),
+      value: r.querySelector('.ap-value').value, secret: r.querySelector('.ap-secret').checked})).filter(p => p.name)};
+  if ($('#pTotp').value.trim()) body.totp_secret = $('#pTotp').value.trim();
+  Object.assign(body, extra);
+  const r = ACC_EDIT ? await api('PUT', `/api/projects/${PID}/accounts/${ACC_EDIT}`, body)
+                     : await api('POST', `/api/projects/${PID}/accounts`, body);
+  await refreshProject();
+  return r;
+}
+async function deleteAccount(id) {
+  const a = (PROJ.accounts || []).find(x => x.id === id);
+  if (!a || !confirm(`Удалить учётную запись «${a.name}»? Её тесты будут входить под учётной записью по умолчанию.`)) return;
+  try {
+    await api('DELETE', `/api/projects/${PID}/accounts/${id}`);
+    if (ACC_EDIT === id) ACC_EDIT = null;
+    await refreshProject(); renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
+  } catch (e) { $('#pcMsg').textContent = e.message; }
+}
+$('#accAdd').onclick = () => editAccount('');
+$('#accParamAdd').onclick = () => { addParamRow(); $('#accParams .acc-param:last-child .ap-name').focus(); };
+$('#accCancel').onclick = () => { ACC_EDIT = null; renderAccounts(); };
 $('#pcSave').onclick = async () => {
   try {
-    const body = {username: $('#pLogin').value, password: $('#pPass').value};
-    if ($('#pTotp').value.trim()) body.totp_secret = $('#pTotp').value.trim();
-    await api('PUT', `/api/projects/${PID}/credentials`, body);
-    await refreshProject(); loadSettings(); $('#pcMsg').textContent = 'Сохранено';
+    await saveAccount();
+    ACC_EDIT = null; renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
+    $('#pcMsg').textContent = 'Сохранено';
   } catch (e) { $('#pcMsg').textContent = e.message; }
 };
 $('#pcTotpClear').onclick = async () => {
-  if (!confirm('Удалить секрет 2FA проекта?')) return;
-  await api('PUT', `/api/projects/${PID}/credentials`, {username: $('#pLogin').value, totp_secret: ''});
-  await refreshProject(); loadSettings();
+  if (!confirm('Удалить секрет 2FA учётной записи?')) return;
+  try {
+    const id = ACC_EDIT;
+    await saveAccount({totp_secret: ''});
+    editAccount(id); renderAccounts();
+  } catch (e) { $('#pcMsg').textContent = e.message; }
 };
 $('#mbSave').onclick = async () => {
   try {

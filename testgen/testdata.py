@@ -20,6 +20,8 @@ Besides test data, BrowserSession.expand substitutes:
 
     {{username}}, {{password}}   the login of the application (never shown to the model)
     {{totp}}                     the current one-time code of the login's TOTP secret (2FA)
+    {{auth.name}}                an extra login parameter of the account (an OTP code of the
+                                 test stand, a tenant, a PIN...): name - value pairs
     {{vars.name}}                a value saved in this run: from the response of a `before`
                                  request (api_request "save") or a code read from an e-mail
     {{params.name}}              a parameter of a module (a test used as a step, use_module)
@@ -40,13 +42,45 @@ FIELDS = {"email", "name", "first_name", "last_name", "phone", "company", "city"
           "user_name", "word", "sentence"}
 # Credentials, test data, run variables and module parameters: everything BrowserSession.expand substitutes.
 PLACEHOLDER = re.compile(r"\{\{(username|password|totp|unique|today|faker\.[a-z_]+|vars\.[A-Za-z_]\w*"
-                         r"|params\.[A-Za-z_]\w*)\}\}")
+                         r"|params\.[A-Za-z_]\w*|auth\.[A-Za-z_][A-Za-z0-9_]*)\}\}")
 CREDENTIALS = ("username", "password", "totp")
+PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def is_credential(key: str) -> bool:
+    """A placeholder the account fills: login, password, one-time code, an extra login parameter."""
+    return key in CREDENTIALS or key.startswith("auth.")
+
+
+def env_name(key: str) -> str:
+    """Environment variable of a credential placeholder in exported code: TESTGEN_PASSWORD, TESTGEN_AUTH_OTP."""
+    return "TESTGEN_" + re.sub(r"\W", "_", key).upper()
+
+
+def auth_params(credentials: dict) -> dict[str, str]:
+    """Extra login parameters of an account: name -> value."""
+    return {p["name"]: p["value"] for p in credentials.get("params") or [] if p.get("name") and p.get("value")}
+
+
+def secret_pairs(credentials: dict) -> list[tuple[str, str]]:
+    """(secret value, its placeholder): the password, secret login parameters, the TOTP secret.
+    These never reach the model, steps, traces or recorded traffic."""
+    out = [(credentials["password"], "{{password}}")] if credentials.get("password") else []
+    out += [(p["value"], f"{{{{auth.{p['name']}}}}}") for p in credentials.get("params") or []
+            if p.get("secret") and p.get("name") and p.get("value")]
+    if credentials.get("totp_secret"):
+        out.append((credentials["totp_secret"], "***"))
+    # Longer first: a secret containing another one is replaced whole.
+    return sorted(out, key=lambda x: -len(x[0]))
+
+
+def secret_values(credentials: dict) -> list[str]:
+    return [v for v, _ in secret_pairs(credentials)]
 
 
 def keys(value: str) -> list[str]:
     """Test data placeholders used in a value (credentials, variables and parameters not included)."""
-    return [k for k in PLACEHOLDER.findall(value or "") if k not in CREDENTIALS
+    return [k for k in PLACEHOLDER.findall(value or "") if not is_credential(k)
             and not k.startswith(("vars.", "params."))]
 
 
