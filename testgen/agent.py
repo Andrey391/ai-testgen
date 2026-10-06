@@ -984,6 +984,15 @@ class StudioSession:
             if reply.text:
                 self._say("agent", reply.text)
             tool = next(iter(reply.tool_calls), None)
+            if tool is None and not reply.text:
+                # Some models (through gateways) now and then answer with nothing at all.
+                self.repairs += 1
+                if self.repairs <= MAX_REPAIRS:
+                    self.notes.append("Your reply was empty. Continue the scenario: call exactly one tool.")
+                    continue
+                self.autopilot = False
+                self._say("system", "Модель несколько раз подряд вернула пустой ответ. Подскажите ей в чате "
+                                    "или нажмите «Продолжить с AI».")
             if tool is None:
                 self.status = "idle"   # the agent is waiting for the user
                 return

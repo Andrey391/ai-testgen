@@ -214,3 +214,23 @@ def test_context_editing_failure_falls_back_to_trimming():
     assert json.dumps(calls[1]["messages"]).count('"image"') == 1     # old screenshots cut out
     asyncio.run(p.chat(r))
     assert len(calls) == 3 and "context_management" not in calls[2]   # no failing first try any more
+
+
+def test_empty_assistant_turn_gets_placeholder():
+    """A model that answered with nothing: its turn must not go back to the API empty
+    (LiteLLM: "assistant must provide content, reasoning_content or tool_calls")."""
+    from testgen.providers.base import EMPTY_REPLY, fill_empty
+
+    call = {"type": "tool_use", "id": "t1", "name": "click", "input": {}}
+    messages = [{"role": "user", "content": "go"},
+                {"role": "assistant", "content": []},
+                {"role": "user", "content": "go on"},
+                {"role": "assistant", "content": [{"type": "text", "text": ""}, call]},
+                {"role": "assistant", "content": ""},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
+    out = fill_empty(messages)
+
+    assert out[1]["content"] == [{"type": "text", "text": EMPTY_REPLY}]
+    assert out[3]["content"] == [call]
+    assert out[4]["content"] == EMPTY_REPLY
+    assert out[5] is messages[5] and messages[1]["content"] == []      # the history itself is not changed
