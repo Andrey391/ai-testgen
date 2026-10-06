@@ -100,8 +100,11 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 PostgreSQL: `tests/conftest.py` создаёт базу на каждый поток xdist на сервере `TESTGEN_TEST_DB` (по
 умолчанию локальный `testgen:testgen@127.0.0.1:5432`) и удаляет её в конце; `conftest.new_database()` —
 пустая база для отдельного теста. Кэш — во временной папке (`TESTGEN_CACHE_DIR`).
-Запускай после правок; CI — `.github/workflows/tests.yml`. Бинарные файлы в S3: `TESTGEN_TEST_S3=moto`;
+CI — `.github/workflows/tests.yml`. Бинарные файлы в S3: `TESTGEN_TEST_S3=moto`;
 `tests/test_cluster.py` поднимает 2 экземпляра студии и 3 воркера процессами.
+
+**Тесты прогоняй только перед созданием PR** — не после каждой правки и не в процессе работы.
+Перед PR — полный прогон (`pytest -q -n 4`); PR открывай, только когда он зелёный.
 
 ```powershell
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements-dev.txt
