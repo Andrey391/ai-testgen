@@ -14,7 +14,8 @@ data/projects/<id>/explore/       site maps built by the Planner (explorer.py)
 secrets/projects/<id>/            tokens of MCP connections, login for the app under test,
                                   API key of the model connection (llm.json)
 
-With a shared database the same paths are keys of its rows (fs.py).
+With a shared database the same paths are keys of its rows (fs.py), except tests, tasks, runs
+and model spending: they are rows of their own tables (repo/).
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import fs, vault
+from . import fs, repo, vault
 from .llm import EFFORTS
 from .paths import DATA
 
@@ -287,17 +288,19 @@ def delete(pid: str) -> bool:
     if not fs.exists(d / "project.json"):
         return False
     fs.rmtree(d)
+    repo.drop_project(pid)
     vault.delete_all(secrets_kind(pid))
     return True
 
 
 def list_projects() -> list[dict]:
+    from . import storage
+    counts = storage.counts()
     out = []
     for f in sorted(fs.glob(ROOT, "*/project.json")):
         p = fs.read_json(f)
         out.append({"id": p["id"], "name": p["name"], "description": p.get("description", ""),
-                    "base_url": p.get("base_url", ""),
-                    "tests": len(fs.glob(f.parent / "tests", "*.json"))})
+                    "base_url": p.get("base_url", ""), "tests": counts.get(p["id"], 0)})
     return sorted(out, key=lambda p: p["name"].lower())
 
 
@@ -377,7 +380,9 @@ def ensure_default() -> None:
                     by_name[name.lower()] = create(name)["id"]
                 pid = by_name[name.lower()]
                 t["project_id"] = pid
-                fs.write_json(path(pid) / "tests" / f.name, t)
+                t.setdefault("id", f.stem)
+                from . import storage
+                storage.save(t)
                 # Old per-test login moves with the test.
                 creds = vault.load("sites", t.get("id", ""))
                 if creds:

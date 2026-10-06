@@ -55,6 +55,7 @@ class FakeClient:
         self.calls: list[tuple[str, dict]] = []
         self.script = script or (lambda kind, kw: text("ok"))
         self.beta = SimpleNamespace(messages=FakeMessages(self))
+        self.messages = self.beta.messages
         self.model_list: list[dict] = []
         self.models = SimpleNamespace(list=self._models)
 

@@ -1,21 +1,26 @@
 """The shared database (stage 5.5): PostgreSQL through SQLAlchemy, so that several instances of the
-studio and any number of workers use the same data. SQLite works too - for one instance and for
-the studio's own tests.
+studio and any number of workers use the same data.
 
-    TESTGEN_DATABASE_URL   postgresql+psycopg://testgen:***@db:5432/testgen   (or sqlite:///path/testgen.db)
+    TESTGEN_DATABASE_URL   postgresql+psycopg://testgen:***@db:5432/testgen
 
 Without it the studio keeps everything in files, as before (fs.py).
 
 Tables (migrations in testgen/migrations, Alembic; `python -m testgen.db upgrade`, also run at
 start under a lock unless TESTGEN_DB_MIGRATE=off):
-    docs       the studio's files by path: JSON documents (projects, tests, tasks, runs, suites, jobs,
-               users...), text (skills, notes) and binary files when there is no S3; for files in S3
-               only their size and time. `body` is JSON text: reports may use body::jsonb.
+    runs       run history (runs.py through repo/runs.py): a row per run, columns for filters and
+               reports, the whole record in `report` (jsonb)
+    tests      saved tests (storage.py, repo/tests.py): columns for filters, the test in `body` (jsonb)
+    tasks      the team's tasks (tasks.py, repo/tasks.py)
+    usage      language model spending: a row per request (llm.py, repo/usage.py)
+    docs       everything else by path: JSON documents (projects, suites, jobs, users...), text
+               (skills, notes) and binary files when there is no S3; for files in S3 only their size
+               and time. `body` is JSON text: reports may use body::jsonb.
     audit_log  the audit log (audit.py), its hash chain in insertion order
     work       the queue of runs, suites, mutation checks and explorations (workqueue.py)
     workers    workers alive: heartbeat, running items
     owners     which instance of the studio holds a live Studio session or pipeline job
-    locks      locks between processes on SQLite (PostgreSQL uses advisory locks)
+
+Locks between processes are PostgreSQL advisory locks (fs.lock).
 
 Moving an existing installation: `python -m testgen.db import-files` copies data/ and secrets/
 into the database (and S3); `export-files` writes them back to folders (backups, leaving).
@@ -29,11 +34,14 @@ import threading
 import time
 from pathlib import Path
 
-from sqlalchemy import (BigInteger, Column, Float, Integer, LargeBinary, MetaData, String, Table, Text, create_engine,
-                        event, text)
+from sqlalchemy import (BigInteger, Boolean, Column, Float, Index, Integer, LargeBinary, MetaData, String, Table,
+                        Text, create_engine, text)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
+Doc = JSONB()
+Strings = ARRAY(Text())
 
 docs = Table(
     "docs", metadata,
@@ -91,15 +99,77 @@ owners = Table(
     Column("updated", Float, nullable=False),
 )
 
-locks = Table(
-    "locks", metadata,
-    Column("name", String(512), primary_key=True),
-    Column("owner", String(128), nullable=False),
+runs = Table(
+    "runs", metadata,
+    Column("id", String(16), primary_key=True),
+    Column("project_id", String(64), nullable=False),
+    Column("test_id", String(128), nullable=False),
+    Column("status", String(12), nullable=False, index=True),    # running | passed | flaky | failed | error
+    Column("trigger", String(16)),
+    Column("suite_id", String(32), index=True),
+    Column("started_by", String(64)),
+    Column("started", Float, nullable=False, index=True),
+    Column("finished", Float),                                   # NULL while it runs
+    Column("duration", Float),
+    Column("passed", Boolean),
+    Column("flaky", Boolean, nullable=False, default=False),
+    Column("quarantined", Boolean, nullable=False, default=False),
+    Column("healed", Integer, nullable=False, default=0),
+    Column("proposals", Integer, nullable=False, default=0),
+    Column("outcomes", Doc),                                     # pass/fail of each attempt
+    Column("report", Doc, nullable=False),
+    Index("ix_runs_test", "project_id", "test_id", "finished"),
+)
+
+tests = Table(
+    "tests", metadata,
+    Column("project_id", String(64), primary_key=True),
+    Column("id", String(128), primary_key=True),
+    Column("name", Text, nullable=False, default=""),
+    Column("status", String(12), nullable=False, default="ready"),   # draft | review | ready
+    Column("role", String(16), nullable=False, default=""),          # "" | login | module
+    Column("tags", Strings),
+    Column("quarantined", Boolean, nullable=False, default=False),
+    Column("last_status", String(12)),
+    Column("updated", Float, nullable=False),
+    Column("updated_by", String(64)),
+    Column("body", Doc, nullable=False),
+    Index("ix_tests_id", "id"),
+)
+
+tasks = Table(
+    "tasks", metadata,
+    Column("id", String(16), primary_key=True),
+    Column("project_id", String(64), nullable=False, index=True),
+    Column("title", Text, nullable=False, default=""),
+    Column("status", String(12), nullable=False),                  # todo | in_progress | review | done
+    Column("priority", String(8), nullable=False),
+    Column("assignee", String(64), nullable=False, default=""),
+    Column("due", String(10), nullable=False, default=""),
+    Column("created", Float, nullable=False),
+    Column("updated", Float, nullable=False),
+    Column("done_at", Float),
+    Column("test_ids", Strings),
+    Column("body", Doc, nullable=False),
+)
+
+usage = Table(
+    "usage", metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("project_id", String(64), nullable=False),
+    Column("month", String(7), nullable=False),
     Column("at", Float, nullable=False),
+    Column("stage", String(32), nullable=False),
+    Column("model", String(128), nullable=False),
+    Column("requests", Integer, nullable=False, default=1),
+    Column("input_tokens", BigInteger, nullable=False, default=0),
+    Column("cache_creation_input_tokens", BigInteger, nullable=False, default=0),
+    Column("cache_read_input_tokens", BigInteger, nullable=False, default=0),
+    Column("output_tokens", BigInteger, nullable=False, default=0),
+    Index("ix_usage_project_month", "project_id", "month"),
 )
 
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
-LOCK_STALE = 120          # seconds: a lock row older than this was left by a dead process (SQLite)
 _engine: tuple[str, Engine] | None = None
 _init = threading.Lock()
 
@@ -112,10 +182,6 @@ def enabled() -> bool:
     return bool(url())
 
 
-def is_postgres(e: Engine | None = None) -> bool:
-    return (e or engine()).dialect.name == "postgresql"
-
-
 def engine() -> Engine:
     """The engine for TESTGEN_DATABASE_URL, created (and migrated) on first use."""
     global _engine
@@ -125,22 +191,22 @@ def engine() -> Engine:
     with _init:
         if _engine and _engine[0] == u:
             return _engine[1]
-        if u.startswith("sqlite"):
-            e = create_engine(u, connect_args={"timeout": 60, "check_same_thread": False})
-
-            @event.listens_for(e, "connect")
-            def _sqlite_pragmas(conn, _record):
-                cur = conn.cursor()
-                cur.execute("PRAGMA journal_mode=WAL")      # readers do not wait for the writer
-                cur.execute("PRAGMA busy_timeout=60000")
-                cur.close()
-        else:
-            e = create_engine(u, pool_pre_ping=True, pool_size=int(os.environ.get("TESTGEN_DB_POOL", "10")),
-                              max_overflow=20)
+        if not u.startswith("postgresql"):
+            raise ValueError("TESTGEN_DATABASE_URL — адрес PostgreSQL (postgresql+psycopg://…)")
+        e = create_engine(u, pool_pre_ping=True, pool_size=int(os.environ.get("TESTGEN_DB_POOL", "10")),
+                          max_overflow=20)
         if os.environ.get("TESTGEN_DB_MIGRATE", "on").lower() not in ("off", "0", "false", "no"):
             upgrade(e)
         _engine = (u, e)
         return e
+
+
+def upsert(conn, table: Table, values: dict) -> None:
+    """INSERT, or UPDATE the row with the same primary key."""
+    from sqlalchemy.dialects.postgresql import insert
+    keys = [c.name for c in table.primary_key.columns]
+    rest = {k: v for k, v in values.items() if k not in keys}
+    conn.execute(insert(table).values(**values).on_conflict_do_update(index_elements=keys, set_=rest))
 
 
 def lock_id(name: str) -> int:
@@ -148,35 +214,24 @@ def lock_id(name: str) -> int:
     return int.from_bytes(hashlib.sha256(name.encode()).digest()[:8], "big", signed=True)
 
 
-def upgrade(e: Engine | None = None) -> None:
-    """Alembic migrations up to the newest; one process at a time (a PostgreSQL advisory lock,
-    a lock file next to a SQLite database)."""
+def upgrade(e: Engine | None = None, revision: str = "head", down: bool = False) -> None:
+    """Alembic migrations up to `revision` (the newest by default; `down` - back to it); one process
+    at a time (a PostgreSQL advisory lock)."""
     e = e or engine()
-    if e.dialect.name == "sqlite" and e.url.database:
-        # Processes starting together on one SQLite file: one migrates, the others wait for it.
-        from .filelock import locked
-        with locked(Path(e.url.database + ".migrate.lock")):
-            return _upgrade(e)
-    return _upgrade(e)
-
-
-def _upgrade(e: Engine) -> None:
     from alembic import command
     from alembic.config import Config
     cfg = Config()
     cfg.set_main_option("script_location", str(MIGRATIONS))
     cfg.set_main_option("sqlalchemy.url", str(e.url.render_as_string(hide_password=False)).replace("%", "%%"))
     with e.connect() as conn:
-        if is_postgres(e):
-            conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": lock_id("testgen:migrations")})
+        conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": lock_id("testgen:migrations")})
         try:
             cfg.attributes["connection"] = conn
-            command.upgrade(cfg, "head")
+            (command.downgrade if down else command.upgrade)(cfg, revision)
             conn.commit()
         finally:
-            if is_postgres(e):
-                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_id("testgen:migrations")})
-                conn.commit()
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_id("testgen:migrations")})
+            conn.commit()
 
 
 def ping() -> bool:
@@ -195,8 +250,12 @@ def _cli(argv: list[str]) -> None:
     if not enabled():
         sys.exit("Задайте TESTGEN_DATABASE_URL")
     if cmd == "upgrade":
-        upgrade()
-        print("База данных обновлена до последней версии")
+        upgrade(revision=rest[0] if rest else "head")
+        print("База данных обновлена до " + (f"версии {rest[0]}" if rest else "последней версии"))
+    elif cmd == "downgrade" and rest:
+        os.environ["TESTGEN_DB_MIGRATE"] = "off"
+        upgrade(revision=rest[0], down=True)
+        print(f"База данных возвращена к версии {rest[0]}")
     elif cmd == "import-files":
         from . import vault
         key = os.environ.get(vault.KEY_ENV)
@@ -212,7 +271,8 @@ def _cli(argv: list[str]) -> None:
         n = fs.export_tree(DATA, Path(rest[0]) / "data") + fs.export_tree(SECRETS, Path(rest[0]) / "secrets")
         print(f"Выгружено файлов: {n} в {rest[0]}")
     else:
-        print(__doc__ + "\nCommands: upgrade | import-files [data_dir [secrets_dir]] | export-files <dir>")
+        print(__doc__ + "\nCommands: upgrade [revision] | downgrade <revision> | import-files [data_dir [secrets_dir]]"
+                        " | export-files <dir>")
 
 
 if __name__ == "__main__":

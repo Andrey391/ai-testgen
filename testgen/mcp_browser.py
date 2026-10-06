@@ -119,9 +119,14 @@ class McpBrowser:
             extra.append("--headless")
         if not any(a in given for a in ("--isolated", "--user-data-dir")):
             extra.append("--isolated")
+        # Like the built-in engine (Playwright's default): with the Chromium sandbox on, the browser
+        # crashes on some Windows machines ("Target crashed"). "--sandbox" in the args turns it back on.
+        if "--sandbox" not in given and "--no-sandbox" not in given:
+            extra.append("--no-sandbox")
         if not any(a.startswith("--viewport-size") for a in given):
             extra += ["--viewport-size", f"{VIEWPORT['width']}x{VIEWPORT['height']}"]
-        if not conn.get("command") and not any(a.startswith(_OWN_BROWSER_FLAGS) for a in given):
+        # Without its own browser flag the server would look for an installed Google Chrome.
+        if conn.get("transport") != "http" and not any(a.startswith(_OWN_BROWSER_FLAGS) for a in given):
             exe = await bundled_chromium(headless)
             if exe:
                 extra += ["--executable-path", exe]
