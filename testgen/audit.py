@@ -1,10 +1,10 @@
 """Audit log (stage 5.4): who changed a test, accepted self-healing, started a run, changed a
 connection or rights - and when.
 
-Records are only appended: data/audit/<YYYY-MM>.jsonl, one JSON object per line (with a shared
-database: the table audit_log, in insertion order). Each record carries the SHA-256 of the
-previous one ("prev") and its own ("hash"), across months too, so an edited, inserted or removed
-record breaks the chain: `python -m testgen.audit verify`.
+Records are only appended: rows of the table audit_log (db.py), in insertion order. Each record
+carries the SHA-256 of the previous one ("prev") and its own ("hash"), across months too, so an
+edited, inserted or removed record breaks the chain: `python -m testgen.audit verify`. The log of
+an older version kept in files (data/audit/<YYYY-MM>.jsonl) comes in with `db import-files`.
 
 A record: at (UTC, ISO 8601), ts, user, action ("test.update", "heal.accept", "run.start",
 "connection.update", "project.access", "auth.login", ...), project_id, target (ids of the
@@ -25,14 +25,12 @@ import logging.handlers
 import os
 import socket
 import sys
-import threading
 import time
 from pathlib import Path
 
-from . import db, filelock, fs
+from . import db, fs
 from .paths import DATA
 
-_lock = threading.Lock()
 _syslog: tuple[str, logging.Logger] | None = None
 ACTIONS = {
     "auth.login": "Вход", "auth.logout": "Выход", "auth.register": "Регистрация",
@@ -57,34 +55,6 @@ ACTIONS = {
 }
 
 
-def _dir() -> Path:
-    return DATA / "audit"
-
-
-def _files() -> list[Path]:
-    d = _dir()
-    return sorted(d.glob("*.jsonl")) if d.exists() else []
-
-
-def _file_lock():
-    """Between the processes that share data/ (studio, workers, CLI): the chain needs the last hash."""
-    return filelock.locked(_dir() / ".lock")
-
-
-def _last_hash() -> str:
-    """Of the last record: only the tail of the newest file is read."""
-    for f in reversed(_files()):
-        with open(f, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - 65536))
-            lines = fh.read().splitlines()
-        for line in reversed(lines):
-            if line.strip():
-                return json.loads(line)["hash"]
-    return ""
-
-
 def digest(rec: dict) -> str:
     body = {k: v for k, v in rec.items() if k != "hash"}
     return hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -96,15 +66,7 @@ def record(action: str, user: str = "", project_id: str = "", target: str | dict
     rec = {"at": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(timespec="milliseconds"),
            "ts": round(now, 3), "user": user or "", "action": action, "project_id": project_id or "",
            "target": target or "", "status": status, "via": via, "ip": ip or "", "details": details or {}}
-    if fs.remote():
-        _append_db(rec)
-    else:
-        with _lock, _file_lock():
-            rec["prev"] = _last_hash()
-            rec["hash"] = digest(rec)
-            f = _dir() / f"{rec['at'][:7]}.jsonl"
-            with open(f, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    _append_db(rec)
     _export(rec)
     return rec
 
@@ -119,6 +81,27 @@ def _append_db(rec: dict) -> None:
             rec["hash"] = digest(rec)
             c.execute(insert(t).values(month=rec["at"][:7], ts=rec["ts"], project_id=rec["project_id"] or None,
                                        rec=json.dumps(rec, ensure_ascii=False)))
+
+
+def import_files(files: list[Path]) -> int:
+    """The log of an older version (data/audit/<YYYY-MM>.jsonl), as it was, chain included - only into
+    an empty audit_log: logs of two installations would break each other's chain. -> records."""
+    from sqlalchemy import func, insert, select
+    t = db.audit_log
+    with fs.lock(DATA / "audit" / "chain"), db.engine().begin() as c:
+        if c.execute(select(func.count()).select_from(t)).scalar():
+            logging.getLogger("testgen.audit").warning("Журнал действий уже не пуст: записи из %s не перенесены",
+                                                       ", ".join(str(f) for f in files))
+            return 0
+        n = 0
+        for f in sorted(files, key=lambda f: f.stem):
+            for line in Path(f).read_text("utf-8").splitlines():
+                if line.strip():
+                    r = json.loads(line)
+                    c.execute(insert(t).values(month=r["at"][:7], ts=r["ts"], project_id=r.get("project_id") or None,
+                                               rec=line.strip()))
+                    n += 1
+    return n
 
 
 def _db_records(month: str = "", project_id: str = "", newest_first: bool = True):
@@ -174,7 +157,7 @@ def _syslogger(target: str) -> logging.Logger:
 def read(month: str = "", project_id: str = "", user: str = "", action: str = "", limit: int = 200) -> list[dict]:
     """Records, newest first. month: YYYY-MM (empty = every month, newest first until `limit`)."""
     out = []
-    for line in _db_records(month, project_id) if fs.remote() else _file_lines(month):
+    for line in _db_records(month, project_id):
         if not line.strip():
             continue
         r = json.loads(line)
@@ -187,27 +170,14 @@ def read(month: str = "", project_id: str = "", user: str = "", action: str = ""
     return out
 
 
-def _file_lines(month: str = ""):
-    for f in reversed([f for f in _files() if not month or f.stem == month]):
-        yield from reversed(f.read_text("utf-8").splitlines())
-
-
 def export(month: str) -> str:
-    if fs.remote():
-        return "".join(line + "\n" for line in _db_records(month, newest_first=False))
-    f = _dir() / f"{month}.jsonl"
-    return f.read_text("utf-8") if f.exists() else ""
+    return "".join(line + "\n" for line in _db_records(month, newest_first=False))
 
 
 def _chain():
     """(where, line) of every record, oldest first."""
-    if fs.remote():
-        for i, line in enumerate(_db_records(newest_first=False), 1):
-            yield f"audit_log #{i}", line
-        return
-    for f in _files():
-        for i, line in enumerate(f.read_text("utf-8").splitlines(), 1):
-            yield f"{f.name}:{i}", line
+    for i, line in enumerate(_db_records(newest_first=False), 1):
+        yield f"audit_log #{i}", line
 
 
 def verify() -> dict:
@@ -229,6 +199,8 @@ def verify() -> dict:
 
 
 def _cli(argv: list[str]) -> None:
+    from .paths import utf8_console
+    utf8_console()
     cmd, *rest = argv or ["help"]
     if cmd == "verify":
         res = verify()

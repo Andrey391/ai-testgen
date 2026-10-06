@@ -1,5 +1,6 @@
 """Project tasks: the team's work items (what to cover with tests, what to fix,
-what to review), one JSON file per task under data/projects/<project id>/tasks/.
+what to review), one JSON file per task under data/projects/<project id>/tasks/, or a row of
+the `tasks` table with a shared database (repo/tasks.py).
 
 A task keeps a title, description, status, priority, assignee (a studio user),
 due date and the ids of the tests that cover it. A test created in Studio from a
@@ -8,25 +9,20 @@ task is linked to it on save; deleting a test unlinks it (storage.delete).
 from __future__ import annotations
 
 import datetime
-import json
 import re
 import time
 import uuid
 
-from . import fs, projects
+from .repo import tasks as repo
 
 STATUSES = ["todo", "in_progress", "review", "done"]
 OPEN = {"todo", "in_progress", "review"}
 PRIORITIES = ["high", "medium", "low"]
 
-def _dir(pid: str):
-    return projects.path(pid) / "tasks"
-
-
-def _file(pid: str, tid: str):
+def _check_id(tid: str) -> str:
     if not re.fullmatch(r"[a-f0-9]{10}", tid or ""):
         raise ValueError("Bad task id")
-    return _dir(pid) / f"{tid}.json"
+    return tid
 
 
 def _due(v) -> str:
@@ -61,7 +57,8 @@ def _clean(patch: dict, pid: str) -> dict:
     if "due" in patch:
         out["due"] = _due(patch["due"])
     if "test_ids" in patch:
-        known = {p.stem for p in fs.glob(projects.path(pid) / "tests", "*.json")}
+        from . import storage
+        known = set(storage.names(pid))
         ids = patch["test_ids"] if isinstance(patch["test_ids"], list) else []
         out["test_ids"] = list(dict.fromkeys(str(x) for x in ids if str(x) in known))
     return out
@@ -69,10 +66,23 @@ def _clean(patch: dict, pid: str) -> dict:
 
 def _write(t: dict) -> dict:
     t["updated"] = time.time()
-    f = _file(t["project_id"], t["id"])
-    with fs.lock(f):
-        fs.write_json(f, t)
+    repo.Sql.write(t["project_id"], _check_id(t["id"]), lambda old: t)
     return t
+
+
+def _change(tid: str, change) -> dict | None:
+    """Re-read the task and store `change(task)` (a dict of fields) under the lock."""
+    t = load(tid)
+    if t is None:
+        return None
+
+    def apply(old: dict | None) -> dict | None:
+        if old is None:
+            return None
+        new = old | change(old)
+        new["updated"] = time.time()
+        return new
+    return repo.Sql.write(t["project_id"], tid, apply)
 
 
 def create(pid: str, data: dict, user: str = "") -> dict:
@@ -88,10 +98,7 @@ def create(pid: str, data: dict, user: str = "") -> dict:
 def load(tid: str) -> dict | None:
     if not re.fullmatch(r"[a-f0-9]{10}", tid or ""):
         return None
-    for p in fs.glob(projects.ROOT, f"*/tasks/{tid}.json"):
-        with fs.reading(p):
-            return fs.read_json(p)
-    return None
+    return repo.Sql.get(tid)
 
 
 def update(tid: str, patch: dict) -> dict | None:
@@ -99,33 +106,26 @@ def update(tid: str, patch: dict) -> dict | None:
     t = load(tid)
     if t is None:
         return None
-    with fs.lock(_file(t["project_id"], tid)):
-        t = load(tid)
-        if t is None:
-            return None
-        fields = _clean(patch, t["project_id"])
+    fields = _clean(patch, t["project_id"])
+
+    def change(t: dict) -> dict:
+        out = dict(fields)
         if "status" in fields and fields["status"] != t["status"]:
-            t["done_at"] = time.time() if fields["status"] == "done" else None
-        t.update(fields)
-        return _write(t)
+            out["done_at"] = time.time() if fields["status"] == "done" else None
+        return out
+    return _change(tid, change)
 
 
 def delete(tid: str) -> bool:
     t = load(tid)
     if not t:
         return False
-    fs.unlink(_file(t["project_id"], tid))
+    repo.Sql.delete(t["project_id"], tid)
     return True
 
 
 def all_tasks(pid: str) -> list[dict]:
-    out = []
-    for _, text, _ in fs.documents(_dir(pid)):
-        try:
-            out.append(json.loads(text))
-        except ValueError:
-            continue
-    return out
+    return repo.Sql.all(pid)
 
 
 def _order(t: dict) -> tuple:
@@ -136,28 +136,19 @@ def _order(t: dict) -> tuple:
 
 def list_tasks(pid: str, status: str = "", assignee: str = "") -> list[dict]:
     """Tasks for the list: with the names of linked tests (deleted ones are dropped)."""
-    names = {}
-    for p, text, _ in fs.documents(projects.path(pid) / "tests"):
-        try:
-            names[p.stem] = json.loads(text).get("name", p.stem)
-        except ValueError:
-            continue
+    from . import storage
+    names = storage.names(pid)
     today = datetime.date.today().isoformat()
+    only = sorted(OPEN) if status == "open" else [status] if status in STATUSES else None
     out = []
-    for t in sorted(all_tasks(pid), key=_order):
-        if status == "open" and t["status"] not in OPEN or status in STATUSES and t["status"] != status:
-            continue
-        if assignee and t.get("assignee") != assignee:
-            continue
+    for t in sorted(repo.Sql.all(pid, only, assignee), key=_order):
         tests = [{"id": x, "name": names[x]} for x in t.get("test_ids") or [] if x in names]
         out.append(t | {"tests": tests, "overdue": bool(t.get("due")) and t["status"] != "done" and t["due"] < today})
     return out
 
 
 def counts(pid: str) -> dict:
-    c = dict.fromkeys(STATUSES, 0)
-    for t in all_tasks(pid):
-        c[t["status"]] = c.get(t["status"], 0) + 1
+    c = dict.fromkeys(STATUSES, 0) | repo.Sql.counts(pid)
     c["open"] = sum(c[s] for s in OPEN)
     return c
 
@@ -167,19 +158,10 @@ def link_test(tid: str, test_id: str) -> dict | None:
     def change(t):
         ids = t.get("test_ids") or []
         return {"test_ids": ids + [test_id] if test_id not in ids else ids,
-                **({"status": "in_progress"} if t["status"] == "todo" else {})}
-    t = load(tid)
-    if not t:
-        return None
-    with fs.lock(_file(t["project_id"], tid)):
-        t = load(tid)
-        return update(tid, change(t)) if t else None
+                **({"status": "in_progress", "done_at": None} if t["status"] == "todo" else {})}
+    return _change(tid, change)
 
 
 def unlink_test(pid: str, test_id: str) -> None:
-    for t in all_tasks(pid):
-        if test_id in (t.get("test_ids") or []):
-            with fs.lock(_file(pid, t["id"])):
-                t = load(t["id"]) or t
-                t["test_ids"] = [x for x in t.get("test_ids") or [] if x != test_id]
-                _write(t)
+    for tid in repo.Sql.with_test(pid, test_id):
+        _change(tid, lambda t: {"test_ids": [x for x in t.get("test_ids") or [] if x != test_id]})

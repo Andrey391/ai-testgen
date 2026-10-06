@@ -20,7 +20,7 @@ import os
 import time
 import uuid
 
-from . import db, fs
+from . import db
 
 KINDS = ("run", "suite", "verify", "explore")
 DEAD = 90             # seconds without a heartbeat: the worker is gone
@@ -28,8 +28,8 @@ OWNER_TTL = 90        # an instance refreshes its owners more often than this
 
 
 def enabled() -> bool:
-    """Is background work queued for workers (a shared database) rather than run in this process?"""
-    return fs.remote() and os.environ.get("TESTGEN_QUEUE", "on").lower() not in ("off", "0", "false", "no")
+    """Is background work queued for workers rather than run in this process?"""
+    return os.environ.get("TESTGEN_QUEUE", "on").lower() not in ("off", "0", "false", "no")
 
 
 def put(kind: str, payload: dict, project_id: str = "", ref: str = "") -> str:

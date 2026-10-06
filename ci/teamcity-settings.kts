@@ -1,7 +1,8 @@
 // Regression run of AI Test Generator tests in TeamCity (Kotlin DSL: .teamcity/settings.kts of the application).
 //
-// Expects the studio's data folder under qa/testgen-data (TESTGEN_DATA_DIR) and parameters
-// (Parameters → add as passwords): env.TESTGEN_USERNAME, env.TESTGEN_PASSWORD and, optionally,
+// Expects the studio's database reachable from the agent and parameters (Parameters → add as
+// passwords): env.TESTGEN_DATABASE_URL and env.TESTGEN_SECRET_KEY (the studio's: tests and settings
+// come from there, the runs are recorded there), env.TESTGEN_USERNAME, env.TESTGEN_PASSWORD and, optionally,
 // env.ANTHROPIC_API_KEY (or the key of your model provider) for self-healing and failure analysis.
 // The build fails when a test outside quarantine fails (exit code 1); flaky tests do not fail it.
 import jetbrains.buildServer.configs.kotlin.*
@@ -18,10 +19,11 @@ project {
 
 object UiRegression : BuildType({
     name = "UI regression (AI Test Generator)"
-    artifactRules = "reports => reports\nqa/testgen-data/projects/*/runs => runs"
+    artifactRules = "reports => reports"
 
     params {
-        param("env.TESTGEN_DATA_DIR", "%teamcity.build.checkoutDir%/qa/testgen-data")
+        password("env.TESTGEN_DATABASE_URL", "")
+        password("env.TESTGEN_SECRET_KEY", "")
         param("testgen.project", "My project")
         param("testgen.tag", "smoke")
         param("testgen.browser", "chromium")

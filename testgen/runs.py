@@ -4,6 +4,9 @@
     data/projects/<id>/runs/<test>/<run>/       its files: step screenshots, trace.zip, visual diffs
     data/projects/<id>/runs/<test>/index.json   compact summaries, newest last (strips, flaky stats)
 
+With a shared database the records and summaries are rows of the `runs` table instead
+(repo/runs.py); the files of a run stay files by path.
+
 A run has one or two attempts: a failed test is re-run once (run.retry_failed);
 failed then passed means "flaky". Status: running | passed | flaky | failed | error.
 Only the last run.keep_runs runs of a test are kept.
@@ -18,7 +21,8 @@ import time
 import uuid
 from pathlib import Path
 
-from . import fs, projects
+from . import fs
+from .repo import runs as repo
 
 LIVE: dict[str, dict] = {}
 FLAKY_WINDOW = 20        # runs looked at for the flip rate
@@ -27,16 +31,8 @@ _RID = re.compile(r"[0-9a-f]{10}")
 _FILE = re.compile(r"[\w.-]{1,120}")
 
 
-def _safe(s: str) -> str:
-    return re.sub(r"[^\w-]+", "_", s.strip()) or "_"
-
-
-def _test_dir(pid: str, tid: str) -> Path:
-    return projects.path(pid) / "runs" / _safe(tid)
-
-
 def files_dir(run: dict) -> Path:
-    return _test_dir(run["project_id"], run["test_id"]) / run["id"]
+    return repo.test_dir(run["project_id"], run["test_id"]) / run["id"]
 
 
 def new(test: dict, trigger: str = "manual", suite_id: str = "", user: str = "", live: bool = True) -> dict:
@@ -65,9 +61,8 @@ def public(run: dict) -> dict:
 
 def save(run: dict) -> None:
     run["saved"] = time.time()
-    fs.write_json(_test_dir(run["project_id"], run["test_id"]) / f"{run['id']}.json", public(run), indent=1)
-    if fs.remote():
-        fs.push(files_dir(run))           # screenshots of the steps so far, the trace
+    repo.Sql.save(public(run))
+    fs.push(files_dir(run))           # screenshots of the steps so far, the trace
 
 def outcomes(run: dict) -> list[bool]:
     """Pass/fail of each attempt, in order."""
@@ -86,26 +81,19 @@ def finish(run: dict, keep: int = 30) -> None:
     save(run)
     from . import monitoring
     monitoring.RUNS.labels(run.get("status") or "", run.get("trigger") or "").inc()
-    d = _test_dir(run["project_id"], run["test_id"])
-    with fs.lock(d / "index.json"):
-        index = history(run["project_id"], run["test_id"], limit=0)
-        index = [x for x in index if x["id"] != run["id"]] + [summary(run)]
-        drop, index = index[:-keep] if len(index) > keep else [], index[-keep:]
-        fs.write_json(d / "index.json", index, indent=None)
-    for old in drop:
-        fs.unlink(d / f"{old['id']}.json")
-        fs.rmtree(d / old["id"])
+    d = repo.test_dir(run["project_id"], run["test_id"])
+    for old in repo.Sql.finished(run["project_id"], run["test_id"], summary(run), keep):
+        fs.rmtree(d / old)
 
 
 def history(pid: str, tid: str, limit: int = FLAKY_WINDOW) -> list[dict]:
     """Summaries of finished runs, oldest first (the last `limit`; 0 = all)."""
-    f = _test_dir(pid, tid) / "index.json"
-    try:
-        with fs.reading(f):
-            index = fs.read_json(f, [])
-    except ValueError:
-        index = []
-    return index[-limit:] if limit else index
+    return repo.Sql.history(pid, tid, limit)
+
+
+def histories(pid: str, tids: list[str], limit: int = FLAKY_WINDOW) -> dict[str, list[dict]]:
+    """history() of many tests of a project at once (one query with the database)."""
+    return repo.Sql.histories(pid, tids, limit)
 
 
 def flip_rate(index: list[dict]) -> float | None:
@@ -122,19 +110,15 @@ def get(rid: str) -> dict | None:
         return LIVE[rid]
     if not _RID.fullmatch(rid or ""):
         return None
-    for f in fs.glob(projects.ROOT, f"*/runs/*/{rid}.json"):
-        run = fs.read_json(f)
-        if run["status"] == "running" and _abandoned(run):
-            run.update(status="error", error="Студия была перезапущена во время прогона")
-        return run
-    return None
+    run = repo.Sql.get(rid)
+    if run and run["status"] == "running" and _abandoned(run):
+        run.update(status="error", error="Студия была перезапущена во время прогона")
+    return run
 
 
 def _abandoned(run: dict) -> bool:
-    """A running run found only in the store: in the file mode nobody runs it any more (it would be in
-    LIVE); with a shared database a worker may still be on it - it saves the run as it goes."""
-    if not fs.remote():
-        return True
+    """A running run found only in the store (not in LIVE): a worker may still be on it - it saves the
+    run as it goes."""
     from . import workqueue
     return not workqueue.active(run["id"]) and time.time() - (run.get("saved") or run["started"]) > STALE
 
@@ -152,4 +136,4 @@ def file(run: dict, name: str) -> Path | None:
 
 
 def delete_test(pid: str, tid: str) -> None:
-    fs.rmtree(_test_dir(pid, tid))
+    repo.Sql.delete_test(pid, tid)

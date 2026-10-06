@@ -41,9 +41,18 @@ venv держим по короткому пути: драйвер Playwright н
 python -m venv $env:LOCALAPPDATA\aitestgen\venv
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m playwright install chromium
+$env:TESTGEN_DATABASE_URL = "postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen"   # обязательно
 $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ можно задать в «Проект → Модель»
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python server.py   # http://127.0.0.1:8765
 ```
+
+Данные студии хранятся только в PostgreSQL (`docs/deploy.md`): без `TESTGEN_DATABASE_URL` студия, воркер
+и `testgen.run` не запускаются. Локально — служба PostgreSQL 17 на `127.0.0.1:5432`, роль и база
+`testgen` (пароль `testgen`, у роли `CREATEDB` — для тестов). Секреты в базе всегда зашифрованы: без
+`TESTGEN_SECRET_KEY` при базе на этом компьютере ключ один раз создаётся в
+`%LOCALAPPDATA%\aitestgen\secret.key` (потеряешь файл — потеряешь секреты), для другой базы ключ обязателен.
+На диске только кэш файлов браузера (`TESTGEN_CACHE_DIR`, по умолчанию `%LOCALAPPDATA%\aitestgen\cache`),
+поэтому все worktree и копии кода видят одни и те же данные.
 
 Модель студия не выбирает сама: каждый проект задаёт модель, effort, API-ключ, адрес API и цены в
 «Проект → Модель» (запросы идут по Anthropic Messages API — в облако или на свой сервер/прокси с
@@ -52,7 +61,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 Команды запуска MCP-серверов Zephyr Scale и Playwright MCP задаются в `TESTGEN_ZEPHYR_MCP` и
 `TESTGEN_PLAYWRIGHT_MCP` (или администратором в настройках подключения): студия не скачивает пакеты
 сама. Для локального запуска из Claude Code есть
-`.claude/launch.json` (конфигурация `studio`, `TESTGEN_AUTH=off`, свободный порт).
+`.claude/launch.json` (конфигурация `studio`, `TESTGEN_AUTH=off`, локальная база, свободный порт).
 
 Управление пользователями студии:
 
@@ -63,15 +72,16 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth token ivan "Claude Code"   # API-токен для MCP
 ```
 
-Установка на команду (`docs/deploy.md`): данные в PostgreSQL и S3, прогоны в воркерах, несколько
-экземпляров студии; Helm-чарт `helm/ai-testgen`, `docker-compose.team.yml`.
+Установка на команду (`docs/deploy.md`): та же база PostgreSQL, S3 для больших файлов, прогоны в
+воркерах, несколько экземпляров студии; Helm-чарт `helm/ai-testgen`, `docker-compose.team.yml`.
 
 ```powershell
-& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.worker            # воркер (нужна TESTGEN_DATABASE_URL)
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.worker            # воркер
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.db upgrade        # схема базы (обычно сама при старте)
-& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.db import-files .\data .\secrets   # перенос из папок
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.db import-files .\data .\secrets   # перенос из папок прежних версий
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.db export-files .\backup          # выгрузка базы в папки
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.audit verify      # цепочка журнала действий
-& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.vault encrypt     # зашифровать секреты (TESTGEN_SECRET_KEY)
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.vault rotate      # перешифровать секреты новым ключом
 ```
 
 Прогон тестов проекта без студии (CI): код выхода 0 — всё прошло (нестабильные и упавшие в карантине
@@ -86,16 +96,17 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 
 Тесты самой студии — pytest на локальном стенде `tests/site/` (`tests/stand.py`, вариант `v2` —
 изменённая вёрстка) с заглушкой LLM (`tests/fakes.py`: `FakeClient` вместо клиента API — фикстура `fake_llm`;
-фикстура `project` задаёт проекту модель `test-model`), без ключей API и затрат. Данные и секреты
-тестов уходят во временную папку (`TESTGEN_DATA_DIR`/`TESTGEN_SECRETS_DIR` в `tests/conftest.py`).
-Запускай после правок; CI — `.github/workflows/tests.yml`. Те же тесты на общем хранилище:
-`TESTGEN_TEST_DB=sqlite` (или адрес PostgreSQL — база на каждый поток xdist) и `TESTGEN_TEST_S3=moto`;
-`tests/test_cluster.py` (только с базой) поднимает 2 экземпляра студии и 3 воркера процессами.
+фикстура `project` задаёт проекту модель `test-model`), без ключей API и затрат. Данные тестов — в
+PostgreSQL: `tests/conftest.py` создаёт базу на каждый поток xdist на сервере `TESTGEN_TEST_DB` (по
+умолчанию локальный `testgen:testgen@127.0.0.1:5432`) и удаляет её в конце; `conftest.new_database()` —
+пустая база для отдельного теста. Кэш — во временной папке (`TESTGEN_CACHE_DIR`).
+Запускай после правок; CI — `.github/workflows/tests.yml`. Бинарные файлы в S3: `TESTGEN_TEST_S3=moto`;
+`tests/test_cluster.py` поднимает 2 экземпляра студии и 3 воркера процессами.
 
 ```powershell
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements-dev.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
-$env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
+$env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
 ```
 
 Ручная проверка — запуском студии (для локальной отладки удобно `TESTGEN_AUTH=off`); стенд для
@@ -105,7 +116,9 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
 
 - Модель в коде не задана: модель, effort, API-ключ, адрес API и цены выбираются в «Проект → Модель»
   (шаг 2 мастера нового проекта); этап процесса может переопределить модель и effort.
-- `ANTHROPIC_API_KEY` — ключ для проектов без своего ключа (удобно для CI, где нет папки `secrets/`).
+- `TESTGEN_DATABASE_URL` — обязательный адрес PostgreSQL (`postgresql+psycopg://…`): единственное
+  хранилище данных; `TESTGEN_DB_MIGRATE`, `TESTGEN_DB_POOL`.
+- `ANTHROPIC_API_KEY` — ключ для проектов без своего ключа (удобно для CI).
 - `TESTGEN_USD_RUB` — курс для пересчёта расходов в рубли (по умолчанию 80).
 - `TESTGEN_OFFLINE=on` — без обращений в интернет: без CDN и `npx` из сети, модель только по адресу API
   проекта (во внутренней сети).
@@ -120,21 +133,22 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   (+ `_USER_FILTER`, `_GROUP_ATTR`, `_START_TLS`, `_CACERT`). С ними `TESTGEN_SIGNUP` и `TESTGEN_LOCAL_LOGIN`
   по умолчанию `off`; `TESTGEN_SSO_SESSION_HOURS` (12).
 - `TESTGEN_SECRET_KEY` — шифрование секретов (AES-256-GCM; `TESTGEN_SECRET_KEY_OLD` для `vault rotate`);
+  обязателен, кроме базы на этом компьютере (ключ `%LOCALAPPDATA%\aitestgen\secret.key`, `vault.secret_key()`);
   `TESTGEN_VAULT_ADDR`, `TESTGEN_VAULT_TOKEN`, `TESTGEN_VAULT_MOUNT`, `TESTGEN_VAULT_PREFIX` — HashiCorp Vault.
 - `TESTGEN_AUDIT_SYSLOG=host:port[/tcp]`, `TESTGEN_AUDIT_FILE` — копия журнала действий в SIEM.
-- Общее хранилище (`docs/deploy.md`): `TESTGEN_DATABASE_URL`, `TESTGEN_S3_BUCKET` / `_ENDPOINT` / `_ACCESS_KEY` /
+- Команда (`docs/deploy.md`): `TESTGEN_S3_BUCKET` / `_ENDPOINT` / `_ACCESS_KEY` /
   `_SECRET_KEY` / `_REGION` / `_PREFIX`, `TESTGEN_INSTANCE_URL` (адрес экземпляра для других экземпляров),
   `TESTGEN_EMBEDDED_WORKER` (`on`), `TESTGEN_QUEUE` (`on`), `TESTGEN_WORKER_CONCURRENCY` (2),
-  `TESTGEN_METRICS_PORT` (воркер), `TESTGEN_METRICS_TOKEN` (`/metrics`), `TESTGEN_DB_MIGRATE`, `TESTGEN_DB_POOL`.
+  `TESTGEN_METRICS_PORT` (воркер), `TESTGEN_METRICS_TOKEN` (`/metrics`).
 - `TESTGEN_ATLASSIAN_MCP`, `TESTGEN_ZEPHYR_MCP`, `TESTGEN_PLAYWRIGHT_MCP` — команды запуска
   MCP-серверов пресетов (Atlassian без неё ищется в venv из `requirements.txt`). Не задана и не
   задана в подключении — подключение сообщает, что команды нет; студия ничего не скачивает сама.
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` — учётные данные по умолчанию для прогонов.
-- `TESTGEN_DATA_DIR` / `TESTGEN_SECRETS_DIR` — другие папки данных и секретов (CI, тесты студии).
+- `TESTGEN_CACHE_DIR` — папка локального кэша файлов браузера (по умолчанию `%LOCALAPPDATA%\aitestgen\cache`).
 - `TESTGEN_PROMPT_CACHE=off` — без кэширования промптов (сравнить стоимость; расход виден в Studio,
   прогонах и конвейере).
 - `TESTGEN_AXE_JS` — путь к `axe.min.js` или `TESTGEN_AXE_URL` — адрес, откуда его скачать (кэш в
-  `data/cache/`). Без них `assert_accessible` падает с подсказкой; адресов CDN в коде нет.
+  `<TESTGEN_CACHE_DIR>/data/cache/`). Без них `assert_accessible` падает с подсказкой; адресов CDN в коде нет.
 - `TESTGEN_FAKER_LOCALE` — локаль тестовых данных `{{faker.*}}` (по умолчанию `en_US`).
 - `TESTGEN_TOKEN`, `TESTGEN_STUDIO_URL` — для `python -m testgen.mcp_server` (stdio).
 - `PORT` (по умолчанию 8765).
@@ -157,12 +171,17 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
 - `testgen/access.py` — роли в проекте (viewer/editor/owner), видимость (`members`/`open`), группы каталога.
   `testgen/sso.py` — OIDC (code + PKCE, проверка ID-токена) и LDAP. `testgen/audit.py` — журнал действий
   (цепочка хэшей, SIEM). `testgen/monitoring.py` — метрики Prometheus.
-- **Хранилище** (`testgen/fs.py`, `testgen/db.py`). Все данные под `DATA`/`SECRETS` читай и пиши через `fs`
-  (`read_json`, `write_json`, `glob`, `documents`, `rmtree`, `lock` для read-modify-write, `local_path`/`push`
-  для файлов браузера), не через `Path` напрямую: с `TESTGEN_DATABASE_URL` путь — ключ строки PostgreSQL
-  (таблица `docs`), бинарные файлы — в S3. Схема — миграции Alembic в `testgen/migrations`.
-- **Очередь и воркеры** (`testgen/workqueue.py`, `testgen/worker.py`). С общей базой «Запустить», наборы,
-  мутации и Planner становятся заданиями очереди (`worker.start_*`); набор раскладывается на задания по
+- **Хранилище — только PostgreSQL** (`testgen/fs.py`, `testgen/db.py`, `testgen/repo/`). Все данные под
+  `DATA`/`SECRETS` читай и пиши через `fs` (`read_json`, `write_json`, `glob`, `documents`, `rmtree`, `lock`
+  для read-modify-write, `local_path`/`push` для файлов браузера), не через `Path` напрямую: путь — ключ
+  строки таблицы `docs`, бинарные файлы — в той же строке или в S3. `DATA`/`SECRETS` на диске
+  (`paths.CACHE`) — только кэш для браузера. Тесты, задачи, прогоны и расход модели — свои таблицы с
+  колонками для фильтров: `repo/<сущность>.py`, класс `Sql` (read-modify-write строки — `repo.held`,
+  `SELECT … FOR UPDATE`). Новую сущность с фильтрами клади в `repo/` и миграцию, остальное — документом
+  через `fs`. При старте `db.check()` проверяет базу и ключ секретов. Схема — миграции Alembic в
+  `testgen/migrations`. Старые папки `data/`/`secrets/` переносит `db import-files`.
+- **Очередь и воркеры** (`testgen/workqueue.py`, `testgen/worker.py`). «Запустить», наборы,
+  мутации и Planner — задания очереди (`worker.start_*`); набор раскладывается на задания по
   тестам (`suite.distribute`, `item_done`). Сессии Studio и конвейер остаются в экземпляре-владельце
   (таблица `owners`).
 - **Один event loop для браузера.** Объекты Playwright привязаны к циклу, в котором созданы, поэтому
@@ -173,8 +192,8 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   подключения без секретов, настройки процесса `pipeline`). `DEFAULT_PIPELINE` — этапы процесса и их
   параметры; `normalize_pipeline()` сливает сохранённое с умолчаниями и отбрасывает лишнее — новые
   параметры этапов добавляй туда. `ensure_default()` переносит тесты из старой раскладки
-  `data/<проект>/`; пустой проект не создаётся — без проектов студия открывает мастер нового проекта.
-- `testgen/tasks.py` — задачи проекта: `data/projects/<id>/tasks/<task>.json` (статус `todo`/`in_progress`/
+  `data/<проект>/` (после `db import-files`); пустой проект не создаётся — без проектов студия открывает мастер нового проекта.
+- `testgen/tasks.py` — задачи проекта: таблица `tasks` (`repo/tasks.py`; статус `todo`/`in_progress`/
   `review`/`done`, приоритет, исполнитель, срок, `test_ids`). Сессия Studio, начатая из задачи
   (`task_id`), при сохранении привязывает тест (`link_test`, `todo` → `in_progress`); удаление теста
   отвязывает его (`storage.delete` → `unlink_test`).
@@ -235,8 +254,8 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   попадает в тест только после «Принять»; отклонённый (`heal_rejected`) больше не используется.
   `analyze()` классифицирует падение (дефект продукта / проблема теста / окружение / нестабильный)
   по шагу, ошибке, скриншоту, событиям и истории; `judge_visual()` — визуальное расхождение.
-- `testgen/runs.py` — история прогонов: `data/projects/<id>/runs/<test>/<run>.json`, файлы прогона
-  рядом, `index.json` со сводками; ротация `run.keep_runs`; `flip_rate()` — доля смен результата.
+- `testgen/runs.py` — история прогонов: таблица `runs` (`repo/runs.py`, сводки — колонки), файлы прогона
+  по путям `data/projects/<id>/runs/<test>/<run>/`; ротация `run.keep_runs`; `flip_rate()` — доля смен результата.
 - `testgen/pipeline.py` — `run_and_record` (кнопка «Запустить», наборы, конвейер, CLI, MCP): попытка,
   перезапуск упавшего (`run.retry_failed`: упал → прошёл = flaky), анализ, запись в историю и в тест
   (последний прогон, предложения самолечения, авто-карантин). Конвейер `Job`: требования (ссылки,
@@ -278,7 +297,7 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   project_id=...)` или `llm.parse(stage, ..., schema=...)` (ответ в pydantic-модели); `stage` — настройки
   этапа проекта, переопределяют модель и effort (`llm.model(project_id, stage)`). Они проверяют бюджеты
   (`Usage.limit`, месячный лимит проекта `pipeline.budget`, `BudgetExceeded`, предупреждение на 80%) и
-  учитывают расход (`track`: `Usage`, `usage_scope()`, журнал проекта `data/projects/<id>/usage/<месяц>.json`,
+  учитывают расход (`track`: `Usage`, `usage_scope()`, журнал проекта — таблица `usage`, строка на запрос, `repo/usage.py`,
   стоимость — по ценам проекта). Без модели — `llm.NotConfigured`; сервер не запускает генерацию без
   модели (`_require_model`). `llm.check()` — проверка подключения. Не обращайся к SDK мимо `llm.py` и не
   добавляй в код идентификаторы моделей, их цены и умолчания.
@@ -289,7 +308,7 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   промпте, проверка pydantic и один повтор.
 - `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256), группы
   каталога и настройки «группа → роль» (`data/sso.json`); `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
-  `data/projects/<id>/tests/<test>.json` (теги, карантин, `heal_proposals`, `verify`), `update()` —
+  таблице `tests` (`repo/tests.py`; теги, карантин, `heal_proposals`, `verify`), `update()` —
   частичное изменение под блокировкой (тест пишут и сервер, и прогоны), выбор логина для прогона
   (свой у теста → проекта → `TESTGEN_*`).
 
@@ -299,8 +318,8 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   `groups` последнего входа), сессия — подписанная HttpOnly cookie на 7 дней (каталог — 12 часов); ключ
   подписи — секрет `studio/session`. При первом запуске создаётся `admin`, пароль печатается в консоль
   (не с SSO).
-- Все секреты идут через `testgen/vault.py`: файлы `secrets/<kind>/<key>.json`, с `TESTGEN_SECRET_KEY`
-  зашифрованные (AES-256-GCM, путь — AAD), или HashiCorp Vault; в общей базе — только зашифрованные.
+- Все секреты идут через `testgen/vault.py`: строки базы по путям `secrets/<kind>/<key>.json`, всегда
+  зашифрованные (AES-256-GCM, ключ `TESTGEN_SECRET_KEY` или локальный `secret.key`, путь — AAD), или HashiCorp Vault.
 - Учётные данные тестируемого приложения: проекта — `secrets/projects/<id>/app.json`,
   свои у теста — `secrets/projects/<id>/test-<test>.json`; видят их редакторы, в API только логин.
 - Токены MCP-подключений: `secrets/projects/<id>/conn-<cid>.json`; в `project.json` и API только
@@ -309,14 +328,17 @@ $env:TESTGEN_TEST_DB = "sqlite"; $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPD
   меняет только администратор: туда уходит ключ.
 - Команда, аргументы и env MCP-сервера — это запуск кода на сервере: менять их может только
   администратор (`auth.is_admin`); обычный пользователь заполняет лишь поля, объявленные пресетом.
-- `secrets/` в `.gitignore` — никогда не коммить и не выводи его содержимое.
+- `secrets/` (папки прежних версий), `secret.key` и содержимое таблицы `docs` под `secrets/` — никогда не
+  коммить и не выводи.
 
 ## Инварианты — не ломать
 
 - **Чужой проект не виден.** Любой ресурс проекта (тест, прогон, trace, файл, сессия, задача, запуск
   конвейера) без доступа отвечает 404 — и в API, и в MCP-сервере студии. Проверяется
   `tests/test_access.py` обходом всех маршрутов.
-- **Секреты только зашифрованы в общей базе**, в API — только признак «задан»; наблюдатель не видит
+- **Данные только в PostgreSQL.** Никаких файлов данных рядом с кодом и режима «без базы»: всё через
+  `fs`/`repo`, на диске — только кэш. Без `TESTGEN_DATABASE_URL` ничего не запускается.
+- **Секреты только зашифрованы в базе**, в API — только признак «задан»; наблюдатель не видит
   даже логин приложения. Журнал действий только дописывается, тела запросов в него не попадают.
 - **Пароль не попадает к модели и в артефакты.** Агент видит только плейсхолдеры `{{username}}` и
   `{{password}}` (плюс сам логин); реальное значение подставляется в момент выполнения шага

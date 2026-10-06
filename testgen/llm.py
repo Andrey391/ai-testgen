@@ -19,8 +19,8 @@ switches caching off, to measure the difference.
 
 Token accounting. Every answer is added to a `Usage`: the one given, those opened
 with `usage_scope()` around a piece of work (a test run, a pipeline job) and, with a
-project, the project's monthly ledger (data/projects/<id>/usage/<YYYY-MM>.json, by
-stage and model). Costs come from the prices entered in the project settings ($ per
+project, the project's monthly ledger (data/projects/<id>/usage/<YYYY-MM>.json by
+stage and model, or rows of the `usage` table with a shared database: repo/usage.py). Costs come from the prices entered in the project settings ($ per
 million tokens), in rubles at TESTGEN_USD_RUB.
 
 Budgets. A Usage can carry a limit (session, pipeline job) and the project a monthly
@@ -38,8 +38,8 @@ from typing import Callable
 
 import anthropic
 
-from . import fs
-from .paths import DATA, OFFLINE
+from .paths import OFFLINE
+from .repo import usage as usage_repo
 from .providers.anthropic import (CLEAR_TOOL_USES, CONTEXT_BETA, FALLBACK_BETA, FEATURES,  # noqa: F401
                                   AnthropicProvider, error_text, is_error)
 from .providers.base import ProviderError, Reply, Request, schema_instruction, validate
@@ -297,30 +297,18 @@ def track(resp, usage: Usage | None = None, prices: dict | None = None, project_
 
 # ---------- project ledger and monthly budget ----------
 
-def _ledger_file(pid: str, month: str = ""):
-    month = month or datetime.date.today().strftime("%Y-%m")
-    return DATA / "projects" / pid / "usage" / f"{month}.json"
+def _month(month: str = "") -> str:
+    return month or datetime.date.today().strftime("%Y-%m")
 
 
 def ledger(pid: str, month: str = "") -> dict:
-    try:
-        return fs.read_json(_ledger_file(pid, month)) or {"stages": {}, "requests": 0}
-    except ValueError:
-        return {"stages": {}, "requests": 0}
+    return usage_repo.Sql.ledger(pid, _month(month))
 
 
 def ledger_add(pid: str, stage: str, model: str, usage) -> None:
     if not re.fullmatch(r"[a-z0-9]{4,32}", pid or ""):
         return
-    f = _ledger_file(pid)
-    with fs.lock(f):             # workers and instances spend on the same project
-        d = ledger(pid)
-        d["requests"] = d.get("requests", 0) + 1
-        m = d["stages"].setdefault(stage, {}).setdefault(model, dict.fromkeys(FIELDS, 0) | {"requests": 0})
-        for fld in FIELDS:
-            m[fld] += _num(usage, fld)
-        m["requests"] += 1
-        fs.write_json(f, d, indent=1)
+    usage_repo.Sql.add(pid, _month(), stage, model, {f: _num(usage, f) for f in FIELDS})
 
 
 def _prices(pid: str) -> dict:

@@ -136,7 +136,7 @@ async def run_and_record(project: dict, test: dict, headless: bool | None = None
 
     async def progress(report):
         run["results"], run["attempt"] = report["results"], report["attempt"]
-        if fs.remote() and time.time() - run.get("saved", 0) > 1:
+        if time.time() - run.get("saved", 0) > 1:
             runs.save(run)            # the web server of another process polls the stored record
         if on_progress:
             await on_progress(run)
@@ -656,8 +656,6 @@ def get_job(jid: str) -> dict | None:
 
 
 def _job_elsewhere(jid: str) -> bool:
-    """Another instance of the studio runs this job (shared database): its saved state is current."""
-    if not fs.remote():
-        return False
+    """Another instance of the studio runs this job: its saved state is current."""
     from . import workqueue
     return bool(workqueue.owner("job", jid))

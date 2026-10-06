@@ -1,16 +1,16 @@
 # Regression run of AI Test Generator tests in GitLab CI of the APPLICATION under test.
 #
-# Include or copy into .gitlab-ci.yml. Expects the studio's data folder committed under
-# qa/testgen-data (TESTGEN_DATA_DIR) and CI/CD variables TESTGEN_USERNAME, TESTGEN_PASSWORD
-# (masked) and, optionally, ANTHROPIC_API_KEY for self-healing and failure analysis (the
-# model is the one chosen in the project settings, Project -> Model).
-# The job fails when a test outside quarantine fails; the JUnit report is shown in merge requests.
+# Include or copy into .gitlab-ci.yml. Expects the studio's database reachable from the runner and
+# CI/CD variables (masked) TESTGEN_DATABASE_URL and TESTGEN_SECRET_KEY (the same as the studio's),
+# TESTGEN_USERNAME, TESTGEN_PASSWORD and, optionally, ANTHROPIC_API_KEY for self-healing and
+# failure analysis (the model is the one chosen in the project settings, Project -> Model).
+# The runs are recorded in the studio. The job fails when a test outside quarantine fails; the
+# JUnit report is shown in merge requests.
 
 ui-regression:
   image: mcr.microsoft.com/playwright/python:v1.55.0-noble   # any recent tag: chromium is installed below
   stage: test
   variables:
-    TESTGEN_DATA_DIR: "$CI_PROJECT_DIR/qa/testgen-data"
     TESTGEN_REPO: "https://gitlab.example.com/qa/ai-testgen.git"   # the studio
     PROJECT: "My project"                                          # studio project name or id
     TAG: "smoke"                                                   # empty = all tests
@@ -30,7 +30,6 @@ ui-regression:
       junit: reports/junit-*.xml
     paths:
       - reports/
-      - qa/testgen-data/projects/*/runs/
     expire_in: 2 weeks
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"

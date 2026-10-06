@@ -1,4 +1,5 @@
-"""Saved tests: one JSON file per test under data/projects/<project id>/tests/.
+"""Saved tests: one JSON file per test under data/projects/<project id>/tests/, or a row of the
+`tests` table with a shared database (repo/tests.py).
 
 Besides the steps a test keeps: tags (suite filters), quarantine, heal proposals
 waiting for review, the mutation testing result ("verify"), the last run summary,
@@ -10,18 +11,20 @@ with the test.
 
 Tests are written from the web server and from the browser worker (runs) at the
 same time - and with a shared database from other instances and workers: use `update()`
-for partial changes, it re-reads the test under a lock (fs.lock).
+for partial changes, it re-reads the test under a lock (fs.lock; the row held with SELECT ... FOR
+UPDATE in PostgreSQL).
 """
 from __future__ import annotations
 
 import contextvars
-import json
+import copy
 import os
 import re
 import time
 import uuid
 
 from . import fs, projects, runs, tasks, traffic, vault
+from .repo import tests as repo
 
 TAG = re.compile(r"[\w.-]{1,40}")
 # Who changes tests (the server sets it per request): version history and the audit log.
@@ -31,31 +34,25 @@ VERSIONED = ("name", "url", "scenario", "steps", "before", "after")
 MAX_VERSIONS = 50
 
 
-def _safe(test_id: str) -> str:
-    return re.sub(r"[^\w-]+", "_", test_id.strip()) or "_"
+_safe = repo.safe
 
 
 def _history_dir(pid: str, tid: str):
     return projects.path(pid) / "history" / _safe(tid)
 
 
-def _file(pid: str, tid: str):
-    return projects.path(pid) / "tests" / f"{_safe(tid)}.json"
+def _stamp(old: dict | None, test: dict) -> dict:
+    """The test about to replace `old`: a version of `old` kept if it changed, who and when."""
+    test["updated"] = time.time()
+    if old and any(old.get(k) != test.get(k) for k in VERSIONED):
+        _keep_version(old)
+    test["updated_by"] = ACTOR.get() or test.get("updated_by", "")
+    return test
 
 
 def save(test: dict) -> dict:
     test.setdefault("id", uuid.uuid4().hex[:10])
-    test["updated"] = time.time()
-    f = _file(test["project_id"], test["id"])
-    with fs.lock(f):
-        try:
-            old = fs.read_json(f)
-        except ValueError:
-            old = None
-        if old and any(old.get(k) != test.get(k) for k in VERSIONED):
-            _keep_version(old)
-        test["updated_by"] = ACTOR.get() or test.get("updated_by", "")
-        fs.write_json(f, test)
+    repo.Sql.write(test["project_id"], test["id"], lambda old: _stamp(old, test))
     return test
 
 
@@ -119,43 +116,37 @@ def restore(test_id: str, n: int) -> dict | None:
     return update(test_id, change)
 
 
-def _find(test_id: str):
-    return next(iter(fs.glob(projects.ROOT, f"*/tests/{_safe(test_id)}.json")), None)
-
-
 def load(test_id: str) -> dict | None:
-    p = _find(test_id)
-    if p is None:
-        return None
-    with fs.reading(p):
-        return fs.read_json(p)
+    return repo.Sql.get(test_id)
 
 
 def update(test_id: str, change) -> dict | None:
     """Re-read the test, apply `change(test)` and save - atomically w.r.t. other updates."""
-    p = _find(test_id)
-    if p is None:
+    pid = repo.Sql.locate(test_id)
+    if pid is None:
         return None
-    with fs.lock(p):
-        t = fs.read_json(p)
-        if t is None:
+
+    def apply(old: dict | None) -> dict | None:
+        if old is None:
             return None
+        t = copy.deepcopy(old)          # `old` stays as it was: the version kept if the test changes
         change(t)
-        return save(t)
+        return _stamp(old, t)
+    return repo.Sql.write(pid, test_id, apply)
 
 
 def delete(test_id: str) -> bool:
-    for p in fs.glob(projects.ROOT, f"*/tests/{_safe(test_id)}.json"):
-        pid = p.parent.parent.name
-        fs.unlink(p)
-        vault.delete(projects.secrets_kind(pid), f"test-{test_id}")
-        runs.delete_test(pid, test_id)
-        traffic.delete(pid, test_id)
-        tasks.unlink_test(pid, test_id)
-        fs.rmtree(projects.path(pid) / "baselines" / _safe(test_id))
-        fs.rmtree(_history_dir(pid, test_id))
-        return True
-    return False
+    pid = repo.Sql.locate(test_id)
+    if pid is None:
+        return False
+    repo.Sql.delete(pid, test_id)
+    vault.delete(projects.secrets_kind(pid), f"test-{test_id}")
+    runs.delete_test(pid, test_id)
+    traffic.delete(pid, test_id)
+    tasks.unlink_test(pid, test_id)
+    fs.rmtree(projects.path(pid) / "baselines" / _safe(test_id))
+    fs.rmtree(_history_dir(pid, test_id))
+    return True
 
 
 def normalize_tags(tags) -> list[str]:
@@ -168,43 +159,37 @@ def normalize_tags(tags) -> list[str]:
 
 
 def all_tests(project_id: str) -> list[dict]:
-    out = []
-    for _, text, _ in fs.documents(projects.path(project_id) / "tests"):
-        try:
-            out.append(json.loads(text))
-        except ValueError:
-            continue
-    return out
+    return repo.Sql.all(project_id)
+
+
+def names(project_id: str) -> dict[str, str]:
+    """{test id: name} of a project (without reading the steps from the database)."""
+    return repo.Sql.names(project_id)
+
+
+def counts() -> dict[str, int]:
+    """{project id: number of tests}."""
+    return repo.Sql.counts()
 
 
 STATUSES = ("draft", "review", "ready")     # a test from the agent goes to regression after a person's review
-
-
-def status(test: dict) -> str:
-    """draft (written by the agent) -> review -> ready (in the regression suite). Older tests: ready."""
-    return test.get("status") or "ready"
+status = repo.status        # draft (written by the agent) -> review -> ready (in the regression suite). Older: ready
 
 
 def select(project_id: str, tags: list[str] | None = None, test_ids: list[str] | None = None,
            include_drafts: bool = False) -> list[dict]:
     """Tests of a suite run: the given ids, else those with any of `tags`, else all. Modules never run on
     their own; drafts and tests under review join only when asked (or named by id)."""
-    tests = [t for t in all_tests(project_id) if t.get("role") != "module"]
-    if test_ids:
-        return [t for t in tests if t["id"] in test_ids]
-    if not include_drafts:
-        tests = [t for t in tests if status(t) == "ready"]
-    if tags:
-        return [t for t in tests if set(t.get("tags") or []) & set(tags)]
-    return tests
+    return repo.Sql.query(project_id, ids=list(test_ids) if test_ids else None, tags=tags or None,
+                                ready=not include_drafts, modules=False)
 
 
 def list_tests(project_id: str, tag: str = "") -> list[dict]:
+    tests = repo.Sql.query(project_id, tags=[tag]) if tag else all_tests(project_id)
+    histories = runs.histories(project_id, [t["id"] for t in tests])
     out = []
-    for t in all_tests(project_id):
-        if tag and tag not in (t.get("tags") or []):
-            continue
-        hist = runs.history(project_id, t["id"])
+    for t in tests:
+        hist = histories.get(t["id"]) or []
         out.append({k: t.get(k) for k in ("id", "project_id", "name", "url", "scenario", "updated",
                                           "last_run", "external", "engine", "quarantine", "verify",
                                           "authoring_usage")}

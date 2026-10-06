@@ -1,23 +1,22 @@
-"""Secrets kept on the server, outside data/ so they never end up in tests,
-exports or the test list: logins for the applications under test, tokens of
-connections, keys of model providers, the studio's session key.
+"""Secrets kept apart from the data, so they never end up in tests, exports or the test list:
+logins for the applications under test, tokens of connections, keys of model providers, the
+studio's session key.
 
 A secret is a small JSON object addressed by (kind, key), e.g. ("projects/<id>", "app").
 Where it lives:
 
-- files (default): secrets/<kind>/<key>.json. With TESTGEN_SECRET_KEY set every file is
-  encrypted: AES-256-GCM, the key is SHA-256 of the variable, the file's (kind, key) is
-  authenticated data, so an encrypted file copied over another one does not decrypt.
-  Plain files written before the key was set are still read and are encrypted on first
-  read; `python -m testgen.vault encrypt` encrypts all of them at once,
-  `python -m testgen.vault rotate` re-encrypts with a new key (the old one in
-  TESTGEN_SECRET_KEY_OLD). Protect the folder with file-system permissions; do not commit it.
+- the database (default): rows of `docs` by the path secrets/<kind>/<key>.json (fs.py), always
+  encrypted: AES-256-GCM, the key is SHA-256 of TESTGEN_SECRET_KEY, the secret's (kind, key) is
+  authenticated data, so an encrypted row copied over another one does not decrypt. A plain secret
+  (brought by `db import-files`) is encrypted on first read; `python -m testgen.vault encrypt`
+  encrypts all of them at once, `python -m testgen.vault rotate` re-encrypts with a new key (the old
+  one in TESTGEN_SECRET_KEY_OLD).
+  Without TESTGEN_SECRET_KEY nothing starts - except with a database on this computer (local
+  development): then the key is made once and kept in %LOCALAPPDATA%\\aitestgen\\secret.key
+  (~/.cache/aitestgen/secret.key elsewhere). Lose that file and the secrets are lost with it.
 - HashiCorp Vault (TESTGEN_VAULT_ADDR): KV v2 engine TESTGEN_VAULT_MOUNT (default "secret"),
   under TESTGEN_VAULT_PREFIX (default "testgen"); token in TESTGEN_VAULT_TOKEN, namespace in
-  TESTGEN_VAULT_NAMESPACE, CA bundle in TESTGEN_VAULT_CACERT. Nothing is written to disk then.
-
-With a shared database (fs.py) the "files" live in its rows; there they must be encrypted:
-without TESTGEN_SECRET_KEY (or HashiCorp Vault) saving a secret is refused.
+  TESTGEN_VAULT_NAMESPACE, CA bundle in TESTGEN_VAULT_CACERT. Nothing is written to the database then.
 """
 from __future__ import annotations
 
@@ -34,11 +33,13 @@ import httpx
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from . import fs
-from .paths import SECRETS
+from . import db, fs
+from .paths import HOME, SECRETS
 
 KEY_ENV = "TESTGEN_SECRET_KEY"
 MIN_KEY = 16
+LOCAL_KEY = HOME / "secret.key"
+LOCAL_HOSTS = ("", "localhost", "127.0.0.1", "::1")
 TRANSPORT: httpx.BaseTransport | None = None     # tests: a fake Vault server
 
 
@@ -54,7 +55,41 @@ def _kind(kind: str) -> str:
     return "/".join(_name(part) for part in kind.split("/") if part.strip())
 
 
-# ---------- encryption of files ----------
+# ---------- the key ----------
+
+def secret_key() -> str:
+    """TESTGEN_SECRET_KEY; with a database on this computer and no variable - the key of local
+    development (LOCAL_KEY), made on first use."""
+    key = os.environ.get(KEY_ENV, "").strip()
+    if key:
+        return key
+    from sqlalchemy.engine import make_url
+    try:
+        host = make_url(db.url()).host or ""
+    except db.NotConfigured:
+        host = None
+    if host not in LOCAL_HOSTS:
+        raise VaultError(f"Задайте {KEY_ENV} — длинную случайную строку: секреты в базе хранятся только "
+                         "зашифрованными (или TESTGEN_VAULT_ADDR для HashiCorp Vault)")
+    if not LOCAL_KEY.is_file():
+        LOCAL_KEY.parent.mkdir(parents=True, exist_ok=True)
+        tmp = LOCAL_KEY.with_name(f".{LOCAL_KEY.name}.{_random.token_hex(4)}")
+        tmp.write_text(_random.token_urlsafe(36), "utf-8")
+        if os.name != "nt":
+            tmp.chmod(0o600)
+        try:
+            os.link(tmp, LOCAL_KEY)          # two processes starting together: the first key wins
+        except FileExistsError:
+            pass
+        finally:
+            tmp.unlink()
+        if LOCAL_KEY.is_file():
+            print(f"Ключ шифрования секретов локальной разработки: {LOCAL_KEY} (без него секреты в базе "
+                  f"не прочитать; для сервера задайте {KEY_ENV})", file=sys.stderr)
+    return LOCAL_KEY.read_text("utf-8").strip()
+
+
+# ---------- encryption ----------
 
 def _aes(secret: str | None) -> AESGCM | None:
     if not secret:
@@ -91,8 +126,9 @@ def _open(blob: dict, aad: str, secret: str | None) -> dict:
     return json.loads(plain)
 
 
-class FileVault:
-    name = "files"
+class DbVault:
+    """Secrets as encrypted documents of the database (fs.py), by path: SECRETS/<kind>/<key>.json."""
+    name = "database"
 
     def __init__(self, root: Path):
         self.root = root
@@ -104,31 +140,25 @@ class FileVault:
     def _aad(kind: str, key: str) -> str:
         return f"{_kind(kind)}/{_name(key)}"
 
-    def _write(self, p: Path, blob: dict) -> None:
-        if fs.key(p) is not None:
-            if not encrypted(blob):
-                raise VaultError(f"В общей базе секреты хранятся только зашифрованными: задайте {KEY_ENV} "
-                                 "(или TESTGEN_VAULT_ADDR)")
-            fs.write_json(p, blob)
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(f".{p.name}.{_random.token_hex(4)}.tmp")
-        tmp.write_text(json.dumps(blob, ensure_ascii=False, indent=2), "utf-8")
-        os.replace(tmp, p)
+    @staticmethod
+    def _write(p: Path, blob: dict) -> None:
+        if not encrypted(blob):
+            raise VaultError(f"Секреты хранятся только зашифрованными: задайте {KEY_ENV}")
+        fs.write_json(p, blob)
 
     def load(self, kind: str, key: str) -> dict | None:
         p = self._path(kind, key)
         blob = fs.read_json(p)
         if blob is None:
             return None
-        secret = os.environ.get(KEY_ENV)
+        secret = secret_key()
         data = _open(blob, self._aad(kind, key), secret)
-        if secret and not encrypted(blob):
-            self._write(p, _seal(data, self._aad(kind, key), secret))    # written before the key was set
+        if not encrypted(blob):
+            self._write(p, _seal(data, self._aad(kind, key), secret))    # brought plain by import-files
         return data
 
     def save(self, kind: str, key: str, data: dict) -> None:
-        self._write(self._path(kind, key), _seal(data, self._aad(kind, key), os.environ.get(KEY_ENV)))
+        self._write(self._path(kind, key), _seal(data, self._aad(kind, key), secret_key()))
 
     def delete(self, kind: str, key: str) -> bool:
         return fs.unlink(self._path(kind, key))
@@ -137,14 +167,10 @@ class FileVault:
         if _kind(kind):
             fs.rmtree(self.root / _kind(kind))
 
-    def reseal(self, old: str | None, new: str | None) -> int:
-        """Re-encrypt every secret file: `old` key (None = plain or the same) -> `new`. -> files changed."""
+    def reseal(self, old: str | None, new: str) -> int:
+        """Re-encrypt every secret: `old` key (None = plain or the same) -> `new`. -> secrets changed."""
         n = 0
-        if fs.key(self.root) is None:
-            files = list(self.root.rglob("*.json"))
-        else:
-            files = [p for depth in range(2, 6) for p in fs.glob(self.root, "/".join(["*"] * depth))]
-        for p in sorted(files):
+        for p in sorted(p for depth in range(2, 6) for p in fs.glob(self.root, "/".join(["*"] * depth))):
             rel = p.relative_to(self.root)
             if len(rel.parts) < 2 or p.suffix != ".json":       # users.json, tokens.json: hashes, not secrets
                 continue
@@ -213,7 +239,7 @@ _backend = None
 def backend():
     global _backend
     addr = os.environ.get("TESTGEN_VAULT_ADDR", "").strip()
-    wanted = ("hashicorp", addr) if addr else ("files", str(SECRETS))
+    wanted = ("hashicorp", addr) if addr else ("database", str(SECRETS))
     if _backend is None or _backend[0] != wanted:
         if addr:
             inst = HashiVault(addr, os.environ.get("TESTGEN_VAULT_TOKEN", ""),
@@ -222,15 +248,23 @@ def backend():
                               os.environ.get("TESTGEN_VAULT_NAMESPACE", ""),
                               os.environ.get("TESTGEN_VAULT_CACERT", ""))
         else:
-            inst = FileVault(SECRETS)
+            inst = DbVault(SECRETS)
         _backend = (wanted, inst)
     return _backend[1]
+
+
+def check() -> None:
+    """Secrets can be kept: the key is there (or HashiCorp Vault is used). -> VaultError."""
+    if backend().name == "database":
+        secret_key()
 
 
 def describe() -> dict:
     """For the admin and the security team: where secrets are and whether they are encrypted."""
     b = backend()
-    return {"backend": b.name, "encrypted": b.name != "files" or bool(os.environ.get(KEY_ENV))}
+    if b.name != "database":
+        return {"backend": b.name, "encrypted": True}
+    return {"backend": b.name, "encrypted": True, "key": "env" if os.environ.get(KEY_ENV, "").strip() else "local"}
 
 
 def load(kind: str, key: str) -> dict | None:
@@ -251,24 +285,25 @@ def delete_all(kind: str) -> None:
 
 
 def _cli(argv: list[str]) -> None:
+    from .paths import utf8_console
+    utf8_console()
     cmd = (argv or ["help"])[0]
-    files = FileVault(SECRETS)
-    if cmd == "encrypt":
-        key = os.environ.get(KEY_ENV)
-        if not key:
-            sys.exit(f"Задайте {KEY_ENV}")
-        print(f"Зашифровано файлов: {files.reseal(key, key)}")
-    elif cmd == "rotate":
-        old, new = os.environ.get("TESTGEN_SECRET_KEY_OLD"), os.environ.get(KEY_ENV)
-        if not old or not new:
-            sys.exit(f"Задайте старый ключ в TESTGEN_SECRET_KEY_OLD и новый в {KEY_ENV}")
-        print(f"Перешифровано файлов: {files.reseal(old, new)}")
-    elif cmd == "decrypt":
-        print(f"Расшифровано файлов: {files.reseal(os.environ.get(KEY_ENV), None)}")
-    elif cmd == "status":
-        print(describe())
-    else:
-        print(__doc__ + "\nCommands: encrypt | rotate | decrypt | status")
+    secrets = DbVault(SECRETS)
+    try:
+        if cmd == "encrypt":
+            key = secret_key()
+            print(f"Зашифровано секретов: {secrets.reseal(key, key)}")
+        elif cmd == "rotate":
+            old, new = os.environ.get("TESTGEN_SECRET_KEY_OLD"), os.environ.get(KEY_ENV)
+            if not old or not new:
+                sys.exit(f"Задайте старый ключ в TESTGEN_SECRET_KEY_OLD и новый в {KEY_ENV}")
+            print(f"Перешифровано секретов: {secrets.reseal(old, new)}")
+        elif cmd == "status":
+            print(describe())
+        else:
+            print(__doc__ + "\nCommands: encrypt | rotate | status")
+    except (VaultError, db.NotConfigured) as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

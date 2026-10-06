@@ -91,8 +91,7 @@ def _forget(path) -> None:
 
 
 def _read_json(path) -> dict:
-    with fs.reading(path):
-        return fs.read_json(path, {})
+    return fs.read_json(path, {})
 
 
 def _users() -> dict:
@@ -245,8 +244,7 @@ def read_token(token: str | None) -> str | None:
 # ---------- API tokens (MCP access from IDEs) ----------
 
 def _tokens() -> dict:
-    with fs.reading(_TOKENS):
-        return fs.read_json(_TOKENS, {})
+    return fs.read_json(_TOKENS, {})
 
 
 def create_api_token(username: str, name: str = "") -> tuple[str, dict]:

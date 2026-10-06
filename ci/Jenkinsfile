@@ -1,7 +1,9 @@
 // Regression run of AI Test Generator tests in Jenkins (declarative pipeline) of the APPLICATION under test.
 //
 // Put it into the application's repository as Jenkinsfile (or a separate job). It expects:
-//   - the studio's data folder committed under qa/testgen-data (TESTGEN_DATA_DIR);
+//   - the studio's database reachable from the agent; credentials in Jenkins (secret text)
+//     "testgen-database-url" and "testgen-secret-key": TESTGEN_DATABASE_URL and TESTGEN_SECRET_KEY of the
+//     studio (tests and settings come from there, the runs are recorded there);
 //   - credentials in Jenkins: "testgen-app-login" (username/password of the application under test) and,
 //     optionally, "testgen-llm-key" (secret text: ANTHROPIC_API_KEY or the key of your model provider) for
 //     self-healing and failure analysis;
@@ -16,7 +18,8 @@ pipeline {
     }
     triggers { cron('H 3 * * *') }                 // nightly
     environment {
-        TESTGEN_DATA_DIR = "${WORKSPACE}/qa/testgen-data"
+        TESTGEN_DATABASE_URL = credentials('testgen-database-url')
+        TESTGEN_SECRET_KEY = credentials('testgen-secret-key')
         APP = credentials('testgen-app-login')
         TESTGEN_USERNAME = "${APP_USR}"
         TESTGEN_PASSWORD = "${APP_PSW}"
@@ -42,7 +45,7 @@ pipeline {
     post {
         always {
             junit allowEmptyResults: true, testResults: 'reports/junit.xml'
-            archiveArtifacts artifacts: 'reports/**, qa/testgen-data/projects/*/runs/**', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
         }
     }
 }
