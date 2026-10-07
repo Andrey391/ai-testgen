@@ -407,6 +407,15 @@ def context_options(device: str = "", locale: str = "", timezone: str = "",
 
 SETTLED_FOR = 0.5       # seconds a settled page counts as settled
 NAVIGATION_GRACE = 0.3  # seconds for a navigation started by a step to begin before a snapshot
+DOM_QUIET_MS = 200      # a snapshot after a click waits until the DOM has not changed for this long
+DOM_QUIET_JS = """({quiet, max}) => new Promise(resolve => {
+  let timer;
+  const done = () => { observer.disconnect(); resolve(true); };
+  const observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(done, quiet); });
+  observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+  timer = setTimeout(done, quiet);
+  setTimeout(done, max);
+})"""
 # Steps that never start a navigation: after a click, a key or a navigation the page may only begin
 # to change once the step's own wait is over, so the snapshot waits again.
 QUIET_ACTIONS = {"fill", "select_option", "hover", "upload_file", "assert_visible", "assert_text_present",
@@ -566,7 +575,12 @@ class BrowserSession:
             await self.settle()
             await self.requests_done()
             if self.page.url == url and not self._in_flight:
-                return
+                break
+        # The page's script renders what a request brought a moment after the request ends.
+        try:
+            await self._evaluate(self.page.main_frame, DOM_QUIET_JS, {"quiet": DOM_QUIET_MS, "max": 2000})
+        except (PlaywrightError, asyncio.TimeoutError):
+            pass                # a navigation replaced the document: the snapshot retries
 
     async def requests_done(self, timeout: float = 3) -> None:
         """Wait for the page's requests in flight (a step's result that arrives by a request:
