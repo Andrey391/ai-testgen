@@ -554,11 +554,12 @@ def _project_view(p: dict) -> dict:
                 "catalog": CATALOG}
 
 
-# What can be chosen for test design (labels for the UI; the models get the descriptions).
-CATALOG = {"types": {k: {"label": v[0], "hint": v[1]} for k, v in catalog.TYPES.items()},
-           "techniques": {k: {"label": v[0], "hint": v[1]} for k, v in catalog.TECHNIQUES.items()},
+# What can be chosen for test design: labels and Russian descriptions for the UI (the models get their own).
+CATALOG = {"types": {k: {"label": v[0], "hint": catalog.TYPE_INFO[k]} for k, v in catalog.TYPES.items()},
+           "techniques": {k: {"label": v[0], "hint": catalog.TECHNIQUE_INFO[k]} for k, v in catalog.TECHNIQUES.items()},
            "layers": catalog.LAYERS,
-           "standards": {k: v[0] for k, v in catalog.STANDARDS.items()},
+           "standards": {k: {"title": v[0], "about": catalog.STANDARD_INFO[k], "sections": v[1]}
+                         for k, v in catalog.STANDARDS.items()},
            "quality": {k: v[0] for k, v in catalog.QUALITY.items()}}
 
 
