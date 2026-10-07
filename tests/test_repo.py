@@ -163,7 +163,8 @@ def test_run_history_is_rows(database):
     for i in range(5):
         r = runs.new(a, "manual", live=False)
         r.update(status="passed" if i % 2 else "failed", passed=bool(i % 2), started=100 + i)
-        fs.write_bytes(runs.files_dir(r) / "step-1.jpg", b"\xff\xd8")
+        for name in ("step-1.jpg", "a2-step-1.jpg", "s1-actual.png", "a2-heal-1.jpg", "trace.zip"):
+            fs.write_bytes(runs.files_dir(r) / name, b"\xff\xd8")
         runs.finish(r, keep=3)
         made.append(r["id"])
         time.sleep(0.01)
@@ -175,6 +176,10 @@ def test_run_history_is_rows(database):
     assert [h["id"] for h in hist] == made[2:] and [h["outcomes"] for h in hist] == [[False], [True], [False]]
     assert runs.get(made[0]) is None and not fs.exists(runs.files_dir({"project_id": pid, "test_id": a["id"],
                                                                        "id": made[0]}))
+    # screenshots only of the last two runs; the trace and the heal screenshot (a proposal) stay
+    files = lambda rid: {f.name for f in fs.glob(runs.files_dir({"project_id": pid, "test_id": a["id"], "id": rid}), "*")}
+    assert files(made[2]) == {"a2-heal-1.jpg", "trace.zip"}
+    assert files(made[3]) == files(made[4]) == {"step-1.jpg", "a2-step-1.jpg", "s1-actual.png", "a2-heal-1.jpg", "trace.zip"}
     assert runs.histories(pid, [a["id"], b["id"]], limit=2) == {a["id"]: hist[-2:],
                                                                  b["id"]: runs.history(pid, b["id"])}
     assert runs.flip_rate(hist) == 1.0
