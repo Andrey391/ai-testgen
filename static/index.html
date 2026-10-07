@@ -8,10 +8,12 @@
 :root{
   --bg:#f6f7f9;--panel:#fff;--ink:#1c2230;--muted:#6b7385;--line:#e3e6ec;
   --accent:#3b5bdb;--accent-ink:#fff;--ok:#2b8a3e;--bad:#c92a2a;--warn:#b7791f;--soft:#eef2ff;
+  --warn-bg:#fff8db;--bad-bg:#fff0f0;--ok-bg:#ebfbee;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#12151b;--panel:#1a1e27;--ink:#e6e9ef;--muted:#98a0b3;--line:#2b303c;
   --accent:#6c8cff;--accent-ink:#0d1020;--ok:#51cf66;--bad:#ff6b6b;--warn:#fcc419;--soft:#232a3d;
+  --warn-bg:#3a3214;--bad-bg:#3d1d1f;--ok-bg:#1b3222;
 }}
 *{box-sizing:border-box}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
@@ -105,6 +107,65 @@ tr.click:hover td{background:var(--bg)}
 .genbox li.ok .ck{color:var(--ok)}
 .genbox li.bad .ck{color:var(--bad)}
 .genbox .goal{color:var(--muted);margin-top:4px}
+/* studio, left column: the name in one line, the controls under it; goal and readiness fold away */
+.ws-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-ctl{margin-top:6px}
+details.fold{margin-top:6px;padding:4px 10px;font-size:13px}
+details.fold .goal{margin:4px 0 2px}
+ul.ready{list-style:none;padding:0;margin:4px 0 2px}
+ul.ready li{display:flex;gap:6px;align-items:baseline;margin:2px 0}
+ul.ready li .ck{width:16px;text-align:center;color:var(--muted)}
+ul.ready li.ok .ck{color:var(--ok)}
+ul.ready li.bad .ck{color:var(--bad)}
+.changes{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;max-height:150px;overflow:auto}
+.changes .head{display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:var(--muted);margin-bottom:2px}
+.changes .ch{display:flex;gap:6px;align-items:baseline;padding:2px 0;border-top:1px dashed var(--line)}
+.changes .ch .t{color:var(--muted);font-variant-numeric:tabular-nums;flex:none}
+.changes .ch .i{width:14px;text-align:center;flex:none;font-weight:700}
+.changes .ch.add .i{color:var(--accent)}.changes .ch.ok .i{color:var(--ok)}
+.changes .ch.bad .i{color:var(--bad)}.changes .ch.edit .i,.changes .ch.del .i{color:var(--warn)}
+.changes .ch.fresh{background:var(--soft)}
+/* pagination of long tables and lists */
+.pg-hide{display:none!important}
+.pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;font-size:12px;color:var(--muted);margin-top:8px}
+.pager select{width:auto;padding:2px 6px;font-size:12px}
+.pager button{min-width:28px}
+/* screenshot viewer */
+#lightbox{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:48px 24px 24px}
+#lightbox img{max-width:100%;max-height:100%;border-radius:6px;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.4)}
+#lightbox .x{position:fixed;top:12px;right:16px;width:36px;height:36px;border-radius:50%;border:0;background:var(--panel);color:var(--ink);font-size:22px;line-height:1;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.3)}
+#lightbox .x:hover{background:var(--soft)}
+#lightbox .msg{color:#fff;font-size:14px;max-width:480px;text-align:center}
+.imgs img,img.shot,a.shot-link{cursor:zoom-in}
+/* pipeline run: what needs a person - yellow, possible defects - red */
+.job-sum{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.job-sum .k{border:1px solid var(--line);border-radius:8px;padding:6px 10px;min-width:110px}
+.job-sum .k b{display:block;font-size:20px;line-height:1.2;font-variant-numeric:tabular-nums}
+.job-sum .k span{font-size:12px;color:var(--muted)}
+.job-sum .k.warn{border-color:var(--warn);background:var(--warn-bg)}
+.job-sum .k.bad{border-color:var(--bad);background:var(--bad-bg)}
+.job-sum .k.ok b{color:var(--ok)}
+.stepper{display:flex;gap:0;margin:10px 0;flex-wrap:wrap}
+.stepper .st{flex:1;min-width:110px;position:relative;padding:6px 8px 6px 10px;border:1px solid var(--line);border-left-width:0;font-size:12px;background:var(--panel)}
+.stepper .st:first-child{border-left-width:1px;border-radius:8px 0 0 8px}
+.stepper .st:last-child{border-radius:0 8px 8px 0}
+.stepper .st .n{font-weight:600;color:var(--ink)}
+.stepper .st .c{color:var(--muted)}
+.stepper .st.done{background:var(--ok-bg)}
+.stepper .st.done .n::before{content:"✓ ";color:var(--ok)}
+.stepper .st.cur{background:var(--soft);box-shadow:inset 0 -3px 0 var(--accent)}
+.stepper .st.off{opacity:.5}.stepper .st.off .n{text-decoration:line-through}
+.job-group{margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.job-group.warn{border-color:var(--warn);background:var(--warn-bg)}
+.job-group.bad{border-color:var(--bad);background:var(--bad-bg)}
+.job-group>.gh{display:flex;gap:8px;align-items:center;font-weight:600;margin-bottom:4px}
+.job-group>.gh .muted{font-weight:400;font-size:12px}
+details.job-group>summary{cursor:pointer;font-weight:600}
+.job-group table{background:var(--panel);border-radius:6px}
+tr.hl-warn td{background:var(--warn-bg)}
+tr.hl-warn td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+tr.hl-bad td{background:var(--bad-bg)}
+tr.hl-bad td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
 .finish{border-radius:8px;padding:8px 10px;margin:6px 0;border:1px solid var(--line)}
 .finish.passed{border-color:var(--ok)}
 .finish.failed{border-color:var(--bad)}
@@ -431,12 +492,16 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
   <div id="workspace" class="studio hidden">
     <div class="card col">
-      <div class="row"><b id="wsTitle" class="grow"></b>
+      <b id="wsTitle" class="ws-title"></b>
+      <div class="row ws-ctl">
         <label class="inline"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
         <button class="btn small danger hidden" id="stopBtn" title="Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
       </div>
       <div class="status"><span class="dot" id="stDot"></span><span id="stText"></span></div>
       <div class="genbox" id="genBox"></div>
+      <div class="changes" id="changesBox"></div>
+      <details class="opt fold"><summary>Цель</summary><div class="goal" id="goalText"></div></details>
+      <details class="opt fold"><summary>Готовность <span id="readySum"></span></summary><ul class="ready" id="readyList"></ul></details>
       <div class="finish hidden" id="finishBox"></div>
       <div class="chat" id="chat"></div>
       <div id="pendingBox" class="pending hidden">
@@ -679,13 +744,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="card" style="margin-top:12px">
     <div class="row"><h3 class="grow" style="margin:0">История анализа требований</h3><span class="muted" id="anCount"></span></div>
     <div class="hint">Каждая генерация сценариев сохраняется здесь вместе с требованиями. Раскройте анализ, чтобы посмотреть и изменить сценарии (изменения сохраняются сразу) и сгенерировать по ним тесты; под каждым сценарием — тесты, созданные по нему.</div>
-    <div id="anList"></div>
+    <div id="anList" data-paged></div>
   </div>
 </section>
 
 <!-- ============ PIPELINE ============ -->
 <section id="tab-pipe" class="hidden">
-  <div class="card">
+  <div class="card hidden" id="pipeBusy"></div>
+  <div class="card" id="pipeForm">
     <h2>Запуск конвейера</h2>
     <div class="muted">Полный процесс по настройкам проекта: требования → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div>
     <div class="flow" id="pipeFlow"></div>
@@ -1254,6 +1320,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
 <datalist id="llmModels"></datalist>
 
+<div id="lightbox" class="hidden" role="dialog" aria-label="Снимок экрана">
+  <button class="x" id="lbClose" title="Закрыть (Esc)" aria-label="Закрыть">×</button>
+  <img id="lbImg" alt=""><div class="msg hidden" id="lbMsg"></div>
+</div>
+
 <dialog id="credDlg">
   <h3 style="margin-top:0">Учётная запись теста</h3>
   <label>Учётная запись проекта</label><select id="cdAccount"></select>
@@ -1287,6 +1358,93 @@ const store = {get: k => { try { return localStorage.getItem(k) } catch { return
                set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }};
 const fmtTime = t => t ? new Date(t * 1000).toLocaleString() : '';
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
+
+// ---- screenshots open over the page and close with × in the top right corner, Esc or a click beside
+function openShot(src) {
+  $('#lbImg').classList.remove('hidden'); $('#lbMsg').classList.add('hidden');
+  $('#lbImg').src = src;
+  $('#lightbox').classList.remove('hidden');
+}
+function closeShot() { $('#lightbox').classList.add('hidden'); $('#lbImg').removeAttribute('src'); }
+$('#lbImg').onerror = () => {
+  if (!$('#lbImg').getAttribute('src')) return;
+  $('#lbImg').classList.add('hidden');
+  $('#lbMsg').textContent = 'Снимка нет: студия хранит снимки только двух последних прогонов теста.';
+  $('#lbMsg').classList.remove('hidden');
+};
+$('#lbClose').onclick = closeShot;
+$('#lightbox').onclick = e => { if (e.target.id === 'lightbox') closeShot(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#lightbox').classList.contains('hidden')) closeShot(); });
+document.addEventListener('click', e => {
+  const a = e.target.closest('a.shot-link'), img = !a && e.target.closest('.imgs img, img.shot');
+  if (!a && !img) return;
+  e.preventDefault();
+  openShot(a ? a.href : img.src);
+});
+
+// ---- pagination: a table (or a [data-paged] list) with more than 10 records shows them page by page.
+// Works on whatever renders the rows: a MutationObserver re-pages a list after each render; the page
+// and its size survive re-renders (polling), the size chosen last is remembered.
+const PAGE_MIN = 10, PAGE_SIZES = [10, 25, 50, 100];
+const PAGES = new Map();     // list key -> {page, size}
+function pageKey(list) {
+  const holder = list.closest('[id]');
+  if (list.id) return list.id;
+  const named = list.closest('[data-key]');
+  if (named) return named.dataset.key;
+  const same = holder ? [...holder.querySelectorAll(list.tagName)].indexOf(list) : 0;
+  return `${holder?.id || ''}:${list.tagName}:${same}`;
+}
+function paginate(list) {
+  const table = list.tagName === 'TBODY' ? list.closest('table') : null;
+  const anchor = table || list;
+  if (!anchor.isConnected || anchor.closest('[data-nopage]')) return;
+  const recs = [];
+  for (const el of list.children) {
+    if (el.classList.contains('pager')) continue;
+    // the expanded part of a row (a scenario being edited) goes with its row
+    if (recs.length && el.matches('tr.sc-edit')) recs[recs.length - 1].push(el); else recs.push([el]);
+  }
+  let pager = anchor.nextElementSibling?.classList.contains('pager') ? anchor.nextElementSibling : null;
+  if (recs.length <= PAGE_MIN) {
+    recs.flat().forEach(el => el.classList.remove('pg-hide'));
+    pager?.remove();
+    return;
+  }
+  const key = pageKey(list);
+  const st = PAGES.get(key) || {page: 0, size: +store.get('pageSize') || PAGE_MIN};
+  PAGES.set(key, st);
+  const pages = Math.ceil(recs.length / st.size);
+  st.page = Math.max(0, Math.min(st.page, pages - 1));
+  recs.forEach((rec, i) => rec.forEach(el => el.classList.toggle('pg-hide', Math.floor(i / st.size) !== st.page)));
+  if (!pager) { pager = document.createElement('div'); pager.className = 'pager'; anchor.after(pager); }
+  const from = st.page * st.size + 1, to = Math.min(recs.length, from + st.size - 1);
+  pager.innerHTML = `<span>${from}–${to} из ${recs.length}</span>
+    <button class="btn small" data-go="-1" ${st.page ? '' : 'disabled'} title="Предыдущая страница">‹</button>
+    <span>стр. ${st.page + 1} из ${pages}</span>
+    <button class="btn small" data-go="1" ${st.page < pages - 1 ? '' : 'disabled'} title="Следующая страница">›</button>
+    <label class="inline" style="font-size:12px;color:var(--muted)">по
+      <select>${PAGE_SIZES.map(n => `<option ${n === st.size ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
+  pager.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { st.page += +b.dataset.go; paginate(list); });
+  pager.querySelector('select').onchange = e => {
+    st.size = +e.target.value; st.page = 0; store.set('pageSize', st.size); paginate(list);
+  };
+}
+const pageQueue = new Set();
+new MutationObserver(muts => {
+  for (const m of muts) {
+    const t = m.target;
+    if (t.nodeType !== 1 || t.classList.contains('pager')) continue;
+    const own = t.closest('tbody, [data-paged]');
+    if (own) pageQueue.add(own);
+    for (const n of m.addedNodes) {
+      if (n.nodeType !== 1 || n.classList.contains('pager')) continue;
+      if (n.matches('tbody, [data-paged]')) pageQueue.add(n);
+      n.querySelectorAll('tbody, [data-paged]').forEach(x => pageQueue.add(x));
+    }
+  }
+  if (pageQueue.size) requestAnimationFrame(() => { const lists = [...pageQueue]; pageQueue.clear(); lists.forEach(paginate); });
+}).observe(document.body, {childList: true, subtree: true});
 const setPath = (o, p, v) => { const ks = p.split('.'); ks.slice(0, -1).reduce((x, k) => x[k], o)[ks.at(-1)] = v; };
 
 let ME = null, PID = null, PROJ = null, PROJECTS = [], PRESETS = [], SKILLS = [];
@@ -1509,7 +1667,7 @@ window.addEventListener('resize', shotSize);
 
 function render() {
   const s = STATE;
-  $('#wsTitle').textContent = s.name;
+  $('#wsTitle').textContent = s.name; $('#wsTitle').title = s.name;
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
   $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
@@ -1565,15 +1723,16 @@ function renderProgress(s) {
   const f = s.finish;
   const item = (cls, text) => `<li class="${cls}"><span class="ck">${cls === 'ok' ? '✓' : cls === 'bad' ? '✕' : '○'}</span><span>${text}</span></li>`;
   $('#genBox').innerHTML = `<div><span class="muted">Сейчас:</span> <span class="now">${esc(now)}</span>
-      ${s.autopilot ? `<span class="muted"> · Auto-Pilot: до ${s.max_steps} шагов</span>` : ''}</div>
-    <div class="goal">Цель: ${s.expected ? esc(s.expected) : 'ожидаемый результат сценария'}</div>
-    <div class="muted" style="margin-top:6px">Тест будет готов, когда:</div>
-    <ul>
+      ${s.autopilot ? `<span class="muted"> · Auto-Pilot: до ${s.max_steps} шагов</span>` : ''}</div>`;
+  $('#goalText').textContent = s.expected || 'Ожидаемый результат сценария';
+  const ready = [n > 0, asserts.length > 0, f?.status === 'passed'];
+  $('#readySum').innerHTML = `<span class="badge ${ready.every(Boolean) ? 'ok' : f && f.status !== 'passed' ? 'bad' : 'off'}">${ready.filter(Boolean).length} из 3</span>`;
+  $('#readyList').innerHTML = `<li class="muted" style="display:block">Тест будет готов, когда:</li>
       ${item(n ? 'ok' : '', `агент пройдёт сценарий в браузере — выполнено шагов: ${n}`)}
       ${item(asserts.length ? 'ok' : '', `ожидаемый результат проверен шагом-проверкой (assert) — проверок: ${asserts.length}` +
         (asserts.length ? '' : ' <span class="muted">(без проверки агенту не дадут завершить: такой тест зелёный при любом поведении приложения)</span>'))}
-      ${item(f ? (f.status === 'passed' ? 'ok' : 'bad') : '', f ? `агент завершил: ${esc(FINISH_TEXT[f.status]?.[0] || f.status)}` : 'агент подтвердит завершение (сам решает, что сценарий пройден целиком)')}
-    </ul>`;
+      ${item(f ? (f.status === 'passed' ? 'ok' : 'bad') : '', f ? `агент завершил: ${esc(FINISH_TEXT[f.status]?.[0] || f.status)}` : 'агент подтвердит завершение (сам решает, что сценарий пройден целиком)')}`;
+  trackChanges(s);
   const box = $('#finishBox');
   box.classList.toggle('hidden', !f);
   if (f) {
@@ -1585,6 +1744,58 @@ function renderProgress(s) {
       ${f.assertions?.length ? `<div class="hint">Проверки в тесте: шаги ${f.assertions.join(', ')} (отмечены зелёным слева)</div>` : ''}
       <div class="hint">Дальше: просмотрите шаги, при необходимости поправьте их и нажмите «Сохранить тест».</div>`;
   }
+}
+// What changed in the session since it was opened: steps added, edited, executed, removed, the
+// agent's verdict, saving - newest first, so a person sees what the agent (or a teammate) just did.
+let CHANGES = {sid: null, steps: null, finish: null, test_id: null, list: [], counts: {add: 0, edit: 0, del: 0}};
+const stepLabel = (st, i) => `${i + 1}. ${st.description || st.action}`;
+function trackChanges(s) {
+  const now = Date.now(), C = CHANGES;
+  const snap = s.steps.map(st => ({id: st.id, status: st.status, description: st.description, value: st.value, action: st.action,
+                                   healed: !!st.healed, error: st.error || ''}));
+  if (C.sid !== SID) {
+    CHANGES = {sid: SID, steps: snap, finish: s.finish?.status || null, test_id: s.test_id || null,
+               list: [], counts: {add: 0, edit: 0, del: 0}};
+    if (snap.length) CHANGES.list.push({at: now, kind: 'info', text: `Сессия открыта: шагов ${snap.length}`});
+    return renderChanges();
+  }
+  const add = (kind, text) => C.list.unshift({at: now, kind, text});
+  const before = new Map(C.steps.map((st, i) => [st.id, [st, i]]));
+  snap.forEach((st, i) => {
+    const old = before.get(st.id);
+    if (!old) {
+      C.counts.add++;
+      add(st.status === 'failed' ? 'bad' : 'add', `Добавлен шаг ${stepLabel(st, i)}` + (st.status === 'failed' ? ' — упал' : ''));
+      return;
+    }
+    const [o] = old;
+    if (o.description !== st.description || o.value !== st.value || o.action !== st.action) {
+      C.counts.edit++; add('edit', `Изменён шаг ${stepLabel(st, i)}`);
+    }
+    if (o.status !== st.status && st.status === 'passed') add('ok', `Выполнен шаг ${stepLabel(st, i)}`);
+    if (o.status !== st.status && st.status === 'failed') add('bad', `Упал шаг ${stepLabel(st, i)}${st.error ? ': ' + st.error : ''}`);
+    if (!o.healed && st.healed) add('edit', `Шаг ${i + 1}: локатор найден заново (самолечение)`);
+  });
+  const ids = new Set(snap.map(st => st.id));
+  C.steps.forEach(st => { if (!ids.has(st.id)) { C.counts.del++; add('del', `Удалён шаг «${st.description || st.action}»`); } });
+  const kept = C.steps.map(st => st.id).filter(id => ids.has(id)), order = snap.map(st => st.id).filter(id => before.has(id));
+  if (kept.join() !== order.join()) add('edit', 'Изменён порядок шагов');
+  const fin = s.finish?.status || null;
+  if (fin && fin !== C.finish) add(fin === 'passed' ? 'ok' : 'bad', `Агент завершил: ${FINISH_TEXT[fin]?.[0] || fin}`);
+  if (s.test_id && s.test_id !== C.test_id) add('ok', C.test_id ? 'Тест сохранён' : 'Тест сохранён в проект');
+  Object.assign(C, {steps: snap, finish: fin, test_id: s.test_id || null});
+  C.list = C.list.slice(0, 50);
+  renderChanges();
+}
+function renderChanges() {
+  const C = CHANGES, icon = {add: '+', ok: '✓', bad: '✕', edit: '✎', del: '−', info: '•'};
+  const fresh = Date.now() - 4000;
+  const c = C.counts;
+  $('#changesBox').innerHTML = `<div class="head"><b style="color:var(--ink)">Изменения</b>
+      <span>добавлено ${c.add} · изменено ${c.edit} · удалено ${c.del}</span></div>` +
+    (C.list.map(x => `<div class="ch ${x.kind}${x.at > fresh ? ' fresh' : ''}"><span class="t">${new Date(x.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+      <span class="i">${icon[x.kind] || '•'}</span><span>${esc(x.text)}</span></div>`).join('')
+      || '<div class="muted">Пока изменений нет: здесь появятся добавленные, выполненные и изменённые шаги.</div>');
 }
 $('#stopBtn').onclick = async () => {
   try { await api('POST', `/api/sessions/${SID}/stop`); } catch (e) { alert(e.message); }
@@ -1987,7 +2198,7 @@ function stepsHtml(r, results, t) {
     const icon = !x ? '<span class="muted">…</span>' : x.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>';
     const sub = x?.sub?.length ? `<div style="margin-left:14px">${x.sub.map(y => `<div class="hint" style="margin:1px 0">${y.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>'} ${esc(y.description)}${y.healed ? ' <span class="badge warn">self-healed</span>' : ''}</div>`).join('')}</div>` : '';
     return `<div class="r">${icon}<div class="grow">${i + 1}. ${esc(s.description)}${x?.healed ? ' <span class="badge warn">self-healed</span>' : ''}
-      ${x?.shot ? ` <a class="linkbtn" target="_blank" href="/api/runs/${r.id}/files/${x.shot}">снимок</a>` : ''}
+      ${x?.shot ? ` <a class="linkbtn shot-link" href="/api/runs/${r.id}/files/${x.shot}">снимок</a>` : ''}
       ${x?.error ? `<div class="err">${esc(x.error)}</div>` : ''}${sub}${x ? detailsHtml(r, x, t) : ''}</div></div>`;
   }).join('');
 }
@@ -3013,6 +3224,19 @@ async function loadPipe() {
     <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">Запусков пока не было.</td></tr>';
   if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
+  const busy = jobs.find(j => LIVE_JOB.includes(j.status));
+  pipeBusy(busy && !(JOB?.id === busy.id && !LIVE_JOB.includes(JOB.status)) ? busy : null);
+  if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id);
+}
+// While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
+const LIVE_JOB = ['running', 'awaiting_selection'];
+let PIPE_BUSY = null;
+function pipeBusy(job) {
+  PIPE_BUSY = job || null;
+  $('#pipeForm').classList.toggle('hidden', !!job);
+  $('#pipeBusy').classList.toggle('hidden', !job);
+  if (job) $('#pipeBusy').innerHTML = `<div class="row"><span class="dot run"></span><b class="grow">Конвейер выполняется — запуск от ${fmtTime(job.created)}</b>
+    <span class="muted" style="font-size:12px">Новый запуск станет доступен, когда этот завершится или будет остановлен</span></div>`;
 }
 $('#pipeFileBtn').onclick = () => $('#pipeFile').click();
 $('#pipeFile').onchange = async e => {
@@ -3041,54 +3265,105 @@ async function openJob(jid) {
   clearTimeout(jobTimer);
   try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { alert(e.message); return; }
   renderJob();
-  if (['running', 'awaiting_selection'].includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid), 1500);
+  if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
+  else if (PIPE_BUSY?.id === JOB.id) pipeBusy(null);
+  if (LIVE_JOB.includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid), 1500);
   else if (!$('#tab-pipe').classList.contains('hidden')) loadPipe();
+}
+// A pipeline run as a process: the stages with how many scenarios each holds, then the scenarios grouped
+// by what they need. What waits for a person is yellow, possible defects red; finished and not yet started
+// scenarios fold away.
+const ACTIVE_ITEM = ['authoring', 'running', 'verifying', 'publishing'];
+function itemKind(it, live) {
+  // the agent saw the application differ from the expected result (runs saved before `bug` - by the message)
+  if (it.bug || /возможный дефект/.test(it.error || '') || (it.run && !it.run.passed && it.run.analysis?.verdict === 'product_bug')) return 'bug';
+  if (['needs_attention', 'error'].includes(it.status) || (it.run && !it.run.passed)) return 'attention';
+  if (ACTIVE_ITEM.includes(it.status) && live) return 'active';
+  if (it.status === 'done') return 'done';
+  return 'waiting';     // queued, cancelled, interrupted by a stop or a restart
+}
+function jobStepper(j, live) {
+  const cur = live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '';
+  const at = STAGES.findIndex(([k]) => k === cur);
+  const now = {};
+  j.items.forEach(it => { if (live && ACTIVE_ITEM.includes(it.status)) now[it.status] = (now[it.status] || 0) + 1; });
+  return '<div class="stepper">' + STAGES.map(([k, t], i) => {
+    const on = stageEnabled(k);
+    const done = on && (j.status === 'done' || (at >= 0 && i < at && !now[k]) ||
+      (k === 'requirements' && j.requirements.length > 0) || (k === 'scenarios' && j.items.length > 0));
+    const note = !on ? 'выключен'
+      : k === 'requirements' ? (j.requirements.length ? `документов: ${j.requirements.length}` : '')
+      : k === 'scenarios' ? (j.scenarios?.length ? `сценариев: ${j.scenarios.length}` : '')
+      : now[k] ? `сейчас: ${now[k]}` : '';
+    return `<div class="st ${!on ? 'off' : k === cur ? 'cur' : done ? 'done' : ''}"><div class="n">${t}</div><div class="c">${note || '&nbsp;'}</div></div>`;
+  }).join('') + '</div>';
+}
+function jobItemRow([it, i]) {
+  const [st, cls] = ITEM_STATUS[it.status] || [it.status, 'off'];
+  const kind = itemKind(it, LIVE_JOB.includes(JOB.status));
+  const v = it.verify;
+  const quality = !v ? '—' : v.status === 'done' ? `<span class="badge ${v.weak ? 'warn' : 'ok'}">мутанты: ${v.killed}/${v.total}</span>${v.improved ? '<div class="hint">проверки усилены агентом</div>' : ''}`
+    : `<span class="badge off" title="${esc(v.error || '')}">${esc(v.status)}</span>`;
+  const run = it.run ? (it.run.run_id ? `<a href="#" onclick="showTab('tests');openRun('${it.run.run_id}');return false">${runBadge(it.run.status || (it.run.passed ? 'passed' : 'failed'))}</a>` : (it.run.passed ? '<span class="ok">passed</span>' : '<span class="err">failed</span>')) +
+    (it.run.healed ? ` · healed ${it.run.healed}` : '') +
+    (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
+  const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
+    : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
+  const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужен человек</span>' : '';
+  return `<tr class="${kind === 'bug' ? 'hl-bad' : kind === 'attention' ? 'hl-warn' : ''}"><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span> ${flag}
+      ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}</td>
+    <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
+    <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${quality}</td><td>${z}</td>
+    <td>${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
+      ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
+}
+function jobItemsTable(rows, key) {
+  return `<table class="scen-list" data-key="${key}"><thead><tr><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +
+    rows.map(jobItemRow).join('') + '</tbody></table>';
 }
 function renderJob() {
   const j = JOB, box = $('#jobBox');
   box.classList.remove('hidden');
-  const live = ['running', 'awaiting_selection'].includes(j.status);
+  const live = LIVE_JOB.includes(j.status);
+  // folded groups keep their state across the polling
+  const opened = new Set($$('#jobBox details[data-g][open]').map(d => d.dataset.g));
   let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
     ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}
     ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}</div>
-    <div class="flow">${flowHtml(live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '')}</div>`;
+    ${jobStepper(j, live)}`;
+  const groups = {bug: [], attention: [], active: [], done: [], waiting: []};
+  j.items.forEach((it, i) => groups[itemKind(it, live)].push([it, i]));
+  if (j.items.length) {
+    const finished = j.items.filter(it => !ACTIVE_ITEM.includes(it.status) && it.status !== 'queued').length;
+    const k = (n, label, cls) => `<div class="k${n && cls ? ' ' + cls : ''}"><b>${n}</b><span>${label}</span></div>`;
+    html += `<div class="pbar" title="Обработано сценариев: ${finished} из ${j.items.length}"><i style="width:${Math.round(finished / j.items.length * 100)}%"></i></div>
+      <div class="job-sum">${k(groups.attention.length, 'нужен человек', 'warn')}${k(groups.bug.length, 'возможные дефекты', 'bad')}
+        ${k(groups.active.length, 'в работе')}${k(groups.done.length, 'готово', 'ok')}${k(groups.waiting.length, live ? 'в очереди' : 'не начато или прервано')}</div>`;
+  }
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
-  if (j.requirements.length) html += `<div class="hint">Требования: ${j.requirements.map(r => esc(r.title || r.source)).join(' · ')}</div>`;
-  if (j.feature) html += `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>`;
-  if (j.assumptions?.length) html += `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>`;
   if (j.status === 'awaiting_selection') {
     if (JOB_PICK.id !== j.id) JOB_PICK = {id: j.id, open: new Set(),
       sel: new Set(j.scenarios.map((s, i) => s.priority !== 'low' ? i : -1).filter(i => i >= 0))};
     const n = JOB_PICK.sel.size, all = j.scenarios.length;
-    html += `<div class="row" style="margin-top:10px"><b class="grow">Выберите сценарии для генерации тестов</b>
-      <span class="muted" style="font-size:12px">Сценариев: ${all}</span>
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: выберите сценарии для генерации тестов</span>
+      <span class="muted">Сценариев: ${all}</span>
       <button class="btn primary" onclick="selectScenarios()" ${n ? '' : 'disabled'}>${n === all ? `Сгенерировать все (${all})` : `Сгенерировать выбранные (${n})`}</button></div>
-      <table class="scen-list" style="margin-top:8px"><thead><tr><th class="chk"><input type="checkbox" onchange="pickAllJob(this.checked)" title="Отметить все"
+      <table class="scen-list" data-key="job-pick"><thead><tr><th class="chk"><input type="checkbox" onchange="pickAllJob(this.checked)" title="Отметить все"
         ${n && n === all ? 'checked' : ''}></th><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th></tr></thead>
-        <tbody>${j.scenarios.map(jobScenRow).join('') || '<tr><td colspan="5" class="muted">Сценариев нет.</td></tr>'}</tbody></table>`;
+        <tbody>${j.scenarios.map(jobScenRow).join('') || '<tr><td colspan="5" class="muted">Сценариев нет.</td></tr>'}</tbody></table></div>`;
   }
-  if (j.items.length) {
-    html += `<table class="scen-list" style="margin-top:10px"><thead><tr><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +
-      j.items.map((it, i) => {
-        const [st, cls] = ITEM_STATUS[it.status] || [it.status, 'off'];
-        const v = it.verify;
-        const quality = !v ? '—' : v.status === 'done' ? `<span class="badge ${v.weak ? 'warn' : 'ok'}">мутанты: ${v.killed}/${v.total}</span>${v.improved ? '<div class="hint">проверки усилены агентом</div>' : ''}`
-          : `<span class="badge off" title="${esc(v.error || '')}">${esc(v.status)}</span>`;
-        const run = it.run ? (it.run.run_id ? `<a href="#" onclick="showTab('tests');openRun('${it.run.run_id}');return false">${runBadge(it.run.status || (it.run.passed ? 'passed' : 'failed'))}</a>` : (it.run.passed ? '<span class="ok">passed</span>' : '<span class="err">failed</span>')) +
-          (it.run.healed ? ` · healed ${it.run.healed}` : '') +
-          (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
-        const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
-          : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
-        return `<tr><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span>
-            ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}</td>
-          <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
-          <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${quality}</td><td>${z}</td>
-          <td>${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
-            ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
-      }).join('') + '</tbody></table>';
-  }
-  html += `<details class="opt" ${live ? 'open' : ''}><summary>Журнал (${j.log.length})</summary><div class="log">` +
+  const group = (g, cls, title, hint) => groups[g].length ? `<div class="job-group ${cls}"><div class="gh">${title}${hint ? ` <span class="muted">— ${hint}</span>` : ''}</div>${jobItemsTable(groups[g], 'job-' + g)}</div>` : '';
+  html += group('attention', 'warn', 'Нужен человек', 'откройте сессию в Studio или разберите упавший прогон') +
+    group('bug', 'bad', 'Возможные дефекты', 'приложение ведёт себя не так, как ожидает сценарий: проверьте и заведите дефект') +
+    group('active', '', 'В работе', '');
+  const fold = (g, title) => groups[g].length ? `<details class="job-group" data-g="${g}" ${opened.has(g) ? 'open' : ''}><summary>${title} (${groups[g].length})</summary>${jobItemsTable(groups[g], 'job-' + g)}</details>` : '';
+  html += fold('done', 'Готово') + fold('waiting', live ? 'В очереди' : 'Не начато или прервано');
+  const about = (j.requirements.length ? `<div class="hint">Требования: ${j.requirements.map(r => esc(r.title || r.source)).join(' · ')}</div>` : '') +
+    (j.feature ? `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>` : '') +
+    (j.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>` : '');
+  if (about) html += `<details class="opt" data-g="about" ${opened.has('about') ? 'open' : ''}><summary>Требования и допущения</summary>${about}</details>`;
+  html += `<details class="opt" data-g="log" ${opened.has('log') ? 'open' : ''}><summary>Журнал (${j.log.length})</summary><div class="log">` +
     j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString()} — ${esc(l.text)}</div>`).join('') + '</div></details>';
   box.innerHTML = html;
 }

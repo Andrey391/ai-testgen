@@ -9,7 +9,8 @@ With a shared database the records and summaries are rows of the `runs` table in
 
 A run has one or two attempts: a failed test is re-run once (run.retry_failed);
 failed then passed means "flaky". Status: running | passed | flaky | failed | error.
-Only the last run.keep_runs runs of a test are kept.
+Only the last run.keep_runs runs of a test are kept; screenshots - only of the last SHOT_RUNS
+(the run just finished and the one before it): they are most of the disk the runs take.
 Runs in progress live in LIVE as well, so the UI can poll them every second. With a shared
 database (fs.py) a run may go on in a worker: its record is saved as it progresses, its files
 are sent to the store as they appear, and the web server reads both from there.
@@ -26,6 +27,8 @@ from .repo import runs as repo
 
 LIVE: dict[str, dict] = {}
 FLAKY_WINDOW = 20        # runs looked at for the flip rate
+SHOT_RUNS = 2            # runs of a test whose screenshots are kept: this one and the previous
+SHOTS = ("*.jpg", "*.png")   # step screenshots and visual diffs; heal-* stay while a proposal may need them
 STALE = 300              # s: a running run nobody saved for this long was left by a stopped process
 _RID = re.compile(r"[0-9a-f]{10}")
 _FILE = re.compile(r"[\w.-]{1,120}")
@@ -84,6 +87,18 @@ def finish(run: dict, keep: int = 30) -> None:
     d = repo.test_dir(run["project_id"], run["test_id"])
     for old in repo.Sql.finished(run["project_id"], run["test_id"], summary(run), keep):
         fs.rmtree(d / old)
+    prune_shots(run)
+
+
+def prune_shots(run: dict) -> None:
+    """Screenshots of older runs of the test go; the records, traces and heal screenshots stay."""
+    pid, tid = run["project_id"], run["test_id"]
+    keep = {x["id"] for x in history(pid, tid, SHOT_RUNS)} | {run["id"]} | set(LIVE)
+    d = repo.test_dir(pid, tid)
+    for pattern in SHOTS:
+        for f in fs.glob(d, "*/" + pattern):
+            if f.parent.name not in keep and "heal-" not in f.name:
+                fs.unlink(f)
 
 
 def history(pid: str, tid: str, limit: int = FLAKY_WINDOW) -> list[dict]:

@@ -656,6 +656,7 @@ class Job:
             problem = "В тесте нет ни одной проверки"
         if problem:
             item["status"], item["error"] = "needs_attention", f"{problem} — откройте сессию в Studio"
+            item["bug"] = s.finish_status == "failed"        # the studio shows it as a possible defect
             self._log(f"«{sc['title']}»: {problem}", "warn")
             return None
 
@@ -756,9 +757,11 @@ def list_jobs(pid: str, limit: int = 30) -> list[dict]:
     for f, text, _ in fs.documents(_jobs_dir(pid))[:limit]:
         if f.stem not in out:
             try:
-                out[f.stem] = json.loads(text)
+                out[f.stem] = j = json.loads(text)
             except ValueError:
                 continue
+            if j.get("status") in ("running", "awaiting_selection") and not _job_elsewhere(f.stem):
+                j["status"] = "error"          # interrupted by a restart, as get_job() says
     jobs = sorted(out.values(), key=lambda j: j["created"], reverse=True)[:limit]
     return [{k: j.get(k) for k in ("id", "status", "stage", "created", "finished", "links", "feature",
                                    "user", "explore")} | {"items": len(j.get("items") or []),
