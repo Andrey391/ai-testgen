@@ -154,10 +154,37 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .flow .chip.on{border-color:var(--accent);color:var(--accent)}
 .flow .chip.cur{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .flow .chip.off{text-decoration:line-through}
-.skills-layout{display:grid;grid-template-columns:280px 1fr;gap:12px;align-items:start}
-.skill-item{padding:8px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+/* option lists of the settings: a grid of tiles instead of one line of checkboxes; skills - a column of expandable rows */
+.checks[data-list]{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
+.checks[data-kind="skills"]{grid-template-columns:1fr}
+.list-head{grid-column:1/-1;display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted)}
+.opt-item{border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--bg)}
+.opt-item.on{border-color:var(--accent);background:var(--soft)}
+.opt-item.disabled{opacity:.6}
+.opt-item .d{font-size:12px;color:var(--muted);margin:2px 0 0 22px}
+.opt-item details{margin:4px 0 0 22px;font-size:12px}
+.opt-item summary{cursor:pointer;color:var(--accent)}
+.sk-body{max-height:260px;overflow:auto;white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0}
+/* skills page: the list and the viewer side by side, each scrolls in the height of the window */
+.skills-layout{display:grid;grid-template-columns:340px 1fr;gap:12px;align-items:start}
+.skills-layout > .card{max-height:calc(100vh - 150px);overflow:auto;position:sticky;top:10px}
+.sk-filters{display:flex;flex-direction:column;gap:6px;position:sticky;top:-14px;background:var(--panel);padding:2px 0 8px;margin-bottom:6px;border-bottom:1px solid var(--line);z-index:1}
+.sk-filters .chips button{font:inherit;font-size:12px;padding:2px 9px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+.sk-filters .chips button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.sk-group{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 4px}
+.skill-item{padding:8px;border-radius:6px;cursor:pointer;border:1px solid transparent;display:flex;gap:8px;align-items:flex-start}
 .skill-item:hover{background:var(--bg)}
 .skill-item.on{border-color:var(--accent);background:var(--soft)}
+.skill-item.disabled > div{opacity:.55}
+.switch{position:relative;flex:none;width:30px;height:17px;margin-top:2px}
+.switch input{opacity:0;width:0;height:0;position:absolute}
+.switch span{position:absolute;inset:0;border-radius:9px;background:var(--line);cursor:pointer;transition:.15s}
+.switch span::before{content:"";position:absolute;width:13px;height:13px;left:2px;top:2px;border-radius:50%;background:#fff;transition:.15s}
+.switch input:checked + span{background:var(--ok)}
+.switch input:checked + span::before{transform:translateX(13px)}
+.switch input:disabled + span{cursor:default;opacity:.6}
+.opt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px 12px;margin-top:4px}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 12px}
 .tools{max-height:220px;overflow:auto;font-size:12px;margin-top:6px}
 .log{max-height:260px;overflow:auto;font-size:12px}
 .log div{padding:2px 0;border-bottom:1px dashed var(--line)}
@@ -216,6 +243,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
 @media (max-width:1100px){.studio{grid-template-columns:1fr;height:auto}.chat,.steps{max-height:360px}
   .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
+  .skills-layout > .card{position:static}#skList{max-height:50vh}#skEditor{max-height:none}
   .grid2,.grid3{grid-template-columns:1fr}}
 </style>
 </head>
@@ -1152,7 +1180,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div data-subpanel="skills" class="hidden">
         <div class="card">
           <h3>Скиллы</h3>
-          <div class="muted">Инструкции для этапов процесса в формате SKILL.md (front matter <code>name / description / stage</code> и Markdown). Встроенные скиллы не редактируются: их можно клонировать в проект и выбрать флажком, какую версию использовать — локальную или встроенную. Подключаются к этапам в разделах «Требования», «Сценарии» и «Процесс генерации».</div>
+          <div class="muted">Инструкции для этапов процесса в формате SKILL.md (front matter <code>name / description / stage / group</code> и Markdown). Встроенные скиллы не редактируются: их можно клонировать в проект и выбрать флажком, какую версию использовать — локальную или встроенную. Этапы, на которых работает скилл, выбираются здесь в карточке скилла или в разделах «Требования», «Сценарии» и «Процесс генерации». Выключенный переключателем скилл не получает ни один этап.</div>
           <div class="row" style="margin-top:10px">
             <button class="btn" id="skNew">+ Новый скилл</button>
             <button class="btn" id="skImportBtn">Импорт .md</button>
@@ -1160,10 +1188,29 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           </div>
         </div>
         <div class="skills-layout" style="margin-top:12px">
-          <div class="card" id="skList"></div>
+          <div class="card" id="skListBox">
+            <div class="sk-filters">
+              <input id="skSearch" placeholder="Поиск по имени и описанию">
+              <div class="chips" id="skGroups"></div>
+              <div class="row" style="gap:6px">
+                <select id="skStageF" class="grow"><option value="">Все этапы</option></select>
+                <select id="skStateF" class="grow"><option value="">Все</option><option value="on">Включённые</option><option value="off">Выключенные</option><option value="used">Используются</option><option value="unused">Не используются</option></select>
+              </div>
+            </div>
+            <div id="skList"></div>
+          </div>
           <div class="card" id="skEditor">
             <div class="row"><b class="grow" id="skTitle">Выберите скилл</b>
-              <span id="skBadges"></span></div>
+              <span id="skBadges"></span>
+              <label class="switch" title="Включён в проекте"><input type="checkbox" id="skEnabled"><span></span></label></div>
+            <div class="row" style="margin-top:6px">
+              <div class="grow"><label style="margin-top:0">Группа</label>
+                <input id="skGroup" list="skGroupList" placeholder="Например: Тест-дизайн — или новая группа">
+                <datalist id="skGroupList"></datalist></div>
+            </div>
+            <label>Используется на этапах</label>
+            <div class="slots" id="skSlots"></div>
+            <div class="hint" id="skSlotsHint">Отметка сразу сохраняется в настройках процесса проекта.</div>
             <div class="row hidden" id="skLocalBar" style="margin-top:6px">
               <label class="inline grow"><input type="checkbox" id="skUseLocal"> Использовать локальную версию в проекте</label>
               <select id="skVersion" style="width:auto"><option value="local">локальная версия</option><option value="builtin">встроенная версия</option></select>
@@ -2613,9 +2660,9 @@ function renderDesignChoices() {
     box.innerHTML = `<div class="row" style="margin-top:10px;align-items:baseline"><b style="font-size:13px">Слои:</b>
         ${boxes(prefix, 'layers', Object.entries(cat.layers), cfg.layers)}
         <span class="muted" style="font-size:12px">— UI-тесты в браузере и/или API-тесты бэкенда</span></div>
-      <div class="checks" style="margin-top:4px"><b style="font-size:13px;margin-right:6px">Виды проверок:</b>
+      <b style="font-size:13px;display:block;margin-top:6px">Виды проверок:</b><div class="opt-grid">
         ${boxes(prefix, 'types', Object.entries(cat.types).map(([k, v]) => [k, v.label, v.hint]), cfg.types)}</div>
-      <details class="opt"><summary>Техники тест-дизайна (${cfg.techniques.length})</summary><div class="checks">
+      <details class="opt"><summary>Техники тест-дизайна (${cfg.techniques.length})</summary><div class="opt-grid">
         ${boxes(prefix, 'techniques', Object.entries(cat.techniques).map(([k, v]) => [k, v.label, v.hint]), cfg.techniques)}</div></details>
       <div class="hint">Выбор только для этого запуска; значения по умолчанию — в «Проект → Сценарии».</div>`;
   }
@@ -3755,10 +3802,11 @@ function fillProcess() {
     if (box.dataset.kind === 'layers') opts = Object.entries(PROJ.catalog.layers);
     if (box.dataset.kind === 'browsers') opts = [['chromium', 'Chromium'], ['firefox', 'Firefox'], ['webkit', 'WebKit (Safari)']];
     if (box.dataset.kind === 'toolconns') opts = PROJ.connections.filter(c => c.preset !== 'playwright').map(c => [c.id, c.name]);
-    if (box.dataset.kind === 'skills') opts = SKILLS.filter(s => [box.dataset.stage, 'any'].includes(s.stage) || cur.includes(s.name))
-      .map(s => [s.name, s.name, s.description]);
-    box.innerHTML = opts.map(([v, t, d]) => `<label class="inline" ${d ? `title="${esc(d)}"` : ''}><input type="checkbox" value="${esc(v)}" ${cur.includes(v) ? 'checked' : ''}> ${esc(t)}</label>`).join('')
-      || '<span class="muted">—</span>';
+    if (box.dataset.kind === 'skills') { box.innerHTML = skillOptions(box, cur); return; }
+    box.innerHTML = opts.length ? listHead(opts.length) + opts.map(([v, t, d]) => `<div class="opt-item ${cur.includes(v) ? 'on' : ''}" ${d ? `title="${esc(d)}"` : ''}>
+        <label class="inline"><input type="checkbox" value="${esc(v)}" ${cur.includes(v) ? 'checked' : ''}> ${esc(t)}</label></div>`).join('')
+      : '<span class="muted">—</span>';
+    countList(box);
   });
   $$('[data-p]').forEach(el => {
     const v = getPath(PROJ.pipeline, el.dataset.p);
@@ -3767,6 +3815,61 @@ function fillProcess() {
   $$('[data-csv]').forEach(el => el.value = (getPath(PROJ.pipeline, el.dataset.csv) || []).join(', '));
   syncStages();
 }
+
+// option lists: a counter and "all / none" above the tiles
+const listHead = (n, extra = '') => `<div class="list-head"><span data-count></span>${n > 1 ? `<span class="grow"></span>
+  <button type="button" class="linkbtn" data-all="1">выбрать все</button><button type="button" class="linkbtn" data-all="0">снять все</button>` : '<span class="grow"></span>'}${extra}</div>`;
+function countList(box) {
+  const items = [...box.querySelectorAll('.opt-item')];
+  items.forEach(it => it.classList.toggle('on', it.querySelector('input').checked));
+  const c = box.querySelector('[data-count]');
+  if (c) c.textContent = `выбрано ${items.filter(it => it.classList.contains('on')).length} из ${items.length}`;
+}
+// skills of a stage: grouped rows with the description; the text opens in place, without leaving the settings
+function skillOptions(box, cur) {
+  const all = box.dataset.all === '1';
+  const own = s => [box.dataset.stage, 'any'].includes(s.stage);
+  const list = SKILLS.filter(s => all || own(s) || cur.includes(s.name))
+    .sort((a, b) => (a.group || '￿').localeCompare(b.group || '￿') || a.name.localeCompare(b.name));
+  const others = SKILLS.filter(s => !own(s) && !cur.includes(s.name)).length;
+  const toggle = others || all ? `<button type="button" class="linkbtn" data-other>${all ? 'только скиллы этапа' : `+ скиллы других этапов (${others})`}</button>` : '';
+  if (!list.length) return listHead(0, toggle) + '<span class="muted">Скиллов этапа нет — создайте во вкладке «Скиллы».</span>';
+  const html = list.map(s => `<div class="opt-item ${s.enabled ? '' : 'disabled'}">
+      <label class="inline"><input type="checkbox" value="${esc(s.name)}" ${cur.includes(s.name) ? 'checked' : ''}> <b>${esc(s.name)}</b>
+        ${s.group ? `<span class="badge off">${esc(s.group)}</span>` : ''}
+        ${own(s) ? '' : `<span class="badge off">этап: ${esc(STAGE_NAMES[s.stage] || s.stage)}</span>`}
+        ${s.enabled ? '' : '<span class="badge bad" title="Выключен во вкладке «Скиллы»: этапы его не получают">выключен</span>'}
+        ${s.overridden ? '<span class="badge warn">локальная версия</span>' : !s.builtin ? '<span class="badge ok">проекта</span>' : ''}</label>
+      ${s.description ? `<div class="d">${esc(s.description)}</div>` : ''}
+      <details data-skill="${esc(s.name)}"><summary>Содержимое</summary><div class="sk-body">Загрузка…</div>
+        <button type="button" class="linkbtn" onclick="gotoSkill('${esc(s.name)}')">Открыть во вкладке «Скиллы» →</button></details>
+    </div>`).join('');
+  setTimeout(() => countList(box));
+  return listHead(list.length, toggle) + html;
+}
+function refreshSkillBoxes() {
+  $$('[data-kind="skills"]').forEach(box => { box.innerHTML = skillOptions(box, getPath(PROJ.pipeline, box.dataset.list) || []); });
+}
+document.addEventListener('change', e => { const box = e.target.closest('.checks[data-list]'); if (box) countList(box); });
+document.addEventListener('click', e => {
+  const b = e.target.closest('.checks[data-list] .list-head button'); if (!b) return;
+  const box = b.closest('[data-list]');
+  if ('other' in b.dataset) {        // keeps the ticks made but not saved yet
+    const cur = [...box.querySelectorAll('input:checked')].map(i => i.value);
+    box.dataset.all = box.dataset.all === '1' ? '' : '1';
+    box.innerHTML = skillOptions(box, cur); return;
+  }
+  box.querySelectorAll('.opt-item input').forEach(i => i.checked = b.dataset.all === '1');
+  countList(box);
+});
+document.addEventListener('toggle', async e => {
+  const d = e.target;
+  if (!d.matches?.('details[data-skill]') || !d.open || d.dataset.loaded) return;
+  d.dataset.loaded = '1';
+  try { const s = await api('GET', `/api/projects/${PID}/skills/${d.dataset.skill}`); d.querySelector('.sk-body').textContent = s.body || s.text; }
+  catch (err) { d.querySelector('.sk-body').textContent = err.message; delete d.dataset.loaded; }
+}, true);
+function gotoSkill(name) { showSub('skills'); openSkill(name); }
 
 // language model spending of the project this month
 async function loadUsage() {
@@ -3809,23 +3912,97 @@ $$('[data-save-process]').forEach(btn => btn.onclick = async () => {
 
 // skills
 let SKILL = null;
+const SK_F = {group: '*', q: '', stage: '', state: ''};
 const STAGE_NAMES = {requirements: 'требования', scenarios: 'сценарии', authoring: 'генерация', run: 'прогон', publish: 'публикация', any: 'любой этап'};
+// the pipeline settings that list skills (skills.SLOTS)
+const SKILL_SLOTS = {'requirements.skills': 'Требования (проверка ТЗ)', 'scenarios.skills': 'Сценарии', 'authoring.skills': 'Генерация теста',
+  'run.skills': 'Прогон и анализ падений', 'publish.skills': 'Публикация тест-кейса', 'publish.run_skills': 'Отправка результата прогона'};
+const groupTitle = g => g || 'Без группы';
+const skillGroups = () => [...new Set(SKILLS.map(s => s.group || ''))].sort((a, b) => !a - !b || a.localeCompare(b));
+function skillVisible(s, group = SK_F.group) {
+  const q = SK_F.q.toLowerCase();
+  return (group === '*' || (s.group || '') === group)
+    && (!q || s.name.includes(q) || (s.description || '').toLowerCase().includes(q) || (s.group || '').toLowerCase().includes(q))
+    && (!SK_F.stage || s.stage === SK_F.stage)
+    && (!SK_F.state || {on: s.enabled, off: !s.enabled, used: s.used_in.length, unused: !s.used_in.length}[SK_F.state]);
+}
 function renderSkillList() {
-  $('#skList').innerHTML = SKILLS.map(s => `<div class="skill-item ${SKILL?.name === s.name ? 'on' : ''}" onclick="openSkill('${s.name}')">
-    <b>${esc(s.name)}</b> <span class="badge">${esc(STAGE_NAMES[s.stage] || s.stage)}</span>
+  const groups = skillGroups();
+  if (SK_F.group !== '*' && !groups.includes(SK_F.group)) SK_F.group = '*';
+  $('#skGroups').innerHTML = ['*', ...groups].map(g => `<button type="button" data-g="${esc(g)}" class="${SK_F.group === g ? 'on' : ''}">${
+    g === '*' ? 'Все' : esc(groupTitle(g))} ${SKILLS.filter(s => skillVisible(s, g)).length}</button>`).join(' ');
+  $('#skGroupList').innerHTML = groups.filter(Boolean).map(g => `<option value="${esc(g)}">`).join('');
+  const owner = canRole('owner');
+  const item = s => `<div class="skill-item ${SKILL?.name === s.name ? 'on' : ''} ${s.enabled ? '' : 'disabled'}" onclick="openSkill('${s.name}')">
+    <label class="switch" title="${s.enabled ? 'Включён: выключить во всех этапах' : 'Выключен: этапы его не получают'}" onclick="event.stopPropagation()">
+      <input type="checkbox" ${s.enabled ? 'checked' : ''} ${owner ? '' : 'disabled'} onchange="toggleSkill('${s.name}', this)"><span></span></label>
+    <div class="grow"><b>${esc(s.name)}</b> <span class="badge">${esc(STAGE_NAMES[s.stage] || s.stage)}</span>
     ${!s.builtin ? '<span class="badge ok">проекта</span>' : s.use_local ? '<span class="badge warn">локальная версия</span>'
       : s.has_local ? '<span class="badge off">встроенный · есть копия</span>' : '<span class="badge off">встроенный</span>'}
-    <div class="hint">${esc(s.description)}</div></div>`).join('');
-  if (!SKILL && SKILLS.length) openSkill(SKILLS[0].name);
+    ${s.used_in.length ? `<span class="badge ok" title="${esc(s.used_in.map(k => SKILL_SLOTS[k]).join(', '))}">этапов: ${s.used_in.length}</span>` : '<span class="badge off">не используется</span>'}
+    <div class="hint">${esc(s.description)}</div></div></div>`;
+  const shown = SKILLS.filter(s => skillVisible(s));
+  $('#skList').innerHTML = (SK_F.group === '*' ? groups : [SK_F.group]).map(g => {
+    const items = shown.filter(s => (s.group || '') === g);
+    return items.length ? `<div class="sk-group">${esc(groupTitle(g))} · ${items.length}</div>` + items.map(item).join('') : '';
+  }).join('') || '<div class="muted" style="padding:8px">Нет скиллов по выбранным фильтрам</div>';
+  if (!SKILL && shown.length) openSkill(shown[0].name);
 }
+$('#skStageF').innerHTML += Object.entries(STAGE_NAMES).map(([k, t]) => `<option value="${k}">этап: ${esc(t)}</option>`).join('');
+$('#skGroups').onclick = e => { const b = e.target.closest('[data-g]'); if (b) { SK_F.group = b.dataset.g; renderSkillList(); } };
+$('#skSearch').oninput = () => { SK_F.q = $('#skSearch').value.trim(); renderSkillList(); };
+$('#skStageF').onchange = () => { SK_F.stage = $('#skStageF').value; renderSkillList(); };
+$('#skStateF').onchange = () => { SK_F.state = $('#skStateF').value; renderSkillList(); };
+async function reloadSkills() {
+  SKILLS = await api('GET', `/api/projects/${PID}/skills`);
+  renderSkillList(); refreshSkillBoxes();
+}
+// switched off, a skill stays in the stage settings, but no stage gets it
+async function toggleSkill(name, cb) {
+  try {
+    await api('PUT', `/api/projects/${PID}/skills/${name}/enabled`, {on: cb.checked});
+    await reloadSkills();
+    if (SKILL?.name === name) $('#skEnabled').checked = cb.checked;
+  } catch (e) { cb.checked = !cb.checked; $('#skMsg').textContent = e.message; }
+}
+$('#skEnabled').onchange = () => SKILL?.name && toggleSkill(SKILL.name, $('#skEnabled'));
+function renderSlots(used, editable) {
+  $('#skSlots').innerHTML = Object.entries(SKILL_SLOTS).map(([k, t]) =>
+    `<label class="inline"><input type="checkbox" value="${k}" ${used.includes(k) ? 'checked' : ''} ${editable ? '' : 'disabled'}> ${esc(t)}</label>`).join('');
+}
+$('#skSlots').onchange = async e => {
+  if (!SKILL?.name) return;                       // a new skill: the stages are saved with it
+  const slots = $$('#skSlots input:checked').map(i => i.value);
+  try {
+    PROJ = await api('PUT', `/api/projects/${PID}/skills/${SKILL.name}/stages`, {slots});
+    await reloadSkills();
+    $('#skMsg').textContent = slots.length ? 'Этапы сохранены' : 'Скилл не используется ни на одном этапе';
+  } catch (err) { e.target.checked = !e.target.checked; $('#skMsg').textContent = err.message; }
+};
+// the group lives in the front matter: the field and the text stay the same
+function withGroup(text, group) {
+  group = group.replace(/\s+/g, ' ').trim();
+  const m = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return group ? `---\nname: ${$('#skName').value.trim()}\ndescription: \nstage: any\ngroup: ${group}\n---\n\n${text}` : text;
+  const fm = m[1].split(/\r?\n/).filter(l => !/^group\s*:/i.test(l));
+  if (group) fm.push('group: ' + group);
+  return text.replace(m[0], '---\n' + fm.join('\n') + '\n---');
+}
+$('#skGroup').oninput = () => { if (!$('#skText').readOnly) $('#skText').value = withGroup($('#skText').value, $('#skGroup').value); };
 // a built-in skill opens read-only; with a local copy the version shown is chosen (the copy is editable)
 async function openSkill(name, version) {
   const info = await api('GET', `/api/projects/${PID}/skills/${name}`);
   version = version || (info.builtin && info.has_local ? 'local' : '');
   SKILL = version ? await api('GET', `/api/projects/${PID}/skills/${name}?version=${version}`) : info;
-  const readonly = SKILL.builtin && !SKILL.local;
+  const readonly = SKILL.builtin && !SKILL.local, owner = canRole('owner');
   $('#skTitle').textContent = SKILL.name; $('#skName').value = SKILL.name; $('#skName').disabled = true;
   $('#skText').value = SKILL.text; $('#skText').readOnly = readonly; $('#skMsg').textContent = '';
+  $('#skGroup').value = SKILL.group || ''; $('#skGroup').disabled = readonly;
+  $('#skGroup').title = readonly ? 'Группу встроенного скилла можно поменять в его локальной копии' : '';
+  $('#skEnabled').checked = info.enabled; $('#skEnabled').disabled = !owner;
+  $('#skEnabled').parentElement.classList.remove('hidden');
+  renderSlots(info.used_in, owner);
+  $('#skSlotsHint').textContent = 'Отметка сразу сохраняется в настройках процесса проекта.';
   $('#skBadges').innerHTML = !SKILL.builtin ? '<span class="badge ok">скилл проекта</span>'
     : SKILL.local ? '<span class="badge warn">локальная копия</span>' : '<span class="badge off">встроенный · только чтение</span>';
   $('#skLocalBar').classList.toggle('hidden', !(info.builtin && info.has_local));
@@ -3838,14 +4015,14 @@ async function openSkill(name, version) {
   $('#skDownload').href = `/api/projects/${PID}/skills/${name}?raw=1${version ? '&version=' + version : ''}`;
   $('#skDownload').classList.remove('hidden');
   renderSkillList();
+  $('#skList .skill-item.on')?.scrollIntoView({block: 'nearest'});
 }
 $('#skVersion').onchange = () => openSkill(SKILL.name, $('#skVersion').value);
 $('#skUseLocal').onchange = async () => {
   try {
     await api('PUT', `/api/projects/${PID}/skills/${SKILL.name}/local`, {use: $('#skUseLocal').checked});
-    SKILLS = await api('GET', `/api/projects/${PID}/skills`);
     $('#skMsg').textContent = $('#skUseLocal').checked ? 'Проект использует локальную версию' : 'Проект использует встроенную версию';
-    renderSkillList();
+    await reloadSkills();
   } catch (e) { $('#skMsg').textContent = e.message; $('#skUseLocal').checked = !$('#skUseLocal').checked; }
 };
 $('#skClone').onclick = async () => {
@@ -3857,10 +4034,18 @@ $('#skClone').onclick = async () => {
 };
 function newSkill(name, text) {
   SKILL = {name: '', text: ''};
+  const group = SK_F.group !== '*' ? SK_F.group : '';
   $('#skTitle').textContent = 'Новый скилл'; $('#skName').value = name || ''; $('#skName').disabled = false;
-  $('#skText').value = text || `---\nname: my-skill\ndescription: Что делает скилл и когда его применять\nstage: authoring\n---\n\n# Инструкции\n\n- …\n`;
+  $('#skText').value = text || `---\nname: my-skill\ndescription: Что делает скилл и когда его применять\nstage: scenarios\n---\n\n# Инструкции\n\n- …\n`;
+  $('#skText').readOnly = false;
+  $('#skGroup').disabled = false; $('#skGroup').title = '';
+  $('#skGroup').value = text ? (text.match(/^group:\s*([^\r\n]+)/m)?.[1].trim() || group) : group;
+  $('#skText').value = withGroup($('#skText').value, $('#skGroup').value);
+  $('#skEnabled').parentElement.classList.add('hidden');
+  renderSlots([], true);
+  $('#skSlotsHint').textContent = 'Отмеченные этапы получат скилл после сохранения.';
   $('#skBadges').innerHTML = ''; $('#skDelete').classList.add('hidden'); $('#skDownload').classList.add('hidden');
-  $('#skText').readOnly = false; $('#skSave').classList.remove('hidden'); $('#skClone').classList.add('hidden');
+  $('#skSave').classList.remove('hidden'); $('#skClone').classList.add('hidden');
   $('#skLocalBar').classList.add('hidden'); $('#skRo').classList.add('hidden');
   $('#skMsg').textContent = 'stage: requirements, scenarios, authoring, run, publish или any';
   renderSkillList();
@@ -3875,22 +4060,27 @@ $('#skImport').onchange = async e => {
   newSkill(name, text);
 };
 $('#skSave').onclick = async () => {
-  const name = $('#skName').value.trim();
+  const name = $('#skName').value.trim(), fresh = !SKILL?.name;
   if (!name) { $('#skMsg').textContent = 'Укажите имя'; return; }
   try {
-    await api('PUT', `/api/projects/${PID}/skills/${name}`, {text: $('#skText').value});
+    const slots = $$('#skSlots input:checked').map(i => i.value);
+    await api('PUT', `/api/projects/${PID}/skills/${name}`, {text: withGroup($('#skText').value, $('#skGroup').value)});
+    if (fresh && slots.length) PROJ = await api('PUT', `/api/projects/${PID}/skills/${name}/stages`, {slots});
     SKILLS = await api('GET', `/api/projects/${PID}/skills`);
-    await openSkill(name, SKILLS.find(x => x.name === name)?.builtin ? 'local' : ''); fillProcess(); $('#skMsg').textContent = 'Сохранено';
+    await openSkill(name, SKILLS.find(x => x.name === name)?.builtin ? 'local' : ''); refreshSkillBoxes();
+    $('#skMsg').textContent = fresh && slots.length ? `Сохранено и подключено: ${slots.map(k => SKILL_SLOTS[k]).join(', ')}` : 'Сохранено';
   } catch (e) { $('#skMsg').textContent = e.message; }
 };
 $('#skDelete').onclick = async () => {
-  if (!SKILL?.name || !confirm(SKILL.builtin ? 'Удалить локальную копию? Проект будет использовать встроенную версию.' : 'Удалить скилл?')) return;
+  if (!SKILL?.name || !confirm(SKILL.builtin ? 'Удалить локальную копию? Проект будет использовать встроенную версию.'
+                                             : 'Удалить скилл? Он будет убран из всех этапов.')) return;
   await api('DELETE', `/api/projects/${PID}/skills/${SKILL.name}`);
+  PROJ = await api('GET', `/api/projects/${PID}`);
   SKILLS = await api('GET', `/api/projects/${PID}/skills`);
   const keep = SKILLS.find(s => s.name === SKILL.name);
   SKILL = null;
   if (keep) openSkill(keep.name); else renderSkillList();
-  fillProcess();
+  refreshSkillBoxes();
 };
 
 // application model and test data: entities with dependencies and lifecycles, roles -> accounts, stand data, memory

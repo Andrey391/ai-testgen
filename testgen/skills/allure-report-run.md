@@ -2,6 +2,7 @@
 name: allure-report-run
 description: Отправка результата прогона в Allure TestOps через MCP: запуск (launch), результат кейса, статус и комментарий.
 stage: publish
+group: Allure TestOps
 ---
 
 # Результат прогона в Allure TestOps

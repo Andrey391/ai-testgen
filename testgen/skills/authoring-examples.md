@@ -2,6 +2,7 @@
 name: authoring-examples
 description: Короткие примеры ходов агента для моделей слабее Claude (GigaChat, YandexGPT, локальные). Подключается автоматически при компактном промпте.
 stage: authoring
+group: Генерация тестов
 ---
 
 # Примеры ходов

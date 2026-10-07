@@ -2,6 +2,7 @@
 name: allure-import
 description: Чтение ручных тест-кейсов Allure TestOps для автоматизации: сценарий, предусловия, ожидаемые результаты.
 stage: publish
+group: Allure TestOps
 ---
 
 # Импорт ручных кейсов из Allure TestOps
