@@ -23,13 +23,14 @@ import time
 import uuid
 from urllib.parse import urldefrag, urlparse
 
-from . import fs, projects, storage
+from . import fs, knowledge, llm, projects, storage
 from .browser import BrowserSession
 from .steps import needs_element, perform
 
 SKIP = re.compile(r"log-?out|sign-?out|выход|выйти|delete|remove|destroy|удал|unsubscribe|отпис|"
                   r"deactivat|\.(pdf|zip|rar|7z|exe|msi|dmg|docx?|xlsx?|pptx?|csv|mp4|mp3)(\?|$)", re.I)
 MAX_REQUIREMENTS = 60_000
+MAP_TITLE = "# Карта приложения"
 LIVE: dict[str, dict] = {}
 
 PAGE_JS = r"""() => {
@@ -103,8 +104,25 @@ async def _login(bs: BrowserSession, test: dict) -> None:
         await perform(bs, step, loc)
 
 
-async def explore(project: dict, url: str = "", log=None, state: dict | None = None) -> dict:
-    """Crawl the site -> the map (also saved as the project's latest map)."""
+async def learn_model(project: dict, result: dict, log=None) -> None:
+    """The application model learns from the map: entities, dependencies, lifecycles, roles and the
+    data the pages show (the setting "requirements.learn_model"). A help: the map does not wait for it."""
+    if not result["pages"] or not project["pipeline"]["requirements"].get("learn_model"):
+        return
+    if log:
+        log("Модель приложения: сущности, зависимости и тестовые данные по карте сайта…")
+    try:
+        doc = await knowledge.extract(project, to_requirements(result), source="explore")
+        if log:
+            log(f"Модель приложения обновлена: сущностей {len(doc['entities'])}, тестовых данных {len(doc['data'])}")
+    except Exception as e:
+        if log:
+            log(f"Модель приложения не обновлена: {llm.api_error_text(e)}")
+
+
+async def explore(project: dict, url: str = "", log=None, state: dict | None = None, learn: bool = False) -> dict:
+    """Crawl the site -> the map (also saved as the project's latest map). `learn`: then the
+    application model learns from it (learn_model)."""
     cfg = project["pipeline"]["explore"]
     start = _norm(url or project.get("base_url") or "")
     if not start.startswith("http"):
@@ -150,11 +168,14 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
                         result["skipped"] += 1
                     elif _norm(a["href"]) not in seen:
                         queue.append((a["href"], depth + 1))
-        result["status"] = "done"
     except Exception as e:
         result.update(status="error", error=str(e).splitlines()[0][:300])
     finally:
         await bs.close()
+    if result["status"] == "running":
+        if learn:
+            await learn_model(project, result, log)
+        result["status"] = "done"
     result["finished"] = time.time()
     save(result)
     return result
@@ -182,7 +203,7 @@ def get(pid: str, eid: str) -> dict | None:
 
 def to_requirements(result: dict) -> str:
     """The map as requirements text for scenarios.generate."""
-    out = [f"# Карта приложения {result['start']}",
+    out = [f"{MAP_TITLE} {result['start']}",
            "Требования восстановлены автоматическим обходом интерфейса (Planner), ТЗ нет. Ожидаемое поведение "
            "выводи из интерфейса и общепринятых правил для таких страниц и форм; не придумывай функции, которых "
            "на страницах нет. Сценарии не должны выполнять необратимых действий (оплата, удаление, отправка)."]

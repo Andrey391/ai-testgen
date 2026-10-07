@@ -440,7 +440,8 @@ class Job:
             parts.append(self.text)
         if self.explore:
             self._log(f"Planner: исследование сайта {self.url}")
-            m = await explorer.explore(project, self.url, log=self._log)
+            spec = "\n\n---\n\n".join(parts)       # the model learns from the map itself (learn=True)
+            m = await explorer.explore(project, self.url, log=self._log, learn=True)
             if m["status"] != "done":
                 raise ValueError(f"Исследование сайта не удалось: {m['error']}")
             text = explorer.to_requirements(m)
@@ -462,7 +463,7 @@ class Job:
                 self._log(f"Проверка ТЗ не удалась: {_err(e)}", "warn")
         learn = None
         if cfg["requirements"].get("learn_model") and (self.links or self.text):
-            learn = asyncio.create_task(knowledge.extract(project, requirements, self.user))
+            learn = asyncio.create_task(knowledge.extract(project, spec if self.explore else requirements, self.user))
 
         # 2. Scenarios
         self.stage = "scenarios"

@@ -35,12 +35,15 @@ def _dir(pid: str):
 
 
 def new(project: dict, tests: list[dict], tags: list[str] | None = None, trigger: str = "manual",
-        user: str = "", browsers: list[str] | None = None) -> dict:
+        user: str = "", browsers: list[str] | None = None, devices: list[str] | None = None) -> dict:
     """A suite run record: one item per test and (browser, device) of the project's matrix
-    (run.browsers x run.devices; `browsers` narrows it, e.g. the CLI's --browser)."""
+    (run.browsers x run.devices; `browsers` narrows it, e.g. the CLI's --browser; `devices` replaces
+    the project's devices for this run, e.g. a screen size "1366x768")."""
     from .pipeline import matrix
     combos = [c for c in matrix(project) if not browsers or c[0] in browsers] or \
         [(b, "") for b in browsers or ["chromium"]]
+    if devices:
+        combos = list(dict.fromkeys((b, "" if d == "desktop" else d) for b, _ in combos for d in devices))
     multi = len(combos) > 1
     s = {"id": uuid.uuid4().hex[:10], "project_id": project["id"], "project": project["name"],
          "tags": tags or [], "trigger": trigger, "user": user, "status": "running", "started": time.time(),

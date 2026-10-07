@@ -28,6 +28,7 @@ from typing import Callable
 from urllib.parse import parse_qsl, urlparse
 
 from . import checks, steps as steps_mod, testdata
+from .browser import VIEWPORT
 from .testdata import PLACEHOLDER, env_name, is_credential
 
 MAX_ALTERNATIVES = 4
@@ -622,14 +623,17 @@ def _context_args(run_cfg: dict | None) -> dict:
     return out
 
 
+# The studio's desktop screen; `pytest --device "iPhone 13"` replaces it (the device's viewport comes first).
+SCREEN = f'"viewport": {VIEWPORT!r}'
+
+
 def _login_block(login: dict | None, ctx: _Ctx, run_cfg: dict | None) -> tuple[str, set[str]]:
-    """Log in once per session: the login test's steps, then storage_state for every test's context."""
+    """Log in once per session: the login test's steps, then storage_state for every test's context.
+    Without a login: the context arguments only (the studio's screen, locale, time zone)."""
     extra = _context_args(run_cfg)
     if not login:
-        if not extra:
-            return "", set()
         return ('@pytest.fixture(scope="session")\ndef browser_context_args(browser_context_args):\n'
-                f"    return {{**browser_context_args, **{extra!r}}}\n"), set()
+                f"    return {{{SCREEN}, **browser_context_args, **{extra!r}}}\n"), set()
     needs: set[str] = set()
     body = _body(login["steps"], ctx, needs)
     fn = ["def _login(page, app_url, credentials, testdata, data):",
@@ -641,7 +645,7 @@ def _login_block(login: dict | None, ctx: _Ctx, run_cfg: dict | None) -> tuple[s
 @pytest.fixture(scope="session")
 def browser_context_args(browser_context_args, browser, app_url, credentials, tmp_path_factory):
     """Log in once per session (the login test), then every test starts logged in."""
-    args = {{**browser_context_args, **{extra!r}}}
+    args = {{{SCREEN}, **browser_context_args, **{extra!r}}}
     context = browser.new_context(**args)
     _login(context.new_page(), app_url, credentials, DataValues(), {{}})
     path = tmp_path_factory.mktemp("login") / "state.json"
@@ -654,7 +658,7 @@ def browser_context_args(browser_context_args, browser, app_url, credentials, tm
 
 def _login_override(run_cfg: dict | None) -> str:
     return ('@pytest.fixture\ndef browser_context_args():\n    """The login test itself starts logged out."""\n'
-            f"    return {_context_args(run_cfg)!r}\n")
+            f"    return {{{SCREEN}, **{_context_args(run_cfg)!r}}}\n")
 
 
 def to_playwright(test: dict, a11y_impact: str = "serious", lookup: Callable[[str], dict | None] | None = None,
@@ -765,6 +769,7 @@ TESTGEN_BASE_URL={app_url or 'https://your-stand'} TESTGEN_USERNAME=... TESTGEN_
 - `TESTGEN_MAILPIT_URL` or `TESTGEN_IMAP_HOST` / `TESTGEN_IMAP_USER` / `TESTGEN_IMAP_PASSWORD` - the test mailbox;
 - `TESTGEN_FAKER_LOCALE` - locale of generated test data (default en_US).
 {f"{chr(10)}The session logs in once with the steps of «{login['name']}» (conftest.py), every test starts logged in.{chr(10)}" if login else ""}
+The browser window is {VIEWPORT['width']}x{VIEWPORT['height']}, as in the studio (conftest.py, `browser_context_args`).
 Other browsers and devices: `pytest --browser firefox --browser webkit`, `pytest --device "iPhone 13"`.
 Element locators have fallbacks (`.or_()`), but the studio's AI self-healing and visual checks
 work only in studio runs (`python -m testgen.run`).

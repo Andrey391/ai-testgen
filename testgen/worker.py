@@ -70,7 +70,7 @@ def start_explore(project: dict, state: dict, url: str, submit) -> None:
 
     async def go():
         try:
-            await explorer.explore(project, url, log=lambda text: state["log"].append(text), state=state)
+            await explorer.explore(project, url, log=lambda text: state["log"].append(text), state=state, learn=True)
         finally:
             explorer.LIVE.pop(state["id"], None)
     submit(go())
@@ -194,7 +194,7 @@ async def execute(item: dict, w: Worker) -> None:
                 explorer.save(state)
                 saved[0] = time.time()
         try:
-            await explorer.explore(project, p.get("url", ""), log=log, state=state)
+            await explorer.explore(project, p.get("url", ""), log=log, state=state, learn=True)
         finally:
             explorer.LIVE.pop(state["id"], None)
     else:
