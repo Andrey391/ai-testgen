@@ -185,3 +185,26 @@ def test_pipeline_run_resumes_where_it_stopped(stand, project, fake_llm):
     saved = pipeline.get_job(jid)
     assert saved["status"] == "done" and saved["user"] == "alice" and saved["text"] == "Требования"
     assert any("продолжен" in line["text"] for line in saved["log"])
+
+
+def test_finished_run_can_be_resumed_without_a_restart(client, monkeypatch):
+    """A run stays in JOBS after it ends: one that failed is resumed at once, one still going is not."""
+    import types
+
+    import server
+    from conftest import MODEL
+    p = projects.create(f"Повтор {time.time_ns()}", base_url="http://127.0.0.1:1")
+    projects.update_llm(p["id"], {"model": MODEL, "effort": "medium"})
+    jid = "ef" * 5
+    state = {"id": jid, "project_id": p["id"], "links": [], "text": "Требования", "url": "", "user": "alice",
+             "explore": False, "cases": None, "status": "error", "stage": "", "created": 1, "finished": 2,
+             "log": [], "requirements": [], "feature": "", "assumptions": [], "scenarios": [], "items": [],
+             "error": "Сбой", "usage": {}}
+    fs.write_json(pipeline._jobs_dir(p["id"]) / f"{jid}.json", state)
+    started = []
+    monkeypatch.setattr(server, "submit", lambda coro: started.append(coro) or coro.close())
+    monkeypatch.setitem(pipeline.JOBS, jid, types.SimpleNamespace(finished=None, state=lambda: state))
+    assert client.post(f"/api/jobs/{jid}/resume").status_code == 409            # still going
+    monkeypatch.setitem(pipeline.JOBS, jid, types.SimpleNamespace(finished=2, state=lambda: state))
+    assert client.post(f"/api/jobs/{jid}/resume").json() == {"id": jid}
+    assert len(started) == 1 and isinstance(pipeline.JOBS[jid], pipeline.Job)
