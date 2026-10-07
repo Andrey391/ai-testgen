@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 REMOVED_IMAGE = "[screenshot removed: an older page state]"
 REMOVED_STATE = "[older page state removed]"
+EMPTY_REPLY = "(no answer)"
 
 
 class ProviderError(Exception):
@@ -90,6 +91,32 @@ def trim_history(messages: list[dict], keep: int) -> list[dict]:
     user_turns = [i for i, m in enumerate(out) if m["role"] == "user" and isinstance(m["content"], list)]
     for i in user_turns[:-keep]:
         out[i]["content"] = [_trim_block(b) for b in out[i]["content"]]
+    return out
+
+
+def fill_empty(messages: list[dict]) -> list[dict]:
+    """Assistant turns with nothing in them (a model that answered with no text and no tool call)
+    get a placeholder: the API and gateways (LiteLLM) reject an assistant message without content,
+    and so does Anthropic an empty text block."""
+    out = messages
+    for i, m in enumerate(messages):
+        if m["role"] != "assistant":
+            continue
+        content = m["content"]
+        if isinstance(content, list):
+            kept = [b for b in content if not (b.get("type") == "text" and not (b.get("text") or "").strip())]
+            if not any(b.get("type") != "thinking" for b in kept):
+                kept.append({"type": "text", "text": EMPTY_REPLY})
+            if kept == content:
+                continue
+            content = kept
+        elif not (content or "").strip():
+            content = EMPTY_REPLY
+        else:
+            continue
+        if out is messages:
+            out = list(messages)
+        out[i] = {**m, "content": content}
     return out
 
 

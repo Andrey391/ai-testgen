@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import anthropic
 
-from .base import ProviderError, Reply, Request, trim_history, usage_dict
+from .base import ProviderError, Reply, Request, fill_empty, trim_history, usage_dict
 
 FEATURES = ("cache", "context_editing", "effort", "fallbacks", "structured")
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -98,7 +98,7 @@ class AnthropicProvider:
                           {"type": "text", "text": req.context, "cache_control": EPHEMERAL}]
         else:
             system = req.system + (f"\n\n{req.context}" if req.context else "")
-        messages = req.messages
+        messages = fill_empty(req.messages)
         betas: list[str] = []
         p = {"model": req.model, "max_tokens": req.max_tokens, "system": system}
         if "effort" in self.features and req.effort:
