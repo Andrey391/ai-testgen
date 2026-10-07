@@ -87,8 +87,10 @@ th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-a
 th{font-size:12px;color:var(--muted);font-weight:500}
 tr.click{cursor:pointer}
 tr.click:hover td{background:var(--bg)}
-.live-log{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;height:calc(5 * 1.5em + 16px);overflow:hidden;margin-top:8px}
-.live-log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:slidein .25s ease-out}
+.std-about{font-size:13px;margin-top:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px}
+.std-about tr.on td{background:var(--soft)}
+.live-log{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:calc(5 * 1.5em + 16px);max-height:calc(12 * 1.5em + 16px);overflow-y:auto;margin-top:8px}
+.live-log div{white-space:pre-wrap;overflow-wrap:anywhere;animation:slidein .25s ease-out}
 .live-log div:nth-last-child(n+3){opacity:.55}
 .live-log .t{color:var(--muted);margin-right:8px}
 @keyframes slidein{from{opacity:0;transform:translateY(6px)}}
@@ -126,10 +128,10 @@ details.an>.an-body{padding:0 12px 12px}
 .scen-list td.num{color:var(--muted);width:28px}
 .scen-list td.chk,.scen-list th.chk{width:24px}
 .scen-list .sc-title{font-weight:600}
+.scen-list .sc-preview{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .scen-list tr.sc-edit td{background:var(--soft);padding:4px 12px 14px}
 .scen-list tr.sc-edit textarea.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
 .card.fresh{animation:slidein .3s ease-out}
-.scen{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;margin-top:14px}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;font-size:12px;margin:6px 0}
 .runlog{margin-top:10px}
 .runlog .r{display:flex;gap:8px;padding:4px 0;border-bottom:1px dashed var(--line)}
@@ -907,9 +909,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Проверка ТЗ на соответствие требованиям к документации</h3></div>
           <div class="hint">Структура документа по стандарту, качество каждого требования (полнота, однозначность, непротиворечивость, проверяемость, трассируемость), правила команды и вопросы авторам. Кнопка «Проверить ТЗ» — во вкладке «Требования». Проверка не блокирует генерацию: решает человек.</div>
           <div class="grid2">
-            <div><label>Стандарт</label><select data-p="requirements.standard" data-options="standards"></select></div>
+            <div><label>Стандарт</label><select data-p="requirements.standard" data-options="standards" onchange="showStandard()"></select></div>
             <div></div>
           </div>
+          <div class="std-about" id="stdAbout"></div>
           <label>Правила команды для ТЗ (по одному в строке)</label>
           <textarea data-p="requirements.checklist" rows="4" placeholder="У каждого требования есть номер REQ-…&#10;Для каждой формы описаны сообщения об ошибках&#10;Указаны роли, которым доступна функция"></textarea>
           <div class="checks" style="margin-top:8px">
@@ -2558,7 +2561,7 @@ $('#exploreBtn').onclick = async () => {
 // The history of analyses: one is open at a time (AN, its scenarios in SCEN); a scenario is edited in place
 // and saved at once; "Generate all" runs the pipeline with its scenarios, the tests made show under each.
 let ANALYSES = [], AN = null, SCEN = [], SCEN_OPEN = new Set(), REQ_ABORT = null, STUDIO_SCEN = null;
-const LOG_LINES = 5;
+const LOG_LINES = 300;
 const scTypes = () => Object.fromEntries(Object.entries(PROJ.catalog.types).map(([k, v]) => [k, v.label]));
 const scType = k => PROJ.catalog.types[k]?.label || k;
 const layerBadge = s => s.layer === 'api' ? '<span class="badge" title="Тест API (бэкенд)">API</span> ' : '';
@@ -2567,14 +2570,17 @@ const SC_FIELDS = ['title', 'type', 'layer', 'priority', 'preconditions', 'instr
 const AN_STATUS = {running: ['генерация…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
 const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
 const isReady = s => !s.pending;
+// Lines wrap in full; the box scrolls once they do not fit and follows the newest unless scrolled up.
 function reqLog(text) {
   const box = $('#reqLog'), t = new Date().toLocaleTimeString();
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
   String(text).split('\n').filter(Boolean).forEach(line => {
     const d = document.createElement('div');
     d.innerHTML = `<span class="t">${t}</span>${esc(line)}`;
     box.appendChild(d);
   });
   while (box.children.length > LOG_LINES) box.firstChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
 // ---- the list of analyses
@@ -2751,7 +2757,7 @@ function scenRow(s, i) {
   const row = `<tr class="sc-row${open ? ' open' : ''}${s.fresh ? ' fresh' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
     <td class="chk"><input type="checkbox" class="sc-sel" data-id="${s.id}" ${s.sel !== false ? 'checked' : ''}></td>
     <td class="num">${i + 1}</td>
-    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">${esc(s.instructions)}</div>`}${testsHtml(s)}</td>
+    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions)}</div>`}${testsHtml(s)}</td>
     <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">
       <button class="btn small" data-act="studio" data-id="${s.id}" title="Создать тест по этому сценарию в Studio">Тест в Studio</button>
@@ -2954,14 +2960,6 @@ $('#reqBtn').onclick = async () => {
   }
 };
 $('#reqStop').onclick = () => REQ_ABORT?.abort();
-function scenarioCard(s, footer, fresh) {
-  return `<div class="card${fresh ? ' fresh' : ''}"><div class="row"><b class="grow">${esc(s.title)}</b>
-    <span class="badge">${esc(s.type)}</span><span class="badge">${esc(s.priority)}</span></div>
-    ${s.preconditions ? `<div class="muted" style="font-size:12px;margin-top:4px">Предусловия: ${esc(s.preconditions)}</div>` : ''}
-    <div style="margin-top:6px">${esc(s.instructions)}</div>
-    <div style="margin-top:6px"><b style="font-size:12px">Ожидаемый результат:</b> ${esc(s.expected_result)}</div>
-    ${s.gherkin ? `<pre>${esc(s.gherkin)}</pre>` : ''}${footer}</div>`;
-}
 function setStudioScen(v) {
   STUDIO_SCEN = v;
   $('#fScen').classList.toggle('hidden', !v);
@@ -2993,6 +2991,8 @@ const JOB_STATUS = {running: 'Выполняется', awaiting_selection: 'Жд
 const ITEM_STATUS = {queued: ['в очереди', 'off'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
   done: ['готово', 'ok'], needs_attention: ['нужен человек', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
 let JOB = null, jobTimer = null;
+// The scenarios of a run awaiting selection, as in «Требования»: chosen and expanded rows survive the polling.
+let JOB_PICK = {id: null, sel: new Set(), open: new Set()};
 
 function stageEnabled(key) {
   const p = PROJ.pipeline;
@@ -3058,16 +3058,19 @@ function renderJob() {
   if (j.feature) html += `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>`;
   if (j.assumptions?.length) html += `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>`;
   if (j.status === 'awaiting_selection') {
+    if (JOB_PICK.id !== j.id) JOB_PICK = {id: j.id, open: new Set(),
+      sel: new Set(j.scenarios.map((s, i) => s.priority !== 'low' ? i : -1).filter(i => i >= 0))};
+    const n = JOB_PICK.sel.size, all = j.scenarios.length;
     html += `<div class="row" style="margin-top:10px"><b class="grow">Выберите сценарии для генерации тестов</b>
-      <button class="btn small" onclick="$$('.jsel').forEach(c=>c.checked=true)">все</button>
-      <button class="btn small" onclick="$$('.jsel').forEach(c=>c.checked=false)">ни одного</button>
-      <button class="btn primary" onclick="selectScenarios()">Сгенерировать тесты</button></div>
-      <div class="scen">${j.scenarios.map((s, i) => scenarioCard(s,
-        `<label class="inline" style="margin-top:8px"><input type="checkbox" class="jsel" value="${i}" ${s.priority !== 'low' ? 'checked' : ''}> генерировать тест</label>`)).join('')}</div>`;
+      <span class="muted" style="font-size:12px">Сценариев: ${all}</span>
+      <button class="btn primary" onclick="selectScenarios()" ${n ? '' : 'disabled'}>${n === all ? `Сгенерировать все (${all})` : `Сгенерировать выбранные (${n})`}</button></div>
+      <table class="scen-list" style="margin-top:8px"><thead><tr><th class="chk"><input type="checkbox" onchange="pickAllJob(this.checked)" title="Отметить все"
+        ${n && n === all ? 'checked' : ''}></th><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th></tr></thead>
+        <tbody>${j.scenarios.map(jobScenRow).join('') || '<tr><td colspan="5" class="muted">Сценариев нет.</td></tr>'}</tbody></table>`;
   }
   if (j.items.length) {
-    html += `<table style="margin-top:10px"><thead><tr><th>Сценарий</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +
-      j.items.map(it => {
+    html += `<table class="scen-list" style="margin-top:10px"><thead><tr><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +
+      j.items.map((it, i) => {
         const [st, cls] = ITEM_STATUS[it.status] || [it.status, 'off'];
         const v = it.verify;
         const quality = !v ? '—' : v.status === 'done' ? `<span class="badge ${v.weak ? 'warn' : 'ok'}">мутанты: ${v.killed}/${v.total}</span>${v.improved ? '<div class="hint">проверки усилены агентом</div>' : ''}`
@@ -3077,8 +3080,9 @@ function renderJob() {
           (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
         const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
           : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
-        return `<tr><td><b>${esc(it.title)}</b> ${it.priority ? `<span class="badge">${esc(it.priority)}</span>` : ''}
+        return `<tr><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span>
             ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}</td>
+          <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
           <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${quality}</td><td>${z}</td>
           <td>${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
             ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
@@ -3088,8 +3092,25 @@ function renderJob() {
     j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString()} — ${esc(l.text)}</div>`).join('') + '</div></details>';
   box.innerHTML = html;
 }
+function jobScenRow(s, i) {
+  const open = JOB_PICK.open.has(i);
+  const row = `<tr class="sc-row${open ? ' open' : ''}" onclick="if (!event.target.closest('input')) toggleJobScen(${i})">
+    <td class="chk"><input type="checkbox" onchange="pickJobScen(${i}, this.checked)" ${JOB_PICK.sel.has(i) ? 'checked' : ''}></td>
+    <td class="num">${i + 1}</td>
+    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions || '')}</div>`}</td>
+    <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority || '')}</td></tr>`;
+  if (!open) return row;
+  const part = (label, text, cls = '') => text ? `<label>${label}</label><div class="${cls}" style="white-space:pre-wrap">${esc(text)}</div>` : '';
+  return row + `<tr class="sc-edit"><td colspan="5">
+    ${part('Предусловия', s.preconditions)}${part('Шаги сценария (их получит агент)', s.instructions)}
+    ${part('Ожидаемый результат', s.expected_result)}${s.gherkin ? `<label>Gherkin</label><pre>${esc(s.gherkin)}</pre>` : ''}
+    <div class="row" style="margin-top:8px"><span class="grow"></span><button class="btn small" onclick="toggleJobScen(${i})">Свернуть</button></div></td></tr>`;
+}
+function toggleJobScen(i) { JOB_PICK.open.has(i) ? JOB_PICK.open.delete(i) : JOB_PICK.open.add(i); renderJob(); }
+function pickJobScen(i, on) { on ? JOB_PICK.sel.add(i) : JOB_PICK.sel.delete(i); renderJob(); }
+function pickAllJob(on) { JOB_PICK.sel = new Set(on ? JOB.scenarios.map((_, i) => i) : []); renderJob(); }
 async function selectScenarios() {
-  const indices = $$('.jsel').filter(c => c.checked).map(c => +c.value);
+  const indices = [...JOB_PICK.sel];
   if (!indices.length) return alert('Выберите хотя бы один сценарий');
   await api('POST', `/api/jobs/${JOB.id}/select`, {indices});
   openJob(JOB.id);
@@ -3786,6 +3807,15 @@ function connOptions(kind) {
   return `<option value="">По умолчанию (${def})</option>` + PROJ.connections.filter(match)
     .map(c => `<option value="${c.id}">${esc(c.name)}${c.enabled ? '' : ' (выключено)'}</option>`).join('');
 }
+// What the chosen documentation standard is for, how it differs from the others and which sections it asks for.
+function showStandard() {
+  const sel = $('[data-options="standards"]'), st = sel && PROJ.catalog.standards[sel.value];
+  $('#stdAbout').innerHTML = st ? `<div>${esc(st.about)}</div>
+    <details class="opt"><summary>Разделы, которые ищет проверка (${st.sections.length})</summary>
+      <ol style="margin:4px 0">${st.sections.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>
+    <details class="opt"><summary>Чем отличаются стандарты</summary><table><tbody>${Object.entries(PROJ.catalog.standards).map(([k, x]) =>
+      `<tr${k === sel.value ? ' class="on"' : ''}><td style="width:32%"><b>${esc(x.title)}</b></td><td class="muted">${esc(x.about)}</td></tr>`).join('')}</tbody></table></details>` : '';
+}
 function fillProcess() {
   const L = PROJ.llm;
   $('#defModel').textContent = L.model ? `${L.model}, effort ${L.effort || 'модели'}` : 'модель не выбрана';
@@ -3793,7 +3823,7 @@ function fillProcess() {
   $$('.effortSel').forEach(s => s.innerHTML = `<option value="">как в проекте (${esc(L.effort || 'по умолчанию модели')})</option>` +
     ME.efforts.map(e => `<option>${e}</option>`).join(''));
   $$('[data-conn]').forEach(s => s.innerHTML = connOptions(s.dataset.conn));
-  $$('[data-options="standards"]').forEach(s => s.innerHTML = Object.entries(PROJ.catalog.standards).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join(''));
+  $$('[data-options="standards"]').forEach(s => s.innerHTML = Object.entries(PROJ.catalog.standards).map(([k, t]) => `<option value="${k}" title="${esc(t.about)}">${esc(t.title)}</option>`).join(''));
   $$('[data-list]').forEach(box => {
     const cur = getPath(PROJ.pipeline, box.dataset.list) || [];
     let opts = [];
@@ -3812,6 +3842,7 @@ function fillProcess() {
     const v = getPath(PROJ.pipeline, el.dataset.p);
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? '';
   });
+  showStandard();
   $$('[data-csv]').forEach(el => el.value = (getPath(PROJ.pipeline, el.dataset.csv) || []).join(', '));
   syncStages();
 }
