@@ -24,8 +24,8 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import (analyses, audit, explorer, fs, llm, mcp_hub, mutations, notify, projects, publisher, runner, runs,
-               scenarios, sources, storage, vault)
+from . import (analyses, audit, explorer, fs, knowledge, llm, mcp_hub, mutations, notify, projects, publisher, runner,
+               runs, scenarios, sources, storage, validation, vault)
 from . import agent
 from .agent import StudioSession, has_assertion
 
@@ -281,7 +281,7 @@ def _err(e: Exception) -> str:
 class Job:
     def __init__(self, project: dict, links: list[str], text: str, url: str, sessions: dict,
                  user: str = "", explore: bool = False, cases: dict | None = None,
-                 scenarios: list[dict] | None = None, feature: str = ""):
+                 scenarios: list[dict] | None = None, feature: str = "", design: dict | None = None):
         self.id = uuid.uuid4().hex[:10]
         self.project_id = project["id"]
         self.links = [l.strip() for l in links if l.strip()]
@@ -291,6 +291,9 @@ class Job:
         self.cases = cases or None
         # Scenarios prepared (and edited) in the Requirements tab: no requirements or test design stage.
         self.given = [dict(s) for s in scenarios or []]
+        # This run's choice for test design: kinds of checks, layers, techniques (scenarios.settings)
+        self.design = {k: list(v) for k, v in (design or {}).items() if k in ("types", "layers", "techniques")}
+        self.validation: dict | None = None     # the specification checked against the documentation standard
         self.sessions = sessions
         self.status = "running"     # running | awaiting_selection | done | error | cancelled
         self.stage = "requirements"
@@ -327,7 +330,8 @@ class Job:
     def state(self) -> dict:
         return {k: getattr(self, k) for k in (
             "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
-            "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage")}
+            "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage",
+            "design", "validation")}
 
     @classmethod
     def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
@@ -335,9 +339,10 @@ class Job:
         it stopped: the requirements and scenarios it has are kept, finished items are not redone, an
         item's authoring continues its session from the checkpoint (agent.restored)."""
         job = cls(project, j.get("links") or [], j.get("text") or "", j.get("url") or "", sessions,
-                  user=j.get("user") or user, explore=j.get("explore", False), cases=j.get("cases"))
+                  user=j.get("user") or user, explore=j.get("explore", False), cases=j.get("cases"),
+                  design=j.get("design"))
         job.id, job.created = j["id"], j["created"]
-        for k in ("log", "feature", "assumptions", "given", "scenarios", "items"):
+        for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation"):
             setattr(job, k, j.get(k) or getattr(job, k))
         job.requirements = j.get("requirements") or [] if job.scenarios else []
         for item in job.items:
@@ -356,6 +361,7 @@ class Job:
     @staticmethod
     def _item(sc: dict) -> dict:
         return {"title": sc["title"], "priority": sc.get("priority", ""), "type": sc.get("type", ""),
+                "layer": sc.get("layer") or "ui",
                 "status": "queued", "session_id": None, "test_id": None, "summary": "",
                 "run": None, "verify": None, "publish": None, "error": ""}
 
@@ -440,11 +446,25 @@ class Job:
             raise ValueError("Нет требований: укажите ссылки, текст или включите исследование сайта")
         requirements = "\n\n---\n\n".join(parts)
 
+        # The specification against the documentation standard, and what it says about the application
+        if cfg["requirements"]["validate"]:
+            self._log("Проверка ТЗ на соответствие стандарту документации…")
+            try:
+                self.validation = await validation.validate(project, requirements)
+                self._log(f"Проверка ТЗ: {self.validation['score']}/100, замечаний {len(self.validation['findings'])}"
+                          f" — {self.validation['summary']}", "info" if self.validation["verdict"] == "ready" else "warn")
+            except Exception as e:
+                self._log(f"Проверка ТЗ не удалась: {_err(e)}", "warn")
+        learn = None
+        if cfg["requirements"].get("learn_model") and (self.links or self.text):
+            learn = asyncio.create_task(knowledge.extract(project, requirements, self.user))
+
         # 2. Scenarios
         self.stage = "scenarios"
         if cfg["scenarios"]["enabled"]:
             self._log("Проектирование сценариев…")
-            res = await scenarios.generate(requirements, self.url, project=project, log=self._log)
+            res = await scenarios.generate(requirements, self.url, project=project, log=self._log,
+                                           cfg=scenarios.settings(project, **self.design))
             self.feature, self.assumptions = res.feature, res.assumptions
             self.scenarios = [s.model_dump() for s in res.scenarios]
             self._log(f"Сценариев: {len(self.scenarios)}")
@@ -455,6 +475,12 @@ class Job:
                                "preconditions": "", "instructions": requirements, "expected_result": "",
                                "gherkin": ""}]
             self.items = [self._item(self.scenarios[0])]
+        if learn:
+            try:
+                doc = await learn
+                self._log(f"Модель приложения обновлена: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}")
+            except Exception as e:
+                self._log(f"Модель приложения не обновлена: {_err(e)}", "warn")
         self.save()
 
     async def _process_all(self, project: dict, pairs) -> None:
@@ -508,6 +534,7 @@ class Job:
         item["session_id"] = s.id
         self.save()
         if not started:
+            s.starts_in_autopilot = bool(a["autopilot"])
             try:
                 await s.start()
             except Exception as e:
@@ -591,15 +618,14 @@ class Job:
         if s:
             outcome = await self._author(project, item, s, started=bool(live))
             return await self._authored(project, item, sc, s, outcome)
-        scenario = sc["instructions"]
-        if sc.get("preconditions"):
-            scenario = f"Предусловия: {sc['preconditions']}\n{scenario}"
-        if sc.get("expected_result"):
-            scenario += f"\nОжидаемый результат: {sc['expected_result']}"
+        scenario = scenario_text(sc)
         if not self.url:
             raise ValueError("Не указан URL приложения (в запуске или в настройках проекта)")
+        # The role the scenario needs (the application model maps roles to project accounts).
+        account = knowledge.account_for(project["id"], f"{sc.get('preconditions', '')}\n{sc['instructions']}")
         s = StudioSession(project, sc["title"], self.url, scenario, headless=a["headless"],
-                          credentials=projects.app_credentials(project["id"]))
+                          credentials=projects.account_credentials(project["id"], account) if account
+                          else projects.app_credentials(project["id"]), account=account)
         self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
         outcome = await self._author(project, item, s)
         return await self._authored(project, item, sc, s, outcome)
@@ -700,6 +726,19 @@ class Job:
 
 
 DONE_ITEMS = ("done", "needs_attention")     # a resumed run does not redo them
+
+
+def scenario_text(sc: dict) -> str:
+    """What the authoring agent is told of a designed scenario."""
+    text = sc["instructions"]
+    if sc.get("preconditions"):
+        text = f"Предусловия: {sc['preconditions']}\n{text}"
+    if sc.get("layer") == "api":
+        text = ("Тест API (бэкенд): проверяй через запросы api_request — статус и поля ответа, без действий в "
+                f"интерфейсе.\n{text}")
+    if sc.get("expected_result"):
+        text += f"\nОжидаемый результат: {sc['expected_result']}"
+    return text
 
 
 def _verify_summary(res: dict) -> dict:

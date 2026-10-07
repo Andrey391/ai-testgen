@@ -26,12 +26,13 @@ import uuid
 from pathlib import Path
 
 from . import fs, repo, testdata, vault
+from .catalog import DEFAULT_TECHNIQUES, DEFAULT_TYPES, LAYERS, STANDARDS, TECHNIQUES, TYPES
 from .llm import EFFORTS
 from .paths import DATA, SECRETS
 
 ROOT = DATA / "projects"
 
-SCENARIO_TYPES = ["positive", "negative", "edge", "boundary", "accessibility", "security"]
+SCENARIO_TYPES = list(TYPES)
 
 # The model connection (llm.py): no model is built in, the project chooses one.
 # "effort" empty = the model's own default; "prices": model -> [$ input, $ output]
@@ -43,6 +44,12 @@ DEFAULT_LLM = {"model": "", "effort": "", "base_url": "", "prices": {}, "models"
 DEFAULT_PIPELINE = {
     "requirements": {
         "connection": "",          # Atlassian connection id; empty = the first one
+        "standard": "gost34",      # the documentation standard a specification is validated against (catalog.STANDARDS)
+        "checklist": "",           # the team's own rules for specifications, one per line
+        "validate": False,         # validate the specification before every generation of scenarios
+        "learn_model": True,       # update the application model (knowledge.py) from analysed requirements
+        "skills": ["requirements-validation"],
+        "model": "", "effort": "",
     },
     "explore": {                   # Planner: crawl the site instead of (or besides) requirements
         "max_pages": 20,
@@ -52,8 +59,10 @@ DEFAULT_PIPELINE = {
     },
     "scenarios": {
         "enabled": True,
-        "skills": ["test-design"],
-        "types": list(SCENARIO_TYPES),
+        "skills": ["test-design", "test-check-types", "test-design-techniques"],
+        "types": list(DEFAULT_TYPES),
+        "layers": ["ui"],          # ui: tests in the browser | api: tests of the backend API
+        "techniques": list(DEFAULT_TECHNIQUES),
         "select": "manual",        # manual | all | high (only high-priority scenarios)
         "model": "", "effort": "",
     },
@@ -61,7 +70,7 @@ DEFAULT_PIPELINE = {
         "engine": "builtin",       # builtin | playwright-mcp
         "browser_connection": "",  # Playwright MCP connection id (engine playwright-mcp)
         "tool_connections": [],    # connections whose read-only tools the agent may use
-        "skills": ["ui-test-authoring"],
+        "skills": ["ui-test-authoring", "test-data-dependencies", "api-test-authoring"],
         "autopilot": True,
         "headless": True,
         "max_steps": 40,
@@ -169,7 +178,12 @@ def normalize_pipeline(p: dict | None) -> dict:
             else:
                 defaults[key] = str(v or "").strip()
     s, a, r, v = out["scenarios"], out["authoring"], out["run"], out["verify"]
-    s["types"] = [t for t in s["types"] if t in SCENARIO_TYPES] or list(SCENARIO_TYPES)
+    s["types"] = [t for t in s["types"] if t in SCENARIO_TYPES] or list(DEFAULT_TYPES)
+    s["layers"] = [x for x in dict.fromkeys(s["layers"]) if x in LAYERS] or ["ui"]
+    s["techniques"] = [t for t in dict.fromkeys(s["techniques"]) if t in TECHNIQUES]
+    q = out["requirements"]
+    q["standard"] = q["standard"] if q["standard"] in STANDARDS else "gost34"
+    q["checklist"] = q["checklist"][:5000]
     s["select"] = s["select"] if s["select"] in ("manual", "all", "high") else "manual"
     a["engine"] = a["engine"] if a["engine"] in ("builtin", "playwright-mcp") else "builtin"
     a["prompt"] = a["prompt"] if a["prompt"] in ("full", "compact") else "full"

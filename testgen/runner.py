@@ -38,7 +38,7 @@ from urllib.parse import quote_plus, urlparse
 
 from pydantic import BaseModel
 
-from . import checks, fs, llm, skills, testdata
+from . import checks, fs, knowledge, llm, skills, testdata
 from .browser import BrowserSession, describe_element, group_candidates, listed
 from .steps import MAX_MODULE_DEPTH, needs_element, perform, spec
 
@@ -133,6 +133,11 @@ async def analyze(test: dict, report: dict, cfg: dict | None = None, project_id:
         text += ("\nThe test was re-run immediately and PASSED the second time.\n" if retry["passed"] else
                  f"\nThe test was re-run immediately and failed again: "
                  f"{next((r['error'] for r in retry['results'] if r['status'] == 'failed'), '')}\n")
+    model = knowledge.prompt(project_id) if project_id else ""
+    if model:
+        # A missing precondition (no club, no role, an object in another state) is the environment, not a bug.
+        text += (f"\n{model}\nConsider whether a dependency of the test (data, role, state of an object) was "
+                 "missing or different on the stand: that is an environment problem, not a product bug.\n")
     content: list[dict] = [{"type": "text", "text": text + "Screenshot after the failure:"}]
     if failed.get("screenshot"):
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",

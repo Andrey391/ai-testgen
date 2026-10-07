@@ -183,6 +183,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         audit.record("studio.start", user=_user(), project_id=p["id"], target={"sid": s.id}, via="mcp")
 
         async def boot():
+            s.starts_in_autopilot = True
             try:
                 await s.start()
             except Exception as e:

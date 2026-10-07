@@ -436,6 +436,20 @@ def _body(steps: list[dict], ctx: _Ctx, needs: set[str], indent: str = "    ", m
             needs.update({"app_url", "credentials", "testdata", "data"})
             lines.append(f"page = {fn}(page, app_url, credentials, testdata, data{', ' + args if args else ''})"
                          if fn else "# (the module was deleted)")
+        elif a == "api_request":
+            # A step of an API (backend) test: the request, its expected status and response fields.
+            ctx.helpers.add("api")
+            expr, spec = _api_call(s, ctx, needs)
+            checks_, saved = spec.get("expect") or {}, spec.get("save") or {}
+            lines.append(f"response = {expr}" if checks_ or saved else expr)
+            for path, want in checks_.items():
+                # the same comparison as the studio's run: strings as they are, other values as JSON
+                lines.append(f"field = _json_path(response.json(), {_py(path)})")
+                lines.append(f"assert (field if isinstance(field, str) else json.dumps(field, ensure_ascii=False)) == "
+                             f"{_val(str(want))}, f{_py('Response field ' + path + ': {field!r}')}")
+            if saved:
+                needs.add("data")
+                lines += [f"data[{_py(k)}] = _json_path(response.json(), {_py(p)})" for k, p in saved.items()]
         elif a == "mock_route":
             spec = json.loads(v or "{}")
             fulfill = (f"route.fulfill(status={int(spec.get('status') or 200)}, "
@@ -480,6 +494,26 @@ def _module_function(module_id: str, ctx: _Ctx, needs: set[str]) -> str:
     return name
 
 
+def _api_call(step: dict, ctx: _Ctx, needs: set[str]) -> tuple[str, dict]:
+    """An api_request step -> (the _api(...) call, its spec); the fixtures it uses go to `needs`."""
+    s = json.loads(step.get("value") or "{}")
+    for text in (s.get("url") or "", json.dumps(s.get("body") or "", ensure_ascii=False),
+                 json.dumps(s.get("headers") or {}, ensure_ascii=False)):
+        _needs_of(text, needs)
+    needs.add("app_url")
+    url = _url_expr(s.get("url") or "/", ctx.app_url, needs)
+    if not url.startswith("app_url"):
+        url = f"app_url + {url}" if not (s.get("url") or "").startswith("http") else url
+    kw = []
+    if s.get("headers"):
+        kw.append(f"headers={_value_obj(s['headers'])}")
+    if s.get("body") not in (None, ""):
+        kw.append(f"data={_value_obj(s['body'])}")
+    if s.get("expect_status"):
+        kw.append(f"expect={int(s['expect_status'])}")
+    return f"_api(page, {_py((s.get('method') or 'GET').upper())}, {url}{', ' + ', '.join(kw) if kw else ''})", s
+
+
 def _data_fixture(test: dict, ctx: _Ctx, needs: set[str]) -> str:
     """The test's before / after requests as a pytest fixture with yield: after always runs."""
     before, after = test.get("before") or [], test.get("after") or []
@@ -489,21 +523,7 @@ def _data_fixture(test: dict, ctx: _Ctx, needs: set[str]) -> str:
     inner: set[str] = {"app_url"}
 
     def call(step: dict) -> tuple[str, dict]:
-        s = json.loads(step.get("value") or "{}")
-        for text in (s.get("url") or "", json.dumps(s.get("body") or "", ensure_ascii=False),
-                     json.dumps(s.get("headers") or {}, ensure_ascii=False)):
-            _needs_of(text, inner)
-        url = _url_expr(s.get("url") or "/", ctx.app_url, inner)
-        if not url.startswith("app_url"):
-            url = f"app_url + {url}" if not (s.get("url") or "").startswith("http") else url
-        kw = []
-        if s.get("headers"):
-            kw.append(f"headers={_value_obj(s['headers'])}")
-        if s.get("body") not in (None, ""):
-            kw.append(f"data={_value_obj(s['body'])}")
-        if s.get("expect_status"):
-            kw.append(f"expect={int(s['expect_status'])}")
-        return f"_api(page, {_py((s.get('method') or 'GET').upper())}, {url}{', ' + ', '.join(kw) if kw else ''})", s
+        return _api_call(step, ctx, inner)
 
     calls = [call(step) for step in before + after]      # collects the fixtures the requests use
     args = ", ".join(["page", "app_url"] + sorted(inner & {"credentials", "testdata"}))

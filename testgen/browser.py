@@ -405,6 +405,9 @@ def context_options(device: str = "", locale: str = "", timezone: str = "",
     return opts
 
 
+SETTLED_FOR = 0.5       # seconds a settled page counts as settled
+
+
 class BrowserSession:
     """One browser page driven by the agent, the recorder or the replayer.
 
@@ -438,9 +441,11 @@ class BrowserSession:
         self.dialog_plan: dict | None = None    # armed by handle_dialog: what to do with the next dialog
         self.dialog_error = ""              # an armed dialog that did not look as expected
         self.dialogs: list[dict] = []       # dialogs seen: type, message, what was done
+        self.last_response: dict | None = None   # the last api_request: status and (masked) body
         self._errors_checked = 0            # assert_no_console_errors looks at errors after this
         self._frame_paths: dict[Frame, list[str]] = {}
         self._pending: set[asyncio.Task] = set()
+        self._settled = 0.0                 # when the page last settled: a snapshot right after a step skips it
 
     @classmethod
     async def launch(cls, headless: bool = True, browser: Browser | None = None, record_traffic: bool = False,
@@ -653,6 +658,12 @@ class BrowserSession:
             await self.page.wait_for_load_state("networkidle", timeout=3000)
         except Exception:
             pass
+        self._settled = time.monotonic()
+
+    def just_settled(self) -> bool:
+        """The page settled a moment ago (the end of a step): waiting again only costs time - on a page
+        that polls the network, up to the whole networkidle timeout on every snapshot."""
+        return time.monotonic() - self._settled < SETTLED_FOR
 
     async def _frame_path(self, frame: Frame) -> list[str] | None:
         """Selectors of the iframes from the top page down to `frame` (None: cannot be addressed)."""
@@ -684,7 +695,8 @@ class BrowserSession:
         text, the element under `point` (Element Picker, with coordinates of the top page) and
         under `point2` (the drop target of drag & drop)."""
         for attempt in range(4):
-            await self.settle()
+            if attempt or not self.just_settled():
+                await self.settle()
             try:
                 snap = await self._snapshot_frames(max_items, point, content_items, point2)
                 break

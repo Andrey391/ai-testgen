@@ -35,7 +35,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import fs, llm, mailbox, mcp_hub, projects, skills, storage, testdata, traffic, vault
+from . import fs, knowledge, llm, mailbox, mcp_hub, projects, skills, storage, testdata, traffic, vault
 from .browser import BrowserSession, describe_element
 from .mcp_browser import McpBrowser
 from .providers.base import check_call
@@ -44,13 +44,20 @@ from .steps import AUXILIARY_ASSERTIONS, new_step
 MAX_HELPER_CALLS = 12   # connection tool calls in a row before the agent must act
 MAX_REPAIRS = 2         # invalid answers in a row before the agent stops and waits for a person
 KEEP_STATES = 4         # page states (screenshots, snapshots) kept in the conversation
+# Auto-Pilot: several actions of one answer run back to back without asking the model in between,
+# while the page stays the same - the fields of a form are filled in one turn instead of one turn each.
+# After an action that may change the page (a click, a navigation) the rest of the batch is skipped.
+BATCH_SAFE = {"fill", "select_option", "hover", "upload_file", "assert_visible", "assert_text_present",
+              "assert_element_text", "assert_value", "assert_checked", "assert_enabled", "assert_count",
+              "assert_url_contains"}
+MAX_BATCH = 8
 
 SYSTEM_PROMPT = """You are a QA engineer that authors end-to-end UI test cases by driving a real web browser.
 
 The user gives you a web application and a test scenario in plain language. You carry out the scenario one browser action at a time using the tools. Every tool call you make is recorded as a step of the test case, and the recorded test will later be replayed automatically and exported as Playwright code and Gherkin. So:
 
 - Take the most direct path a real user would take. Avoid exploratory clicks that do not belong in the final test.
-- Call exactly one tool per turn, then look at the new page state before deciding the next step.
+- Call one tool per turn, then look at the new page state before deciding the next step. When several tool calls in one turn are allowed (Auto-Pilot), you may batch actions on the SAME page state, typically filling the fields of one form, with the action that submits or navigates LAST: they run in order, and whatever follows an action that changed the page is skipped and must be proposed again.
 - Write each `description` as a clear test step in imperative form, e.g. "Click the 'Add to Cart' button" or "Enter 'kindle' into the search field". Write descriptions in the same language as the scenario.
 - Verify outcomes, not just actions: after each meaningful state change (search results shown, item added to cart, form submitted) add an assertion step. Assert the actual result: assert_element_text or assert_text_present for messages and data, assert_value for form fields, assert_count for lists, tables and carts, assert_checked / assert_enabled for state, assert_url_contains for navigation. assert_visible only proves that an element is there, so it is rarely enough on its own. The test must end with at least one assertion of the scenario's expected result.
 - Target elements only by `ref` values from the LATEST page snapshot; refs change after every action.
@@ -190,8 +197,29 @@ LOOK_TOOL = _tool("look", "Get a screenshot of the current page (not a test step
 FIND_TOOL = _tool("find_elements", "Find elements of the whole page (all frames, off-screen too) whose name, label, "
                                    "placeholder or value contain the text; returns their refs. Not a test step.", {
     "text": {"type": "string"}})
+API_TOOL = _tool(
+    "api_request",
+    "Send a request to the API of the application under test (same origin as the app; the browser's cookies, so the "
+    "login of the page) and record it as a step of the test: for API (backend) checks and for preparing data the "
+    "scenario depends on. DELETE is not allowed. The step fails when the status or a checked field differs. The "
+    "response body is shown to you after the step: check its fields in the next call or with `expect_json`.", {
+        "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH"]},
+        "path": {"type": "string", "description": "Path of the API, e.g. /api/clubs?limit=10 (or a full URL of the app)."},
+        "body": {"type": "string", "description": "JSON body, or an empty string."},
+        "expect_status": {"type": "integer", "description": "Expected HTTP status; 0 = any 2xx."},
+        "expect_json": {"type": "string", "description": "JSON object of checks {\"$.path\": \"expected value\"}, "
+                                                         "e.g. {\"$.status\": \"active\"}; \"{}\" for none."},
+        "save": {"type": "string", "description": "JSON object {\"variable\": \"$.path\"}: values of the response "
+                                                  "used later as {{vars.variable}}; \"{}\" for none."},
+        "description": _DESC})
+REMEMBER_TOOL = _tool(
+    "remember",
+    "Save a fact about the application or its test data to the project's memory, for later tests (not a test step): "
+    "test data that exists or that this test created and keeps (\"club «Tennis Pro» has tournaments enabled, its admin "
+    "is the account «Club admin»\"), a dependency or a lifecycle rule you discovered. Only facts that hold beyond this "
+    "run; never passwords.", {"fact": {"type": "string"}})
 # Tools that help the agent but are not recorded as steps.
-HELPERS = {"look", "find_elements"}
+HELPERS = {"look", "find_elements", "remember"}
 
 
 def _json(d: dict) -> str:
@@ -237,6 +265,17 @@ def tool_to_step(name: str, inp: dict) -> dict:
                        "save": inp.get("save") or "code"})
     elif name == "use_module":
         value = json.dumps({"module": inp.get("module", ""), "params": _params(inp.get("params"))}, ensure_ascii=False)
+    elif name == "api_request":
+        body = (inp.get("body") or "").strip()
+        try:
+            body = json.loads(body) if body else ""
+        except ValueError:
+            pass
+        value = json.dumps({k: v for k, v in {
+            "method": (inp.get("method") or "GET").upper(), "url": inp.get("path") or "/", "body": body,
+            "expect_status": int(inp.get("expect_status") or 0) or None,
+            "expect": _params(inp.get("expect_json")), "save": _params(inp.get("save"))}.items() if v not in ("", None, {})},
+            ensure_ascii=False)
     step = new_step(name, inp.get("description", name), value,
                     press_enter=bool(inp.get("press_enter")))
     step["ref"] = inp.get("ref", "")
@@ -263,6 +302,9 @@ def project_files(pid: str) -> list[str]:
 
 RESUME_TASK = ("The authoring session was interrupted (the studio restarted) and is being continued. Do not repeat "
                "the steps above: continue the test scenario from the current page.")
+EDIT_TASK = ("A person opened this saved test to edit it: the steps above are already recorded in the test and have "
+             "been replayed. Do only what the person asks in the chat (add, change or re-record steps from the current "
+             "page); do not repeat the steps above and do not go on with the scenario on your own.")
 
 
 # ---------- checkpoints of sessions (survive a restart of the studio) ----------
@@ -332,9 +374,20 @@ def recorded_steps(steps: list[dict]) -> list[dict]:
     return [{k: v for k, v in st.items() if k != "ref"} for st in steps if st.get("status") != "failed"]
 
 
+def _api_check(step: dict) -> bool:
+    """An api_request that checks its response (an expected status or fields): the assertion of an API test."""
+    if step["action"] != "api_request":
+        return False
+    try:
+        spec = json.loads(step.get("value") or "{}")
+    except ValueError:
+        return False
+    return isinstance(spec, dict) and bool(spec.get("expect") or spec.get("expect_status"))
+
+
 def has_assertion(steps: list[dict]) -> bool:
     """A passing check of the result (console, accessibility and visual checks do not count)."""
-    return any(st["action"].startswith("assert") and st["action"] not in AUXILIARY_ASSERTIONS
+    return any(((st["action"].startswith("assert") and st["action"] not in AUXILIARY_ASSERTIONS) or _api_check(st))
                and st.get("status") != "failed" for st in steps)
 
 
@@ -382,9 +435,9 @@ class StudioSession:
         self.files = project_files(self.project_id)
         self.modules = [t for t in storage.all_tests(self.project_id) if t.get("role") == "module"] if builtin else []
         self.mailbox = bool((project.get("mailbox") or {}).get("kind"))
-        self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY]
+        self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY] + [REMEMBER_TOOL]
         if builtin:
-            self.tools += [FIND_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
+            self.tools += [FIND_TOOL, API_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
                 ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else [])
         if self.screenshots == "on_request":
             self.tools.append(LOOK_TOOL)
@@ -419,10 +472,14 @@ class StudioSession:
         self.usage = llm.Usage(budget.get("session") or 0, budget.get("currency") or "USD", "сессии")
         self.usage.on_warn = lambda text: self._say("system", text)
         self.edits = 0                      # steps a person rejected or changed
+        # Where the time of generation goes: waiting for the model, the browser (steps, page states), turns.
+        self.timing = {"model": 0.0, "browser": 0.0, "turns": 0}
         self.started = None
         self.lock = asyncio.Lock()
         self._auto_task: asyncio.Task | None = None
         self._llm_task: asyncio.Task | None = None    # the task waiting for the model: Stop cancels it
+        # Auto-Pilot from the start (set before start()): the first turn may already batch actions.
+        self.starts_in_autopilot = False
         self.max_steps = self.cfg["max_steps"]
 
     # ---------- public API (called from the server) ----------
@@ -439,6 +496,7 @@ class StudioSession:
             "page_url": self.page_url, "has_credentials": bool(self.credentials),
             "usage": self.usage.as_dict(), "traffic": len(getattr(self.bs, "traffic", None) or []),
             "model": {"name": self.model, "screenshots": self.screenshots},
+            "timing": {k: round(v, 1) for k, v in self.timing.items()},
         }
 
     def to_test(self) -> dict:
@@ -448,6 +506,7 @@ class StudioSession:
                 "engine": self.engine, "steps": recorded_steps(self.steps),
                 "authoring_usage": self.usage.as_dict(),
                 "authoring_stats": {"model": self.model, "edits": self.edits,
+                                    "timing": {k: round(v, 1) for k, v in self.timing.items()},
                                     "seconds": round(time.monotonic() - self.started, 1) if self.started else None}}
 
     def save(self, status: str = "") -> tuple[dict, list[str]]:
@@ -531,13 +590,21 @@ class StudioSession:
                 try:
                     await self._replay()
                 except ValueError as e:
-                    if not self.restored:
+                    if not self.restored and self.task != EDIT_TASK:
                         raise
                     # The steps stay in the session: a person saves, corrects or continues them.
                     self.steps = copy.deepcopy(self.base_steps)
                     self.status = "idle"
                     self._say("system", f"{e}. Записанные шаги сохранены в сессии: их можно сохранить как тест, "
                                         "исправить или продолжить с текущей страницы («Продолжить ИИ» или вручную).")
+                    return
+                if self.task == EDIT_TASK:
+                    # Editing: the person leads. The model is asked only when they write in the chat.
+                    self.status = "idle"
+                    self._say("system", f"Тест воспроизведён в браузере (шагов: {len(self.steps)}). Правьте шаги в "
+                                        "списке, добавляйте новые кнопкой «+ шаг», через Element Picker или попросите "
+                                        "агента в чате, затем «Сохранить тест» — изменения уйдут в тот же тест "
+                                        "новой версией.")
                     return
                 if not self.restored:
                     self._say("user", self.task)
@@ -591,6 +658,12 @@ class StudioSession:
         if self.mailbox:
             parts.append("The project has a test mailbox: read_email waits for a letter and saves its code as "
                          "{{vars.<name>}}.")
+        model = knowledge.prompt(self.project_id)
+        if model:
+            parts.append(model + "\nBefore a step that needs other data (an object it depends on, a role, a state), "
+                                 "make sure that data exists: use the test data listed above, or prepare it first as "
+                                 "part of the test (through the UI or api_request). If a precondition cannot be met, "
+                                 "finish with status \"blocked\" and name it.")
         return "\n\n".join(parts) + ("\n\n" if parts else "")
 
     async def approve(self) -> None:
@@ -614,7 +687,7 @@ class StudioSession:
                          for i, s in enumerate(recorded_steps(self.steps)))
         return (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
                 f"{self._credentials_note()}{self._context_note()}The test steps recorded so far:\n{done}\n\n"
-                f"{RESUME_TASK}\n\n")
+                f"{self.task if self.task == EDIT_TASK else RESUME_TASK}\n\n")
 
     async def reject(self, feedback: str) -> None:
         async with self.lock:
@@ -629,6 +702,7 @@ class StudioSession:
                 "content": "The user rejected this step without running it. " +
                            (f"Their feedback: {feedback}" if feedback else "Propose a different step."),
             })
+            self._drop_batch(p, "the user rejected the step before it")
             await self._think()
 
     async def send_chat(self, text: str) -> None:
@@ -654,6 +728,7 @@ class StudioSession:
 
     def set_autopilot(self, on: bool) -> None:
         self.autopilot = on
+        self.starts_in_autopilot = False
         if on and (self._auto_task is None or self._auto_task.done()):
             self._auto_task = asyncio.create_task(self._autopilot_loop())
 
@@ -718,6 +793,7 @@ class StudioSession:
                 "type": "tool_result", "tool_use_id": self.pending["id"], "is_error": True,
                 "content": "Not executed: the user took over and performed steps manually.",
             })
+            self._drop_batch(self.pending, "the user took over and performed steps manually")
             self.pending = None
         await self._run_step(step)
         if step["status"] == "passed":
@@ -827,9 +903,11 @@ class StudioSession:
             self.checkpoint()
 
     async def _page_state(self) -> list[dict]:
+        t0 = time.monotonic()
         text = await self.bs.describe()
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
+        self.timing["browser"] += time.monotonic() - t0
         if not self.screenshot or self.screenshots != "always":
             return [{"type": "text", "text": text}]
         return [{"type": "text", "text": text}, self._image()]
@@ -844,6 +922,16 @@ class StudioSession:
             if not self.screenshot:
                 return "No screenshot is available."
             return [{"type": "text", "text": f"Screenshot of {self.bs.url}:"}, self._image()]
+        if name == "remember":
+            fact = str(inp.get("fact") or "")
+            for secret in testdata.secret_values(self.credentials):
+                fact = fact.replace(secret, "***")
+            try:
+                knowledge.remember(self.project_id, fact, source=f"Studio: {self.name}")
+            except ValueError as e:
+                return str(e)
+            self._say("system", f"🧠 Запомнено: {fact[:300]}")
+            return "Saved to the project's memory."
         if name == "find_elements":
             if not isinstance(self.bs, BrowserSession):
                 return "find_elements works with the built-in browser engine only."
@@ -870,10 +958,12 @@ class StudioSession:
             return "Unknown module id. Modules: " + ", ".join(f"{m['id']} ({m['name']})" for m in self.modules)
         return ""
 
-    async def _run_step(self, step: dict) -> None:
+    async def _run_step(self, step: dict, shot: bool = True) -> None:
         """Execute a step on the live page and record it. A tab opened by the step is followed
-        and recorded as a switch_tab step; a dialog nobody prepared for is reported to the agent."""
+        and recorded as a switch_tab step; a dialog nobody prepared for is reported to the agent.
+        `shot=False`: the caller takes the page state (with a screenshot) right after."""
         self.status = "executing"
+        t0 = time.monotonic()
         self._mask(step)
         builtin = isinstance(self.bs, BrowserSession)
         dialogs = len(self.bs.dialogs) if builtin else 0
@@ -899,6 +989,9 @@ class StudioSession:
                 if d["action"] == "dismissed":
                     self.notes.append(f"A {d['type']} dialog appeared: {d['message'][:200]!r}. It was dismissed. If "
                                       "the scenario needs to accept it, call handle_dialog and then repeat the step.")
+            if step["action"] == "api_request" and self.bs.last_response:
+                r, self.bs.last_response = self.bs.last_response, None
+                self.notes.append(f"Response of the API request (HTTP {r['status']}):\n{r['body'] or '(empty)'}")
             if self.bs.new_tabs and step["status"] == "passed" and step["action"] != "switch_tab":
                 tab = new_step("switch_tab", "Перейти на открывшуюся вкладку", "last", source="system")
                 tab["status"] = "passed"
@@ -906,8 +999,10 @@ class StudioSession:
                 self.bs.new_tabs = 0
                 self.notes.append("The step opened a new tab; the browser switched to it (recorded as a switch_tab "
                                   "step).")
-        self.screenshot = await self.bs.screenshot_b64()
+        if shot:
+            self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
+        self.timing["browser"] += time.monotonic() - t0
         self.checkpoint()
 
     async def _run_module(self, step: dict) -> None:
@@ -919,19 +1014,40 @@ class StudioSession:
                              stack=(self.test_id or "",), heal_ok=False)
 
     async def _execute_pending(self) -> None:
+        """The proposed step, then the rest of its batch (Auto-Pilot) while the page stays the same;
+        one page state for the model at the end."""
         p = self.pending
         if not p:
             return
         self.pending = None
         step = p["step"]
-        await self._run_step(step)
-        result = ("Step executed successfully." if step["status"] == "passed"
-                  else f"Step FAILED: {step['error']}")
-        self.unanswered.append({
-            "type": "tool_result", "tool_use_id": p["id"],
-            "is_error": step["status"] != "passed",
-            "content": [{"type": "text", "text": result + " New page state:"}] + await self._page_state(),
-        })
+        await self._run_step(step, shot=False)
+        done = [(p["id"], step)]
+        url = self.bs.url
+        skip = ""
+        for call in p.get("batch") or []:
+            prev = done[-1][1]
+            if not skip:
+                skip = ("Auto-Pilot is off: the person approves steps one by one" if not self.autopilot
+                        else "an earlier action of this turn failed" if prev["status"] != "passed"
+                        else "the page may have changed after the previous action" if prev["action"] not in BATCH_SAFE
+                        or self.bs.url != url or getattr(self.bs, "new_tabs", 0)
+                        else self._invalid(call))
+            if skip:
+                self.unanswered.append({"type": "tool_result", "tool_use_id": call["id"], "is_error": True,
+                                        "content": f"Not executed: {skip}. Propose it again if it is still needed."})
+                continue
+            nxt = tool_to_step(call["name"], call["input"])
+            await self._run_step(nxt, shot=False)
+            done.append((call["id"], nxt))
+        state = await self._page_state()
+        for i, (tid, st) in enumerate(done):
+            result = "Step executed successfully." if st["status"] == "passed" else f"Step FAILED: {st['error']}"
+            last = i == len(done) - 1
+            self.unanswered.append({
+                "type": "tool_result", "tool_use_id": tid, "is_error": st["status"] != "passed",
+                "content": [{"type": "text", "text": result + " New page state:"}] + state if last else result,
+            })
 
     async def _think(self, extra: list[dict] | None = None) -> None:
         """Send queued tool results / notes / `extra` as a user turn, get the next step.
@@ -950,12 +1066,16 @@ class StudioSession:
                 return
             self.status = "thinking"
             self._llm_task = asyncio.current_task()
+            t0 = time.monotonic()
             try:
                 # Tools + rules + skills are cached for the whole session; old screenshots
                 # and snapshots are dropped: they are useless once the page moved on.
+                # Auto-Pilot with the built-in engine may batch actions on one page (BATCH_SAFE); a person
+                # approving steps sees them one at a time.
                 reply = await llm.chat(self.cfg, system=self.system,
                                        tools=self.tools + (self.toolbox.tools if self.toolbox else []),
-                                       messages=self.messages, max_tokens=16000, one_tool=True, cache_all=True,
+                                       messages=self.messages, max_tokens=16000, one_tool=not self._batching(),
+                                       cache_all=True,
                                        keep_images=KEEP_STATES, usage=self.usage, project_id=self.project_id,
                                        stage_name="authoring")
             except llm.ProviderError as e:
@@ -974,6 +1094,8 @@ class StudioSession:
                 raise
             finally:
                 self._llm_task = None
+                self.timing["model"] += time.monotonic() - t0
+                self.timing["turns"] += 1
 
             self.messages.append({"role": "assistant", "content": reply.content})
             if reply.stop == "refusal":
@@ -983,16 +1105,30 @@ class StudioSession:
 
             if reply.text:
                 self._say("agent", reply.text)
-            tool = next(iter(reply.tool_calls), None)
+            calls = list(reply.tool_calls)
+            tool = calls[0] if calls else None
             if tool is None:
                 self.status = "idle"   # the agent is waiting for the user
                 return
             tid, name, inp = tool["id"], tool["name"], tool.get("input")
+            # Every tool call of the answer gets a result: the rest of a batch of actions is kept for
+            # _execute_pending, anything else is sent back.
+            batch = []
+            for extra in calls[1:]:
+                if self._is_action(tool) and self._is_action(extra) and len(batch) < MAX_BATCH:
+                    batch.append(extra)
+                else:
+                    self.unanswered.append({"type": "tool_result", "tool_use_id": extra["id"], "is_error": True,
+                                            "content": "Not executed: only browser actions on the same page can go "
+                                                       "in one turn. Call it again on its own."})
             problem = self._invalid(tool)
             if problem:
                 self.repairs += 1
                 self.unanswered.append({"type": "tool_result", "tool_use_id": tid, "is_error": True,
                                         "content": f"Invalid call, nothing was done: {problem}"})
+                self.unanswered += [{"type": "tool_result", "tool_use_id": c["id"], "is_error": True,
+                                     "content": "Not executed: an earlier call of this turn was invalid."}
+                                    for c in batch]
                 if self.repairs > MAX_REPAIRS:
                     self.status = "idle"
                     self.autopilot = False
@@ -1036,19 +1172,33 @@ class StudioSession:
                 self.autopilot = False
                 return
             step = tool_to_step(name, inp)
-            self.pending = {"id": tid, "name": name, "input": inp, "step": step}
+            self.pending = {"id": tid, "name": name, "input": inp, "step": step, "batch": batch}
             self.status = "awaiting_approval"
             return
         self.status = "idle"
         self._say("system", "Агент слишком много ходов подряд не предлагал действий в браузере "
                             "(инструменты подключений или завершение без проверки).")
 
+    def _drop_batch(self, pending: dict, reason: str) -> None:
+        """The actions batched after a step that will not run: each gets its "not executed" result."""
+        self.unanswered += [{"type": "tool_result", "tool_use_id": c["id"], "is_error": True,
+                             "content": f"Not executed: {reason}."} for c in pending.get("batch") or []]
+
+    def _batching(self) -> bool:
+        return (self.autopilot or self.starts_in_autopilot) and isinstance(self.bs, BrowserSession)
+
+    def _is_action(self, call: dict) -> bool:
+        """A browser action (a test step), not a helper, a connection tool or finish."""
+        name = call["name"]
+        return name not in HELPERS and name != "finish" and not (self.toolbox and self.toolbox.owns(name))
+
     async def _autopilot_loop(self) -> None:
+        start = len(self.steps)
         n = 0
         while self.autopilot and n < self.max_steps:
             if self.status == "awaiting_approval" and self.pending:
                 await self.approve()
-                n += 1
+                n = len(self.steps) - start      # a batch of actions counts every step
             elif self.status in ("done", "error", "idle"):
                 break
             else:

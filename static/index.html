@@ -616,10 +616,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <label>Требования</label>
     <textarea id="reqText" rows="7" placeholder="Как покупатель, я хочу добавлять товары в корзину, чтобы оформить заказ…"></textarea>
     <label>URL приложения (необязательно)</label><input id="reqUrl">
+    <div class="design-choice" id="reqChoice"></div>
     <div class="row" style="margin-top:10px"><span class="muted grow" id="reqStatus"></span>
+      <label class="inline" title="Структура по стандарту, качество требований, вопросы авторам — до проектирования сценариев"><input type="checkbox" id="reqCheck"> проверить ТЗ перед генерацией</label>
+      <button class="btn" id="reqValidate" title="Проверить ТЗ на соответствие требованиям к документации (стандарт — в «Проект → Требования»)">Проверить ТЗ</button>
       <button class="btn" id="reqToPipe">В конвейер →</button>
       <button class="btn primary" id="reqBtn">Сгенерировать сценарии</button></div>
   </div>
+  <div id="reqValidation" class="card hidden" style="margin-top:12px"></div>
   <div id="reqLive" class="card hidden" style="margin-top:12px">
     <div class="row"><span class="dot run" id="reqDot"></span><b class="grow" id="reqStage">Анализ требований…</b>
       <span class="muted" id="reqTimer">0 с</span>
@@ -655,6 +659,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
     </details>
     <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
+    <div class="design-choice" id="pipeChoice"></div>
     <label class="inline" style="margin-top:10px"><input type="checkbox" id="pipeExplore"> Исследовать сайт (Planner): карта страниц и форм — источник сценариев, когда ТЗ нет</label>
     <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
       <button class="btn primary" id="pipeStart">Запустить</button></div>
@@ -677,6 +682,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <button data-sub="model">Модель</button>
       <button data-sub="access">Участники и доступ</button>
       <button data-sub="conns">Подключения (MCP)</button>
+      <button data-sub="reqs">Требования</button>
+      <button data-sub="scen">Сценарии</button>
+      <button data-sub="data">Тестовые данные</button>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
       <button data-sub="ide">Доступ из IDE (MCP)</button>
@@ -830,13 +838,12 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div id="connList"></div>
       </div>
 
-      <!-- Process -->
-      <div data-subpanel="process" class="hidden">
+      <!-- Requirements -->
+      <div data-subpanel="reqs" class="hidden">
         <div class="card">
-          <h3>Процесс генерации тест-кейсов</h3>
-          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — как в «Проект → Модель» (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+          <h3>Требования</h3>
+          <div class="muted">Откуда берутся требования, по какому стандарту проверяется техническое задание и что студия узнаёт о приложении из требований.</div>
         </div>
-
         <div class="card stage">
           <div class="stage-head"><span class="num">1</span><h3 class="grow" style="margin:0">Требования</h3></div>
           <label>Подключение Jira/Confluence</label>
@@ -853,6 +860,38 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           </div>
         </div>
 
+        <div class="card stage">
+          <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Проверка ТЗ на соответствие требованиям к документации</h3></div>
+          <div class="hint">Структура документа по стандарту, качество каждого требования (полнота, однозначность, непротиворечивость, проверяемость, трассируемость), правила команды и вопросы авторам. Кнопка «Проверить ТЗ» — во вкладке «Требования». Проверка не блокирует генерацию: решает человек.</div>
+          <div class="grid2">
+            <div><label>Стандарт</label><select data-p="requirements.standard" data-options="standards"></select></div>
+            <div></div>
+          </div>
+          <label>Правила команды для ТЗ (по одному в строке)</label>
+          <textarea data-p="requirements.checklist" rows="4" placeholder="У каждого требования есть номер REQ-…&#10;Для каждой формы описаны сообщения об ошибках&#10;Указаны роли, которым доступна функция"></textarea>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="requirements.validate"> Проверять ТЗ перед каждой генерацией сценариев (и в конвейере)</label>
+            <label class="inline"><input type="checkbox" data-p="requirements.learn_model"> Обновлять модель приложения из требований: сущности, зависимости, жизненный цикл, роли («Проект → Тестовые данные»)</label>
+          </div>
+          <label>Скиллы</label>
+          <div class="checks" data-list="requirements.skills" data-kind="skills" data-stage="requirements"></div>
+          <div class="grid2">
+            <div><label>Модель</label><input data-p="requirements.model" class="modelIn" list="llmModels"></div>
+            <div><label>Effort</label><select data-p="requirements.effort" class="effortSel"></select></div>
+          </div>
+        </div>
+        <div class="card row" style="position:sticky;bottom:10px">
+          <span class="muted grow" data-proc-msg></span>
+          <button class="btn primary" data-save-process>Сохранить</button>
+        </div>
+      </div>
+
+      <!-- Scenarios -->
+      <div data-subpanel="scen" class="hidden">
+        <div class="card">
+          <h3>Сценарии</h3>
+          <div class="muted">Что проектирует ИИ из требований: виды проверок по основным принципам тестирования, слои (UI и API), техники тест-дизайна. Подробные инструкции — в скиллах этапа (встроенные «test-design», «test-check-types», «test-design-techniques» можно клонировать в проект и изменить во вкладке «Скиллы»).</div>
+        </div>
         <div class="card stage" data-stage="scenarios">
           <div class="stage-head"><span class="num">2</span><h3 class="grow" style="margin:0">Сценарии</h3>
             <label class="inline"><input type="checkbox" data-p="scenarios.enabled"> включён</label></div>
@@ -866,14 +905,86 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               </select></div>
             <div></div>
           </div>
-          <label>Типы сценариев</label>
+          <label>Слои тестов</label>
+          <div class="checks" data-list="scenarios.layers" data-kind="layers"></div>
+          <div class="hint">UI — тест в браузере глазами пользователя; API — тест бэкенда запросами к API того же приложения (статус и поля ответа).</div>
+          <label>Виды проверок (типы сценариев)</label>
           <div class="checks" data-list="scenarios.types" data-kind="types"></div>
+          <label>Техники тест-дизайна</label>
+          <div class="checks" data-list="scenarios.techniques" data-kind="techniques"></div>
+          <div class="hint">Наведите на пункт — подсказка, что он означает. Это значения по умолчанию: при каждой генерации во вкладке «Требования» и при запуске конвейера виды проверок и слои выбираются отдельно.</div>
           <label>Скиллы</label>
           <div class="checks" data-list="scenarios.skills" data-kind="skills" data-stage="scenarios"></div>
           <div class="grid2">
             <div><label>Модель</label><input data-p="scenarios.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="scenarios.effort" class="effortSel"></select></div>
           </div>
+        </div>
+
+        <div class="card row" style="position:sticky;bottom:10px">
+          <span class="muted grow" data-proc-msg></span>
+          <button class="btn primary" data-save-process>Сохранить</button>
+        </div>
+      </div>
+
+      <!-- Application model and test data -->
+      <div data-subpanel="data" class="hidden">
+        <div class="card">
+          <h3>Модель приложения и тестовые данные</h3>
+          <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Пример: для создания турнира нужен клуб, в котором разрешены турниры, и пользователь — администратор этого клуба. Модель получают ИИ при проектировании сценариев (предусловия), агент при записи теста (готовит недостающие данные или останавливается) и анализ падений (отсутствие данных — проблема окружения, а не дефект).</div>
+          <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Сервис турниров для теннисных клубов: клубы, корты, игроки, турниры, рейтинги"></textarea>
+          <details class="opt" style="margin-top:8px"><summary>Построить из требований (ИИ дополнит модель, ваши записи не меняются)</summary>
+            <textarea id="knReq" rows="5" placeholder="Вставьте текст требований или оставьте пустым — возьмётся последний анализ требований"></textarea>
+            <div class="row" style="margin-top:6px"><span class="muted grow" id="knExtractMsg"></span><button class="btn" id="knExtract">Построить</button></div>
+          </details>
+        </div>
+        <div class="card">
+          <h3>Сущности, зависимости и жизненный цикл</h3>
+          <div class="hint">«Требует» — сущности (и их настройки), которые должны существовать до создания этой; жизненный цикл — статусы и разрешённые переходы.</div>
+          <div id="knEntities"></div>
+          <button class="btn small" style="margin-top:6px" onclick="knAdd('entities')">+ Сущность</button>
+        </div>
+        <div class="card">
+          <h3>Роли и учётные записи</h3>
+          <div class="hint">Какой учётной записью проекта выполнять действия роли. Конвейер входит под учётной записью роли, названной в предусловиях сценария.</div>
+          <div id="knRoles"></div>
+          <button class="btn small" style="margin-top:6px" onclick="knAdd('roles')">+ Роль</button>
+        </div>
+        <div class="card">
+          <h3>Тестовые данные стенда</h3>
+          <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Клуб "Теннис Про" — турниры разрешены, администратор — учётная запись "Администратор клуба"».</div>
+          <div id="knData"></div>
+          <button class="btn small" style="margin-top:6px" onclick="knAdd('data')">+ Запись</button>
+        </div>
+        <div class="card">
+          <h3>Память проекта</h3>
+          <div class="hint">Факты и события, которые запомнил агент при записи тестов (инструмент <code>remember</code>) или добавили люди. Пароли сюда не попадают.</div>
+          <div id="knMemory"></div>
+          <div class="row" style="margin-top:6px"><input id="knFact" class="grow" placeholder="Новый факт: «Турнир в статусе "завершён" нельзя редактировать»"><button class="btn small" onclick="knAddFact()">Добавить</button></div>
+        </div>
+        <div class="card row" style="position:sticky;bottom:10px">
+          <span class="muted grow" id="knMsg"></span>
+          <button class="btn primary" id="knSave">Сохранить</button>
+        </div>
+      </div>
+
+      <!-- Process -->
+      <div data-subpanel="process" class="hidden">
+        <div class="card">
+          <h3>Процесс генерации тест-кейсов</h3>
+          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — как в «Проект → Модель» (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+        </div>
+
+        <div class="card stage">
+          <div class="stage-head"><span class="num">1</span><h3 class="grow" style="margin:0">Требования</h3>
+            <button class="btn small" onclick="showSub('reqs')">Настроить →</button></div>
+          <div class="hint">Источники требований, Planner, проверка ТЗ по стандарту документации и модель приложения — в разделе «Требования».</div>
+        </div>
+
+        <div class="card stage">
+          <div class="stage-head"><span class="num">2</span><h3 class="grow" style="margin:0">Сценарии</h3>
+            <button class="btn small" onclick="showSub('scen')">Настроить →</button></div>
+          <div class="hint">Виды проверок, слои UI / API, техники тест-дизайна, отбор и скиллы сценариев — в разделе «Сценарии».</div>
         </div>
 
         <div class="card stage">
@@ -1017,8 +1128,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
 
         <div class="card row" style="position:sticky;bottom:10px">
-          <span class="muted grow" id="procMsg"></span>
-          <button class="btn primary" id="procSave">Сохранить процесс</button>
+          <span class="muted grow" id="procMsg" data-proc-msg></span>
+          <button class="btn primary" id="procSave" data-save-process>Сохранить процесс</button>
         </div>
       </div>
 
@@ -1026,7 +1137,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div data-subpanel="skills" class="hidden">
         <div class="card">
           <h3>Скиллы</h3>
-          <div class="muted">Инструкции для этапов процесса в формате SKILL.md (front matter <code>name / description / stage</code> и Markdown). Встроенные скиллы можно переопределить для проекта — оригинал восстанавливается кнопкой «Сбросить». Подключаются к этапам во вкладке «Процесс генерации».</div>
+          <div class="muted">Инструкции для этапов процесса в формате SKILL.md (front matter <code>name / description / stage</code> и Markdown). Встроенные скиллы не редактируются: их можно клонировать в проект и выбрать флажком, какую версию использовать — локальную или встроенную. Подключаются к этапам в разделах «Требования», «Сценарии» и «Процесс генерации».</div>
           <div class="row" style="margin-top:10px">
             <button class="btn" id="skNew">+ Новый скилл</button>
             <button class="btn" id="skImportBtn">Импорт .md</button>
@@ -1038,6 +1149,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="card" id="skEditor">
             <div class="row"><b class="grow" id="skTitle">Выберите скилл</b>
               <span id="skBadges"></span></div>
+            <div class="row hidden" id="skLocalBar" style="margin-top:6px">
+              <label class="inline grow"><input type="checkbox" id="skUseLocal"> Использовать локальную версию в проекте</label>
+              <select id="skVersion" style="width:auto"><option value="local">локальная версия</option><option value="builtin">встроенная версия</option></select>
+            </div>
+            <div class="hint hidden" id="skRo">Встроенный скилл только для чтения. «Клонировать в проект» создаст локальную копию — её можно изменить, а флажок решает, какую версию использует проект.</div>
             <label>Имя (латиница, цифры, дефис)</label><input id="skName">
             <label>SKILL.md</label>
             <textarea id="skText" class="code" rows="24"></textarea>
@@ -1045,6 +1161,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               <span class="muted grow" id="skMsg"></span>
               <a class="btn" id="skDownload" target="_blank">Скачать</a>
               <button class="btn danger" id="skDelete">Удалить</button>
+              <button class="btn" id="skClone">Клонировать в проект</button>
               <button class="btn primary" id="skSave">Сохранить</button>
             </div>
           </div>
@@ -1196,6 +1313,7 @@ async function switchProject(pid) {
   api('GET', `/api/tests?project_id=${pid}`).then(ts => $('#fFreshBox').classList.toggle('hidden',
     !(PROJ.pipeline.run.login_once && ts.some(t => t.role === 'login')))).catch(() => {});
   $('#pipeUrl').placeholder = PROJ.base_url || 'https://…';
+  renderDesignChoices();
   AN = null; SCEN = [];
   if ($('nav button.on')?.dataset.tab === 'req') loadAnalyses();
   const tab = $('nav button.on').dataset.tab;
@@ -1320,8 +1438,10 @@ function render() {
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
   $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
-    (s.model ? ` · ${s.model.name}${s.model.screenshots !== 'always' ? ' (текстовый режим)' : ''}` : '') + usageText(s.usage);
-  $('#stText').title = s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '';
+    (s.model ? ` · ${s.model.name}${s.model.screenshots !== 'always' ? ' (текстовый режим)' : ''}` : '') + usageText(s.usage) +
+    (s.timing?.turns ? ` · ходов ${s.timing.turns}: модель ${Math.round(s.timing.model)} с, браузер ${Math.round(s.timing.browser)} с` : '');
+  $('#stText').title = (s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '') +
+    (s.timing?.turns ? `\nВремя: ожидание модели ${s.timing.model} с, браузер ${s.timing.browser} с. Долго думает модель — уменьшите effort этапа «Генерация» или выберите модель быстрее; в Auto-Pilot поля формы заполняются за один ход.` : '');
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
@@ -1619,6 +1739,7 @@ async function loadTests() {
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
         <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
+          <button onclick="openTest('${t.id}').then(() => editSteps('${t.id}'))">Редактировать шаги</button>
           ${t.status !== 'ready' ? `<button onclick="setStatus('${t.id}', 'ready')" title="Тест проверен человеком и входит в регрессионный набор">В набор (проверен)</button>` : ''}
           ${t.status === 'draft' ? `<button onclick="setStatus('${t.id}', 'review')">Отправить на ревью</button>` : ''}
           ${t.status !== 'draft' ? `<button onclick="setStatus('${t.id}', 'draft')">В черновики</button>` : ''}
@@ -1735,6 +1856,17 @@ async function runTest(id, browser) {
     setTimeout(loadTests, 500);
   } catch (e) { alert(e.message); }
 }
+const RETRYABLE = ['failed', 'error', 'flaky'];
+async function retryRun(rid, btn) {
+  if (btn) btn.disabled = true;
+  try { const {id} = await api('POST', `/api/runs/${rid}/retry`); openRun(id); setTimeout(loadTests, 500); }
+  catch (e) { alert(e.message); if (btn) btn.disabled = false; }
+}
+async function retrySuite(sid, btn) {
+  btn.disabled = true;
+  try { const {id} = await api('POST', `/api/suites/${sid}/retry`); openSuite(id); loadSuites(); }
+  catch (e) { alert(e.message); btn.disabled = false; }
+}
 async function openRun(rid) {
   clearTimeout(runTimer);
   let r;
@@ -1784,6 +1916,7 @@ function renderRun(r, t) {
   const attempts = r.attempts || [];
   let html = `<div class="row"><b class="grow">Прогон: ${esc(r.test_name)} ${runBadge(r.status)}${r.quarantined ? ' <span class="badge warn">в карантине</span>' : ''}</b>
       <span class="muted" style="font-size:12px">${fmtTime(r.started)}${r.user ? ' · ' + esc(r.user) : ''}${usageText(r.usage)}</span>
+      ${RETRYABLE.includes(r.status) ? `<button class="btn small" onclick="retryRun('${r.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить прогон</button>` : ''}
       <button class="btn small" onclick="$('#runBox').classList.add('hidden')">✕</button></div>`;
   if (r.error) html += `<div class="err">${esc(r.error)}</div>`;
   if (r.flaky) html += '<div class="hint">Упал в первой попытке и прошёл при перезапуске — нестабильный тест.</div>';
@@ -1851,6 +1984,8 @@ async function openTest(id, quiet) {
     ${t.scenario ? `<div class="hint">${esc(t.scenario)}</div>` : ''}
     ${t.quarantine?.on ? `<div class="hint"><span class="badge warn">карантин</span> ${esc(t.quarantine.reason || '')} ${t.quarantine.by ? '· ' + esc(t.quarantine.by) : ''} ${fmtTime(t.quarantine.at)}</div>` : ''}`;
 
+  html += `<div class="sub" id="stepsBox">${stepsViewHtml(t)}</div>`;
+
   const props = t.heal_proposals || [];
   html += `<div class="sub"><b>Ревью самолечения</b>`;
   html += props.length ? props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
@@ -1901,9 +2036,10 @@ async function openTest(id, quiet) {
     v.mutants.map(m => `<div class="hint" style="margin:2px 0">${m.result === 'killed' ? '<span class="ok">✔ обнаружен</span>' : m.result === 'survived' ? '<span class="err">✘ не обнаружен</span>' : '<span class="muted">— не применим</span>'} ${esc(m.description)}${m.error ? ` <span class="muted">(${esc(m.error)})</span>` : ''}</div>`).join('');
   html += '</div>';
 
-  html += `<div class="sub"><b>История прогонов</b>` + (history.length ? `<table><thead><tr><th>Когда</th><th>Итог</th><th>Попытки</th><th>Самолечение</th><th>Запуск</th></tr></thead><tbody>` +
+  html += `<div class="sub"><b>История прогонов</b>` + (history.length ? `<table><thead><tr><th>Когда</th><th>Итог</th><th>Попытки</th><th>Самолечение</th><th>Запуск</th><th></th></tr></thead><tbody>` +
     history.map(h => `<tr class="click" onclick="openRun('${h.id}')"><td>${fmtTime(h.started)}</td><td>${runBadge(h.status)}${h.quarantined ? ' <span class="badge off">карантин</span>' : ''}</td>
-      <td>${(h.outcomes || []).map(o => o ? '✔' : '✘').join(' ')}</td><td>${h.healed || ''}${h.proposals ? ` (на ревью: ${h.proposals})` : ''}</td><td class="muted">${esc({manual: 'вручную', pipeline: 'конвейер', suite: 'набор', cli: 'CLI', mcp: 'IDE (MCP)'}[h.trigger] || h.trigger)}</td></tr>`).join('') + '</tbody></table>'
+      <td>${(h.outcomes || []).map(o => o ? '✔' : '✘').join(' ')}</td><td>${h.healed || ''}${h.proposals ? ` (на ревью: ${h.proposals})` : ''}</td><td class="muted">${esc({manual: 'вручную', pipeline: 'конвейер', suite: 'набор', cli: 'CLI', mcp: 'IDE (MCP)'}[h.trigger] || h.trigger)}</td>
+      <td>${RETRYABLE.includes(h.status) ? `<button class="btn small" onclick="event.stopPropagation();retryRun('${h.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить</button>` : ''}</td></tr>`).join('') + '</tbody></table>'
     : '<div class="hint">Запусков ещё не было.</div>') + '</div>';
 
   if (traffic.length) {
@@ -1917,9 +2053,96 @@ async function openTest(id, quiet) {
         <td class="row"><button class="btn small" onclick="mockRequest('${t.id}', ${e.index})">Замокать</button>
           ${e.method !== 'DELETE' && !e.third_party ? `<button class="btn small" onclick="toBefore('${t.id}', ${e.index})" title="Выполнять этот запрос перед тестом для подготовки данных">В подготовку</button>` : ''}</td></tr>`).join('') + '</tbody></table></div>';
   }
+  // a refresh (a run finished) keeps the step editor and what was typed in it
+  if (STEP_EDIT?.tid === t.id && $('#stepsBox [data-si]')) readStepEditor();
   box.innerHTML = html;
+  if (STEP_EDIT?.tid === t.id) renderStepEditor(); else STEP_EDIT = null;
   if (!quiet) box.scrollIntoView({behavior: 'smooth', block: 'start'});
   loadVersions(t.id);
+}
+// the steps of a saved test: viewed, edited in place (a new version) or re-recorded in the Studio
+const STEP_ACTIONS = {click: 'клик', double_click: 'двойной клик', fill: 'ввод текста', select_option: 'выбор в списке',
+  hover: 'наведение', upload_file: 'загрузка файла', drag_to: 'перетащить', navigate: 'открыть URL', press_key: 'клавиша',
+  scroll: 'прокрутка', wait: 'ждать (сек)', switch_tab: 'вкладка', handle_dialog: 'ответ на диалог', read_email: 'код из письма',
+  use_module: 'модуль', api_request: 'запрос к API', mock_route: 'подмена ответа', assert_visible: 'проверка: виден',
+  assert_text_present: 'проверка: текст на странице', assert_element_text: 'проверка: текст элемента',
+  assert_url_contains: 'проверка: URL', assert_value: 'проверка: значение поля', assert_checked: 'проверка: флажок',
+  assert_enabled: 'проверка: доступность', assert_count: 'проверка: число элементов', assert_download: 'проверка: файл скачан',
+  assert_no_console_errors: 'проверка: нет ошибок консоли', assert_accessible: 'проверка доступности', assert_screenshot: 'визуальная проверка'};
+const ELEMENT_STEP = new Set(['click', 'double_click', 'fill', 'select_option', 'hover', 'upload_file', 'drag_to', 'assert_visible',
+  'assert_value', 'assert_checked', 'assert_enabled', 'assert_count', 'assert_element_text']);
+let STEP_EDIT = null;     // {tid, steps}: the steps being edited in the Tests tab
+const locLines = s => (s.locator || []).map(candText).join('\n');
+function stepsViewHtml(t) {
+  const can = canRole('editor');
+  return `<div class="row"><b class="grow">Шаги (${t.steps.length})</b>
+      ${can ? `<button class="btn small" onclick="editSteps('${t.id}')" title="Изменить описания, значения, локаторы и порядок шагов">Редактировать</button>
+      <button class="btn small" onclick="editInStudio('${t.id}', this)" title="Тест воспроизводится в браузере Studio: шаги можно дописать, перезаписать кликом или попросить агента">Править в Studio</button>` : ''}</div>
+    <div class="hint" style="margin-top:2px">${t.steps.map((s, i) => `<div style="margin:2px 0">${i + 1}. <span class="badge ${s.action.startsWith('assert') ? 'assert' : ''}">${esc(STEP_ACTIONS[s.action] || s.action)}</span> ${esc(s.description)}${s.value ? ` <span class="muted">— ${esc(s.value.length > 80 ? s.value.slice(0, 80) + '…' : s.value)}</span>` : ''}</div>`).join('') || 'Шагов нет.'}</div>`;
+}
+async function editSteps(tid) {
+  try {
+    const full = await api('GET', `/api/tests/${tid}`);
+    STEP_EDIT = {tid, steps: full.steps.map(s => ({...s, locator_text: locLines(s)}))};
+    renderStepEditor();
+  } catch (e) { alert(e.message); }
+}
+function renderStepEditor() {
+  const opts = v => Object.entries(STEP_ACTIONS).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  $('#stepsBox').innerHTML = `<div class="row"><b class="grow">Редактирование шагов</b>
+      <button class="btn small" onclick="stepEdit('add', STEP_EDIT.steps.length)">+ шаг</button>
+      <button class="btn small" onclick="STEP_EDIT=null;openTest(OPEN_TEST, true)">Отмена</button>
+      <button class="btn primary small" onclick="saveSteps(this)">Сохранить шаги</button></div>
+    <div class="hint">Локатор — по одному варианту в строке: <code>role=button[name="Войти"]</code>, <code>testid=login</code>, <code>label=Email</code>, <code>placeholder=…</code>, <code>text=…</code>, <code>css=#id</code>; прогон берёт первый найденный. Пароль пишите как <code>{{password}}</code>. Сохранение создаёт новую версию теста — её можно откатить.</div>
+    ${STEP_EDIT.steps.map((s, i) => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px" data-si="${i}">
+      <div class="row"><b>${i + 1}.</b><select data-sf="action" style="width:auto">${opts(s.action)}</select>
+        <input data-sf="description" class="grow" value="${esc(s.description)}" placeholder="описание шага">
+        <button class="btn small" title="Вверх" onclick="stepEdit('up', ${i})">▲</button><button class="btn small" title="Вниз" onclick="stepEdit('down', ${i})">▼</button>
+        <button class="btn small" title="Добавить шаг после этого" onclick="stepEdit('add', ${i + 1})">+</button><button class="btn small" title="Удалить" onclick="stepEdit('del', ${i})">✕</button></div>
+      <div class="grid2" style="margin-top:4px"><div><label>Значение</label><input data-sf="value" value="${esc(s.value || '')}"></div>
+        <div><label>Локатор ${ELEMENT_STEP.has(s.action) ? '(обязателен)' : '(необязателен)'}</label><textarea data-sf="locator_text" rows="${Math.min(4, Math.max(1, (s.locator_text || '').split('\n').length))}" class="mono">${esc(s.locator_text || '')}</textarea></div></div>
+      ${s.action === 'fill' ? `<label class="inline"><input type="checkbox" data-sf="press_enter" ${s.press_enter ? 'checked' : ''}> нажать Enter после ввода</label>` : ''}
+    </div>`).join('')}
+    <span class="err" id="stepsMsg"></span>`;
+  $$('#stepsBox [data-sf]').forEach(el => el.onchange = () => { readStepEditor(); if (el.dataset.sf === 'action') renderStepEditor(); });
+}
+function readStepEditor() {
+  $$('#stepsBox [data-si]').forEach(card => {
+    const st = STEP_EDIT.steps[+card.dataset.si];
+    card.querySelectorAll('[data-sf]').forEach(el => { st[el.dataset.sf] = el.type === 'checkbox' ? el.checked : el.value; });
+  });
+}
+function stepEdit(op, i) {
+  readStepEditor();
+  const st = STEP_EDIT.steps;
+  if (op === 'add') st.splice(i, 0, {id: '', action: 'assert_text_present', description: '', value: '', locator_text: ''});
+  if (op === 'del') st.splice(i, 1);
+  if (op === 'up' && i > 0) [st[i - 1], st[i]] = [st[i], st[i - 1]];
+  if (op === 'down' && i < st.length - 1) [st[i + 1], st[i]] = [st[i], st[i + 1]];
+  renderStepEditor();
+}
+async function saveSteps(btn) {
+  readStepEditor();
+  btn.disabled = true;
+  const steps = STEP_EDIT.steps.map(s => {
+    const out = {id: s.id, action: s.action, description: s.description, value: s.value, press_enter: !!s.press_enter};
+    // an untouched locator keeps its saved candidates (frames, alternatives); an edited one is parsed
+    if (s.locator_text !== locLines(s)) out.locator_text = s.locator_text;
+    return out;
+  });
+  try {
+    await api('PUT', `/api/tests/${STEP_EDIT.tid}/steps`, {steps});
+    STEP_EDIT = null; openTest(OPEN_TEST, true); loadTests();
+  } catch (e) { $('#stepsMsg').textContent = e.message; btn.disabled = false; }
+}
+async function editInStudio(tid, btn) {
+  if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
+  btn.disabled = true;
+  try {
+    if (SID) await api('DELETE', `/api/sessions/${SID}`);
+    const {id} = await api('POST', `/api/tests/${tid}/edit`, {headless: true});
+    openSession(id);
+  } catch (e) { alert(e.message); btn.disabled = false; }
 }
 async function loadVersions(tid) {
   const list = await api('GET', `/api/tests/${tid}/versions`).catch(() => []);
@@ -2012,7 +2235,7 @@ async function loadSuites() {
     <td>${s.status === 'running' ? runBadge('running') : `<span class="badge ${s.passed ? 'ok' : 'bad'}">${s.passed ? 'успешно' : 'есть падения'}</span>`}
       <span class="muted" style="font-size:12px">${s.summary?.total ? `${s.summary.passed + s.summary.flaky}/${s.summary.total}` : ''}</span></td>
     <td>${(s.tags || []).map(t => '#' + esc(t)).join(' ') || 'все'}</td><td>${esc(s.user || s.trigger || '')}</td>
-    <td>${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit" onclick="event.stopPropagation()">JUnit</a>` : ''}</td></tr>`).join('')
+    <td class="row">${s.status !== 'running' && !s.passed ? `<button class="btn small" onclick="event.stopPropagation();retrySuite('${s.id}', this)" title="Прогнать заново только упавшие тесты этого набора">Повторить упавшие</button>` : ''}${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit" onclick="event.stopPropagation()">JUnit</a>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="5" class="muted">Наборы ещё не запускались.</td></tr>';
 }
 async function openSuite(sid) {
@@ -2024,6 +2247,7 @@ async function openSuite(sid) {
   const doneN = s.items.filter(i => !['queued', 'running'].includes(i.status)).length;
   box.innerHTML = `<div class="row"><b class="grow">Набор ${(s.tags || []).map(t => '#' + esc(t)).join(' ') || '(все тесты)'} — ${s.status === 'running' ? `выполняется ${doneN}/${total}` : s.passed ? '<span class="ok">успешно</span>' : '<span class="err">есть падения</span>'}</b>
       <span class="muted" style="font-size:12px">${fmtTime(s.started)}${usageText(s.usage)}</span>
+      ${s.status !== 'running' && s.items.some(i => RETRYABLE.includes(i.status)) ? `<button class="btn small" onclick="retrySuite('${s.id}', this)" title="Новый прогон набора только из упавших, нестабильных и завершившихся ошибкой тестов">Перезапустить упавшие (${new Set(s.items.filter(i => RETRYABLE.includes(i.status)).map(i => i.test_id)).size})</button>` : ''}
       ${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit">JUnit XML</a>` : ''}
       <button class="btn small" onclick="$('#suiteBox').classList.add('hidden')">✕</button></div>
     <div class="bar"><span style="width:${pct(c.passed)};background:var(--ok)"></span><span style="width:${pct(c.flaky)};background:var(--warn)"></span><span style="width:${pct((c.failed || 0) + (c.error || 0))};background:var(--bad)"></span></div>
@@ -2253,10 +2477,11 @@ $('#exploreBtn').onclick = async () => {
 // and saved at once; "Generate all" runs the pipeline with its scenarios, the tests made show under each.
 let ANALYSES = [], AN = null, SCEN = [], SCEN_OPEN = new Set(), REQ_ABORT = null, STUDIO_SCEN = null;
 const LOG_LINES = 5;
-const SC_TYPES = {positive: 'позитивный', negative: 'негативный', edge: 'крайний случай', boundary: 'граничные значения',
-  accessibility: 'доступность', security: 'безопасность'};
+const scTypes = () => Object.fromEntries(Object.entries(PROJ.catalog.types).map(([k, v]) => [k, v.label]));
+const scType = k => PROJ.catalog.types[k]?.label || k;
+const layerBadge = s => s.layer === 'api' ? '<span class="badge" title="Тест API (бэкенд)">API</span> ' : '';
 const SC_PRIOS = {high: 'высокий', medium: 'средний', low: 'низкий'};
-const SC_FIELDS = ['title', 'type', 'priority', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
+const SC_FIELDS = ['title', 'type', 'layer', 'priority', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
 const AN_STATUS = {running: ['генерация…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
 const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
 const isReady = s => !s.pending;
@@ -2322,8 +2547,11 @@ function renderAnalysis() {
     <details class="opt"><summary>Требования${AN.url ? ` · ${esc(AN.url)}` : ''}</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
       <button class="btn small" onclick="reuseRequirements()">Вставить в поле требований</button></details>
     ${AN.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${AN.assumptions.map(esc).join('; ')}</div>` : ''}
+    ${AN.validation ? `<details class="opt"><summary>Проверка ТЗ: ${AN.validation.score}/100 — ${esc(VERDICTS[AN.validation.verdict] || AN.validation.verdict)}</summary>${validationHtml(AN.validation)}</details>` : ''}
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
     <div class="row" style="margin-top:8px"><span class="grow muted" id="scenCount"></span>
+      <button class="btn small" onclick="validateAnalysis(this)" title="Проверить требования этого анализа на соответствие стандарту документации">Проверить ТЗ</button>
+      <button class="btn small" onclick="learnFromAnalysis(this)" title="Дополнить модель приложения (сущности, зависимости, жизненный цикл, роли) требованиями этого анализа">В модель приложения</button>
       <button class="btn small" id="scenAdd">+ Сценарий</button>
       <button class="btn small" id="anDelete" style="color:var(--bad)">Удалить анализ</button>
       <button class="btn primary" id="scenGenAll">Сгенерировать все</button></div>
@@ -2339,6 +2567,81 @@ function renderAnalysis() {
   };
   renderScenarios();
 }
+// ---- what to design in this generation: layers, kinds of checks, techniques (defaults: Проект → Сценарии)
+function renderDesignChoices() {
+  if (!PROJ) return;
+  const cfg = PROJ.pipeline.scenarios, cat = PROJ.catalog;
+  const boxes = (prefix, kind, entries, cur) => entries.map(([k, label, hint]) =>
+    `<label class="inline" ${hint ? `title="${esc(hint)}"` : ''}><input type="checkbox" data-design="${prefix}-${kind}" value="${k}" ${cur.includes(k) ? 'checked' : ''}> ${esc(label)}</label>`).join('');
+  for (const prefix of ['req', 'pipe']) {
+    const box = $(`#${prefix}Choice`); if (!box) continue;
+    box.innerHTML = `<div class="row" style="margin-top:10px;align-items:baseline"><b style="font-size:13px">Слои:</b>
+        ${boxes(prefix, 'layers', Object.entries(cat.layers), cfg.layers)}
+        <span class="muted" style="font-size:12px">— UI-тесты в браузере и/или API-тесты бэкенда</span></div>
+      <div class="checks" style="margin-top:4px"><b style="font-size:13px;margin-right:6px">Виды проверок:</b>
+        ${boxes(prefix, 'types', Object.entries(cat.types).map(([k, v]) => [k, v.label, v.hint]), cfg.types)}</div>
+      <details class="opt"><summary>Техники тест-дизайна (${cfg.techniques.length})</summary><div class="checks">
+        ${boxes(prefix, 'techniques', Object.entries(cat.techniques).map(([k, v]) => [k, v.label, v.hint]), cfg.techniques)}</div></details>
+      <div class="hint">Выбор только для этого запуска; значения по умолчанию — в «Проект → Сценарии».</div>`;
+  }
+  if ($('#reqCheck')) $('#reqCheck').checked = !!PROJ.pipeline.requirements.validate;
+}
+function readDesign(prefix) {
+  const pick = kind => $$(`[data-design="${prefix}-${kind}"]`).filter(c => c.checked).map(c => c.value);
+  if (!$(`[data-design="${prefix}-types"]`)) return {};
+  const out = {types: pick('types'), layers: pick('layers'), techniques: pick('techniques')};
+  if (!out.layers.length) out.layers = ['ui'];
+  if (!out.types.length) delete out.types;
+  return out;
+}
+
+// ---- validation of a specification against the documentation standard
+const VERDICTS = {ready: 'готово к тест-дизайну', needs_work: 'нужна доработка', not_ready: 'не готово'};
+const SEVERITY = {critical: ['критично', 'bad'], major: ['существенно', 'warn'], minor: ['незначительно', 'off']};
+const SECTION = {present: ['есть', 'ok'], partial: ['частично', 'warn'], missing: ['нет', 'bad']};
+function validationHtml(v) {
+  const q = PROJ.catalog.quality;
+  const color = v.score >= 80 ? 'var(--ok)' : v.score >= 50 ? 'var(--warn)' : 'var(--bad)';
+  return `<div class="row" style="margin-top:6px"><b class="grow">${esc(v.standard_title || '')}</b>
+      <span class="badge" style="background:${color};color:#fff">${v.score}/100</span> <span class="badge">${esc(VERDICTS[v.verdict] || v.verdict)}</span></div>
+    <div class="bar"><span style="width:${v.score}%;background:${color}"></span></div>
+    <div style="margin-top:6px">${esc(v.summary)}</div>
+    <details class="opt" open><summary>Разделы по стандарту (${v.sections.filter(x => x.status === 'present').length} из ${v.sections.length})</summary>
+      <table><tbody>${v.sections.map(x => `<tr><td>${esc(x.section)}</td><td><span class="badge ${SECTION[x.status]?.[1] || ''}">${esc(SECTION[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.comment)}</td></tr>`).join('')}</tbody></table></details>
+    <details class="opt" open><summary>Замечания (${v.findings.length})</summary>
+      ${v.findings.map(f => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
+        <div><span class="badge ${SEVERITY[f.severity]?.[1] || ''}">${esc(SEVERITY[f.severity]?.[0] || f.severity)}</span>
+          <span class="badge">${esc(q[f.criterion] || (f.criterion === 'checklist' ? 'правила команды' : f.criterion === 'section' ? 'структура' : f.criterion))}</span>
+          <span class="muted" style="font-size:12px">${esc(f.location)}</span></div>
+        <div style="margin-top:4px">${esc(f.problem)}</div>
+        ${f.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(f.suggestion)}</div>` : ''}</div>`).join('') || '<div class="hint">Замечаний нет.</div>'}</details>
+    ${v.questions?.length ? `<details class="opt" open><summary>Вопросы авторам (${v.questions.length})</summary><ol style="margin:4px 0">${v.questions.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>` : ''}`;
+}
+$('#reqValidate').onclick = async () => {
+  const requirements = $('#reqText').value.trim();
+  if (!requirements) { $('#reqStatus').textContent = 'Вставьте текст требований'; return; }
+  const box = $('#reqValidation'), btn = $('#reqValidate');
+  btn.disabled = true; box.classList.remove('hidden');
+  box.innerHTML = '<div class="row"><span class="dot run"></span><b class="grow">Проверка ТЗ на соответствие стандарту…</b></div>';
+  try {
+    const v = await api('POST', '/api/requirements/validate', {project_id: PID, requirements});
+    box.innerHTML = `<div class="row"><h3 class="grow" style="margin:0">Проверка ТЗ</h3><button class="btn small" onclick="$('#reqValidation').classList.add('hidden')">✕</button></div>` + validationHtml(v);
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { btn.disabled = false; }
+};
+async function validateAnalysis(btn) {
+  btn.disabled = true; btn.textContent = 'Проверка…';
+  try { AN.validation = await api('POST', '/api/requirements/validate', {project_id: PID, analysis_id: AN.id}); renderAnalysis(); }
+  catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Проверить ТЗ'; }
+}
+async function learnFromAnalysis(btn) {
+  btn.disabled = true; btn.textContent = 'Анализ…';
+  try {
+    const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: AN.id});
+    btn.textContent = `В модели: сущностей ${k.entities.length}, ролей ${k.roles.length}`;
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'В модель приложения'; }
+}
+
 function reuseRequirements() {
   $('#reqText').value = AN.requirements; $('#reqUrl').value = AN.url || '';
   $('#reqText').scrollIntoView({behavior: 'smooth'}); $('#reqText').focus();
@@ -2360,14 +2663,14 @@ function testsHtml(s) {
 function scenRow(s, i) {
   if (!isReady(s)) return `<tr class="sc-row pending" id="sc-row-${s.id}"><td class="chk"></td><td class="num">${i + 1}</td>
     <td><span class="sc-title">${esc(s.title)}</span><div class="hint">${esc(s.covers || '')}</div></td>
-    <td>${esc(SC_TYPES[s.type] || s.type)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
+    <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td class="muted" style="white-space:nowrap"><span class="dot run"></span>детализируется…</td></tr>`;
   const open = SCEN_OPEN.has(s.id);
   const row = `<tr class="sc-row${open ? ' open' : ''}${s.fresh ? ' fresh' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
     <td class="chk"><input type="checkbox" class="sc-sel" data-id="${s.id}" ${s.sel !== false ? 'checked' : ''}></td>
     <td class="num">${i + 1}</td>
     <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px">${esc(s.instructions)}</div>`}${testsHtml(s)}</td>
-    <td>${esc(SC_TYPES[s.type] || s.type)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
+    <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">
       <button class="btn small" data-act="studio" data-id="${s.id}" title="Создать тест по этому сценарию в Studio">Тест в Studio</button>
       ${REQ_ABORT ? '' : `<button class="btn small" data-act="del" data-id="${s.id}" title="Удалить сценарий">✕</button>`}</div></td></tr>`;
@@ -2376,7 +2679,8 @@ function scenRow(s, i) {
   return row + `<tr class="sc-edit" id="sc-edit-${s.id}"><td colspan="6">
     <div class="grid3">
       <div><label>Название</label><input data-f="title" data-id="${s.id}" value="${esc(s.title)}"></div>
-      <div><label>Тип</label><select data-f="type" data-id="${s.id}">${opt(SC_TYPES, s.type)}</select></div>
+      <div><label>Вид проверки</label><select data-f="type" data-id="${s.id}">${opt(scTypes(), s.type)}</select></div>
+      <div><label>Слой</label><select data-f="layer" data-id="${s.id}">${opt(PROJ.catalog.layers, s.layer || 'ui')}</select></div>
       <div><label>Приоритет</label><select data-f="priority" data-id="${s.id}">${opt(SC_PRIOS, s.priority)}</select></div>
     </div>
     <label>Предусловия</label><textarea data-f="preconditions" data-id="${s.id}" rows="2">${esc(s.preconditions)}</textarea>
@@ -2461,7 +2765,7 @@ $('#anList').addEventListener('input', e => {
   if (!el.dataset.f) return;
   sc[el.dataset.f] = el.value;
   if (el.dataset.f === 'title') $(`#sc-row-${sc.id} .sc-title`).textContent = el.value || 'Без названия';
-  if (el.dataset.f === 'type') $(`#sc-row-${sc.id} td:nth-child(4)`).textContent = SC_TYPES[el.value];
+  if (el.dataset.f === 'type' || el.dataset.f === 'layer') $(`#sc-row-${sc.id} td:nth-child(4)`).innerHTML = layerBadge(sc) + esc(scType(sc.type));
   if (el.dataset.f === 'priority') $(`#sc-row-${sc.id} td:nth-child(5)`).textContent = SC_PRIOS[el.value];
   const msg = $('#sc-msg-' + sc.id); if (msg) msg.textContent = 'Сохранение…';
   saveScenario(sc.id);
@@ -2516,6 +2820,8 @@ function reqEvent(ev) {
     SCEN = a.scenarios.map(x => mine.get(x.id) || {...x, sel: true});
     REQ_ABORT = null; renderAnalysis(); refreshSummary();
     reqLog(`Готово: сценариев ${SCEN.length}`);
+  } else if (ev.type === 'validation') {
+    if (AN) { AN.validation = ev.validation; renderAnalysis(); }
   } else if (ev.type === 'error') throw new Error(ev.text);
 }
 $('#reqBtn').onclick = async () => {
@@ -2531,7 +2837,8 @@ $('#reqBtn').onclick = async () => {
   let finished = false;
   try {
     const r = await fetch('/api/scenarios', {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: REQ_ABORT.signal,
-      body: JSON.stringify({project_id: PID, requirements, url: $('#reqUrl').value, stream: true})});
+      body: JSON.stringify({project_id: PID, requirements, url: $('#reqUrl').value, stream: true, ...readDesign('req'),
+                            validate_spec: $('#reqCheck').checked})});
     if (r.status === 401) { showLogin(); throw new Error('Требуется вход'); }
     if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
     const reader = r.body.getReader(), dec = new TextDecoder();
@@ -2585,8 +2892,15 @@ function toStudio(id) {
   const url = AN.url || $('#reqUrl').value;
   if (url) { $('#fUrl').value = url; delete $('#fUrl').dataset.auto; }
   $('#fName').value = sc.title;
-  $('#fScenario').value = (sc.preconditions ? `Предусловия: ${sc.preconditions}\n` : '') + sc.instructions +
-    (sc.expected_result ? '\nОжидаемый результат: ' + sc.expected_result : '');
+  $('#fScenario').value = (sc.preconditions ? `Предусловия: ${sc.preconditions}\n` : '') +
+    (sc.layer === 'api' ? 'Тест API (бэкенд): проверяй через запросы api_request — статус и поля ответа, без действий в интерфейсе.\n' : '') +
+    sc.instructions + (sc.expected_result ? '\nОжидаемый результат: ' + sc.expected_result : '');
+  // the role the preconditions name -> its project account (Проект → Тестовые данные → Роли)
+  api('GET', `/api/projects/${PID}/knowledge`).then(k => {
+    const text = `${sc.preconditions}\n${sc.instructions}`.toLowerCase();
+    const role = k.roles.find(r => r.account && r.name && text.includes(r.name.toLowerCase()));
+    if (role && [...$('#fAccount').options].some(o => o.value === role.account)) $('#fAccount').value = role.account;
+  }).catch(() => {});
   setStudioScen({analysis_id: AN.id, scenario_id: sc.id, title: sc.title});
   showTab('studio');
 }
@@ -2634,7 +2948,7 @@ $('#pipeStart').onclick = async () => {
   $('#pipeStart').disabled = true;
   try {
     const r = await api('POST', `/api/projects/${PID}/jobs`, {links, text, explore, url: $('#pipeUrl').value.trim(),
-      case_connection: caseConn, case_ids: caseConn ? $('#pipeCaseIds').value : ''});
+      case_connection: caseConn, case_ids: caseConn ? $('#pipeCaseIds').value : '', ...readDesign('pipe')});
     $('#pipeExplore').checked = false;
     $('#pipeLinks').value = $('#pipeText').value = '';
     openJob(r.id); loadPipe();
@@ -2903,6 +3217,7 @@ function showSub(sub) {
   if (sub === 'ide') loadTokens();
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
+  if (sub === 'data') loadKnowledge();
 }
 
 // members and roles
@@ -2994,7 +3309,8 @@ function loadSettings() {
   $('#mbPort').value = mb.port || 993; $('#mbUser').value = mb.user || ''; $('#mbPass').value = '';
   $('#mbPass').placeholder = PROJ.mailbox_has_password ? 'сохранён — введите новый, чтобы заменить' : '';
   loadFiles(); fillNotify();
-  $('#pMsg').textContent = $('#pcMsg').textContent = $('#procMsg').textContent = '';
+  $('#pMsg').textContent = $('#pcMsg').textContent = '';
+  $$('[data-proc-msg]').forEach(m => m.textContent = '');
   if (!canRole('owner')) $('#pMsg').textContent = `Настройки проекта меняет владелец; ваша роль — ${roleTitle(PROJ.role)}.`;
   $('#dangerBox').classList.toggle('hidden', !ME.is_admin);
   renderModel(); renderConnections(); fillProcess(); renderSkillList(); loadUsage();
@@ -3380,7 +3696,6 @@ async function testConn(cid, btn) {
 }
 
 // process
-const TYPES = {positive: 'позитивные', negative: 'негативные', edge: 'пограничные', boundary: 'граничные значения', accessibility: 'доступность', security: 'безопасность'};
 function connOptions(kind) {
   const match = c => kind === 'publish' ? [...TMS, 'custom'].includes(c.preset)
     : kind === 'atlassian' ? ['atlassian', ...TRACKERS].includes(c.preset) : c.preset === kind;
@@ -3396,10 +3711,13 @@ function fillProcess() {
   $$('.effortSel').forEach(s => s.innerHTML = `<option value="">как в проекте (${esc(L.effort || 'по умолчанию модели')})</option>` +
     ME.efforts.map(e => `<option>${e}</option>`).join(''));
   $$('[data-conn]').forEach(s => s.innerHTML = connOptions(s.dataset.conn));
+  $$('[data-options="standards"]').forEach(s => s.innerHTML = Object.entries(PROJ.catalog.standards).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join(''));
   $$('[data-list]').forEach(box => {
     const cur = getPath(PROJ.pipeline, box.dataset.list) || [];
     let opts = [];
-    if (box.dataset.kind === 'types') opts = Object.entries(TYPES);
+    if (box.dataset.kind === 'types') opts = Object.entries(PROJ.catalog.types).map(([k, v]) => [k, v.label, v.hint]);
+    if (box.dataset.kind === 'techniques') opts = Object.entries(PROJ.catalog.techniques).map(([k, v]) => [k, v.label, v.hint]);
+    if (box.dataset.kind === 'layers') opts = Object.entries(PROJ.catalog.layers);
     if (box.dataset.kind === 'browsers') opts = [['chromium', 'Chromium'], ['firefox', 'Firefox'], ['webkit', 'WebKit (Safari)']];
     if (box.dataset.kind === 'toolconns') opts = PROJ.connections.filter(c => c.preset !== 'playwright').map(c => [c.id, c.name]);
     if (box.dataset.kind === 'skills') opts = SKILLS.filter(s => [box.dataset.stage, 'any'].includes(s.stage) || cur.includes(s.name))
@@ -3443,41 +3761,73 @@ function readProcess() {
   $$('[data-csv]').forEach(el => setPath(p, el.dataset.csv, el.value.split(',').map(s => s.trim()).filter(Boolean)));
   return p;
 }
-$('#procSave').onclick = async () => {
+// the process settings live on several pages (Требования, Сценарии, Процесс): each saves all of them
+$$('[data-save-process]').forEach(btn => btn.onclick = async () => {
+  const msg = btn.parentElement.querySelector('[data-proc-msg]');
   try {
     PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: readProcess()});
-    fillProcess(); $('#procMsg').textContent = 'Сохранено';
+    fillProcess(); $$('[data-proc-msg]').forEach(m => m.textContent = ''); msg.textContent = 'Сохранено';
     $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
-  } catch (e) { $('#procMsg').textContent = e.message; }
-};
+    renderDesignChoices();
+  } catch (e) { msg.textContent = e.message; }
+});
 
 // skills
 let SKILL = null;
-const STAGE_NAMES = {scenarios: 'сценарии', authoring: 'генерация', run: 'прогон', publish: 'публикация', any: 'любой этап'};
+const STAGE_NAMES = {requirements: 'требования', scenarios: 'сценарии', authoring: 'генерация', run: 'прогон', publish: 'публикация', any: 'любой этап'};
 function renderSkillList() {
   $('#skList').innerHTML = SKILLS.map(s => `<div class="skill-item ${SKILL?.name === s.name ? 'on' : ''}" onclick="openSkill('${s.name}')">
     <b>${esc(s.name)}</b> <span class="badge">${esc(STAGE_NAMES[s.stage] || s.stage)}</span>
-    ${s.overridden ? '<span class="badge warn">изменён</span>' : s.builtin ? '<span class="badge off">встроенный</span>' : '<span class="badge ok">проекта</span>'}
+    ${!s.builtin ? '<span class="badge ok">проекта</span>' : s.use_local ? '<span class="badge warn">локальная версия</span>'
+      : s.has_local ? '<span class="badge off">встроенный · есть копия</span>' : '<span class="badge off">встроенный</span>'}
     <div class="hint">${esc(s.description)}</div></div>`).join('');
   if (!SKILL && SKILLS.length) openSkill(SKILLS[0].name);
 }
-async function openSkill(name) {
-  SKILL = await api('GET', `/api/projects/${PID}/skills/${name}`);
+// a built-in skill opens read-only; with a local copy the version shown is chosen (the copy is editable)
+async function openSkill(name, version) {
+  const info = await api('GET', `/api/projects/${PID}/skills/${name}`);
+  version = version || (info.builtin && info.has_local ? 'local' : '');
+  SKILL = version ? await api('GET', `/api/projects/${PID}/skills/${name}?version=${version}`) : info;
+  const readonly = SKILL.builtin && !SKILL.local;
   $('#skTitle').textContent = SKILL.name; $('#skName').value = SKILL.name; $('#skName').disabled = true;
-  $('#skText').value = SKILL.text; $('#skMsg').textContent = '';
-  $('#skBadges').innerHTML = SKILL.overridden ? '<span class="badge warn">изменён в проекте</span>' : SKILL.builtin ? '<span class="badge off">встроенный</span>' : '';
-  $('#skDelete').textContent = SKILL.overridden ? 'Сбросить к встроенному' : 'Удалить';
-  $('#skDelete').classList.toggle('hidden', SKILL.builtin && !SKILL.overridden);
-  $('#skDownload').href = `/api/projects/${PID}/skills/${name}?raw=1`;
+  $('#skText').value = SKILL.text; $('#skText').readOnly = readonly; $('#skMsg').textContent = '';
+  $('#skBadges').innerHTML = !SKILL.builtin ? '<span class="badge ok">скилл проекта</span>'
+    : SKILL.local ? '<span class="badge warn">локальная копия</span>' : '<span class="badge off">встроенный · только чтение</span>';
+  $('#skLocalBar').classList.toggle('hidden', !(info.builtin && info.has_local));
+  $('#skUseLocal').checked = info.use_local; $('#skVersion').value = SKILL.local ? 'local' : 'builtin';
+  $('#skRo').classList.toggle('hidden', !readonly || info.has_local);
+  $('#skClone').classList.toggle('hidden', !info.builtin || info.has_local);
+  $('#skSave').classList.toggle('hidden', readonly);
+  $('#skDelete').textContent = SKILL.builtin ? 'Удалить локальную копию' : 'Удалить';
+  $('#skDelete').classList.toggle('hidden', SKILL.builtin && !info.has_local);
+  $('#skDownload').href = `/api/projects/${PID}/skills/${name}?raw=1${version ? '&version=' + version : ''}`;
   $('#skDownload').classList.remove('hidden');
   renderSkillList();
 }
+$('#skVersion').onchange = () => openSkill(SKILL.name, $('#skVersion').value);
+$('#skUseLocal').onchange = async () => {
+  try {
+    await api('PUT', `/api/projects/${PID}/skills/${SKILL.name}/local`, {use: $('#skUseLocal').checked});
+    SKILLS = await api('GET', `/api/projects/${PID}/skills`);
+    $('#skMsg').textContent = $('#skUseLocal').checked ? 'Проект использует локальную версию' : 'Проект использует встроенную версию';
+    renderSkillList();
+  } catch (e) { $('#skMsg').textContent = e.message; $('#skUseLocal').checked = !$('#skUseLocal').checked; }
+};
+$('#skClone').onclick = async () => {
+  try {
+    await api('POST', `/api/projects/${PID}/skills/${SKILL.name}/clone`);
+    SKILLS = await api('GET', `/api/projects/${PID}/skills`);
+    await openSkill(SKILL.name, 'local'); $('#skMsg').textContent = 'Локальная копия создана и используется проектом: измените её и сохраните';
+  } catch (e) { $('#skMsg').textContent = e.message; }
+};
 function newSkill(name, text) {
   SKILL = {name: '', text: ''};
   $('#skTitle').textContent = 'Новый скилл'; $('#skName').value = name || ''; $('#skName').disabled = false;
   $('#skText').value = text || `---\nname: my-skill\ndescription: Что делает скилл и когда его применять\nstage: authoring\n---\n\n# Инструкции\n\n- …\n`;
   $('#skBadges').innerHTML = ''; $('#skDelete').classList.add('hidden'); $('#skDownload').classList.add('hidden');
-  $('#skMsg').textContent = 'stage: scenarios, authoring, run, publish или any';
+  $('#skText').readOnly = false; $('#skSave').classList.remove('hidden'); $('#skClone').classList.add('hidden');
+  $('#skLocalBar').classList.add('hidden'); $('#skRo').classList.add('hidden');
+  $('#skMsg').textContent = 'stage: requirements, scenarios, authoring, run, publish или any';
   renderSkillList();
 }
 $('#skNew').onclick = () => newSkill();
@@ -3495,17 +3845,91 @@ $('#skSave').onclick = async () => {
   try {
     await api('PUT', `/api/projects/${PID}/skills/${name}`, {text: $('#skText').value});
     SKILLS = await api('GET', `/api/projects/${PID}/skills`);
-    await openSkill(name); fillProcess(); $('#skMsg').textContent = 'Сохранено';
+    await openSkill(name, SKILLS.find(x => x.name === name)?.builtin ? 'local' : ''); fillProcess(); $('#skMsg').textContent = 'Сохранено';
   } catch (e) { $('#skMsg').textContent = e.message; }
 };
 $('#skDelete').onclick = async () => {
-  if (!SKILL?.name || !confirm(SKILL.overridden ? 'Вернуть встроенную версию скилла?' : 'Удалить скилл?')) return;
+  if (!SKILL?.name || !confirm(SKILL.builtin ? 'Удалить локальную копию? Проект будет использовать встроенную версию.' : 'Удалить скилл?')) return;
   await api('DELETE', `/api/projects/${PID}/skills/${SKILL.name}`);
   SKILLS = await api('GET', `/api/projects/${PID}/skills`);
   const keep = SKILLS.find(s => s.name === SKILL.name);
   SKILL = null;
   if (keep) openSkill(keep.name); else renderSkillList();
   fillProcess();
+};
+
+// application model and test data: entities with dependencies and lifecycles, roles -> accounts, stand data, memory
+let KN = null;
+const KN_FIELDS = {
+  entities: [['name', 'Сущность', 'Турнир'], ['description', 'Что это', ''], ['depends_on', 'Требует (через запятую)', 'Клуб (турниры разрешены)'],
+             ['lifecycle', 'Жизненный цикл', 'черновик → набор → идёт → завершён'], ['create', 'Кто и как создаёт', 'администратор клуба, раздел «Турниры»'],
+             ['rules', 'Правила', 'завершённый турнир нельзя изменить']],
+  roles: [['name', 'Роль', 'Администратор клуба'], ['description', 'Что может', ''], ['account', 'Учётная запись проекта', '']],
+  data: [['entity', 'Сущность', 'Клуб'], ['name', 'Объект', 'Теннис Про'], ['details', 'Подробности', 'турниры разрешены, 4 корта'],
+         ['state', 'Состояние', 'активен'], ['account', 'Учётная запись', '']],
+};
+async function loadKnowledge() {
+  try { KN = await api('GET', `/api/projects/${PID}/knowledge`); } catch (e) { $('#knMsg').textContent = e.message; return; }
+  renderKnowledge();
+}
+function knAccountSelect(kind, i, value) {
+  const accs = PROJ.accounts || [];
+  return `<select data-kn="${kind}" data-i="${i}" data-k="account"><option value="">—</option>${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
+}
+function renderKnowledge() {
+  $('#knSummary').value = KN.summary || '';
+  const ents = KN.entities.map(e => e.name).filter(Boolean);
+  for (const kind of ['entities', 'roles', 'data']) {
+    const box = $({entities: '#knEntities', roles: '#knRoles', data: '#knData'}[kind]);
+    box.innerHTML = KN[kind].map((item, i) => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
+      <div class="grid3">${KN_FIELDS[kind].map(([k, label, ph]) => `<div><label>${label}</label>${k === 'account' ? knAccountSelect(kind, i, item.account)
+        : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : ''} placeholder="${esc(ph)}" value="${esc(k === 'depends_on' ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
+      <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small" onclick="knDel('${kind}', ${i})">Удалить</button></div></div>`).join('')
+      || '<div class="hint">Пока пусто.</div>';
+  }
+  if (!$('#knEnts')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knEnts"></datalist>');
+  $('#knEnts').innerHTML = ents.map(n => `<option value="${esc(n)}">`).join('');
+  $('#knMemory').innerHTML = KN.memory.slice().reverse().map(m => `<div class="row" style="margin:3px 0"><span class="grow">${esc(m.text)}
+      <span class="muted" style="font-size:12px"> · ${esc(m.source || '')} ${fmtTime(m.at)}</span></span>
+      <button class="linkbtn" onclick="knDelFact('${m.id}')">удалить</button></div>`).join('') || '<div class="hint">Пока пусто.</div>';
+  $('#knMsg').textContent = KN.updated ? `Изменено ${fmtTime(KN.updated)}${KN.updated_by ? ' · ' + KN.updated_by : ''}` : '';
+}
+function readKnowledge() {
+  KN.summary = $('#knSummary').value;
+  $$('[data-kn]').forEach(el => {
+    const item = KN[el.dataset.kn][+el.dataset.i];
+    item[el.dataset.k] = el.dataset.k === 'depends_on' ? el.value.split(',').map(x => x.trim()).filter(Boolean) : el.value;
+  });
+}
+function knAdd(kind) { readKnowledge(); KN[kind].push({}); renderKnowledge(); }
+function knDel(kind, i) { readKnowledge(); KN[kind].splice(i, 1); renderKnowledge(); }
+function knAddFact() {
+  const text = $('#knFact').value.trim(); if (!text) return;
+  readKnowledge(); KN.memory.push({text, source: ME.user, at: Date.now() / 1000}); $('#knFact').value = ''; renderKnowledge();
+}
+function knDelFact(id) { readKnowledge(); KN.memory = KN.memory.filter(m => m.id !== id); renderKnowledge(); }
+$('#knSave').onclick = async () => {
+  readKnowledge();
+  try { KN = await api('PUT', `/api/projects/${PID}/knowledge`, KN); renderKnowledge(); $('#knMsg').textContent = 'Сохранено'; }
+  catch (e) { $('#knMsg').textContent = e.message; }
+};
+$('#knExtract').onclick = async () => {
+  const btn = $('#knExtract'), msg = $('#knExtractMsg');
+  let body = {requirements: $('#knReq').value.trim()};
+  if (!body.requirements) {
+    const list = await api('GET', `/api/projects/${PID}/analyses`).catch(() => []);
+    if (!list.length) { msg.textContent = 'Вставьте текст требований: анализов требований в проекте ещё нет'; return; }
+    body = {analysis_id: list[0].id};
+    msg.textContent = `Из анализа «${list[0].feature || list[0].title}»…`;
+  } else msg.textContent = 'Анализ требований…';
+  btn.disabled = true;
+  try {
+    readKnowledge();
+    await api('PUT', `/api/projects/${PID}/knowledge`, KN);       // what was typed is kept, the model only adds
+    KN = await api('POST', `/api/projects/${PID}/knowledge/extract`, body);
+    renderKnowledge(); msg.textContent = `Готово: сущностей ${KN.entities.length}, ролей ${KN.roles.length}. Проверьте и привяжите роли к учётным записям.`;
+  } catch (e) { msg.textContent = e.message; }
+  finally { btn.disabled = false; }
 };
 
 // IDE access: API tokens and client settings for the studio's MCP server

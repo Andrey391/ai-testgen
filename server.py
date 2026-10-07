@@ -25,10 +25,10 @@ from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Re
                                StreamingResponse)
 from pydantic import BaseModel
 
-from testgen import (access, analyses, audit, auth, checks, db, defects, explorer, exporters, fs, llm, mailbox, mcp_hub,
-                     mcp_server, metrics, monitoring, mutations, notify, pipeline, projects, publisher,
-                     reports, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic, trackers, vault,
-                     workqueue)
+from testgen import (access, analyses, audit, auth, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
+                     llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
+                     publisher, reports, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic, trackers,
+                     validation, vault, workqueue)
 from testgen import worker as worker_mod
 from testgen import agent as agent_mod
 from testgen.agent import StudioSession
@@ -199,6 +199,10 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/connections/{cid}/test"): "connection.test",
     ("PUT", "/api/projects/{pid}/skills/{name}"): "skill.save",
     ("DELETE", "/api/projects/{pid}/skills/{name}"): "skill.delete",
+    ("POST", "/api/projects/{pid}/skills/{name}/clone"): "skill.save",
+    ("PUT", "/api/projects/{pid}/skills/{name}/local"): "skill.save",
+    ("PUT", "/api/projects/{pid}/knowledge"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/knowledge/extract"): "knowledge.save",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
     ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
     ("POST", "/api/projects/{pid}/runs"): "suite.start",
@@ -210,6 +214,8 @@ AUDIT_ACTIONS = {
     ("DELETE", "/api/projects/{pid}/sessions/{sid}"): "studio.discard",
     ("POST", "/api/jobs/{jid}/resume"): "pipeline.resume",
     ("PUT", "/api/tests/{tid}"): "test.update",
+    ("PUT", "/api/tests/{tid}/steps"): "test.update",
+    ("POST", "/api/tests/{tid}/edit"): "studio.start",
     ("PATCH", "/api/tests/{tid}/meta"): "test.meta",
     ("DELETE", "/api/tests/{tid}"): "test.delete",
     ("POST", "/api/tests/{tid}/versions/{n}/restore"): "test.restore",
@@ -224,6 +230,8 @@ AUDIT_ACTIONS = {
     ("POST", "/api/tests/{tid}/proposals/{prop_id}/{decision}"): "heal.{decision}",
     ("POST", "/api/runs/{rid}/defect"): "defect.create",
     ("POST", "/api/runs/{rid}/baseline/{step_id}"): "baseline.accept",
+    ("POST", "/api/runs/{rid}/retry"): "run.start",
+    ("POST", "/api/suites/{sid}/retry"): "suite.start",
 }
 # Frequent and harmless: polling the Studio, the agent's steps, the pipeline's choices.
 AUDIT_SKIP = ("/api/sessions/{sid}/", "/api/jobs/{jid}/", "/api/scenarios", "/api/requirements/")
@@ -263,6 +271,8 @@ def require_admin(request: Request) -> None:
 ROLE_RULES = {
     ("POST", "/api/tests/{tid}/run"): "viewer",
     ("POST", "/api/projects/{pid}/runs"): "viewer",
+    ("POST", "/api/runs/{rid}/retry"): "viewer",
+    ("POST", "/api/suites/{sid}/retry"): "viewer",
     ("GET", "/api/tests/{tid}/credentials"): "editor",
     ("PUT", "/api/projects/{pid}"): "owner",
     ("DELETE", "/api/projects/{pid}"): "owner",
@@ -284,6 +294,8 @@ ROLE_RULES = {
     ("POST", "/api/projects/{pid}/connections/{cid}/test"): "owner",
     ("PUT", "/api/projects/{pid}/skills/{name}"): "owner",
     ("DELETE", "/api/projects/{pid}/skills/{name}"): "owner",
+    ("POST", "/api/projects/{pid}/skills/{name}/clone"): "owner",
+    ("PUT", "/api/projects/{pid}/skills/{name}/local"): "owner",
     ("GET", "/api/projects/{pid}/audit"): "owner",
 }
 
@@ -533,7 +545,16 @@ def _project_view(p: dict) -> dict:
                 "app_has_totp": bool(c.get("totp_secret")), "mailbox_has_password": bool(mailbox.password(p["id"])),
                 "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p),
                 "llm": p["llm"] | {"key_set": bool(projects.llm_key(p["id"])),
-                                   "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}}
+                                   "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))},
+                "catalog": CATALOG}
+
+
+# What can be chosen for test design (labels for the UI; the models get the descriptions).
+CATALOG = {"types": {k: {"label": v[0], "hint": v[1]} for k, v in catalog.TYPES.items()},
+           "techniques": {k: {"label": v[0], "hint": v[1]} for k, v in catalog.TECHNIQUES.items()},
+           "layers": catalog.LAYERS,
+           "standards": {k: v[0] for k, v in catalog.STANDARDS.items()},
+           "quality": {k: v[0] for k, v in catalog.QUALITY.items()}}
 
 
 def _require_model(p: dict) -> None:
@@ -1074,9 +1095,10 @@ async def list_skills(pid: str):
 
 
 @app.get("/api/projects/{pid}/skills/{name}")
-async def get_skill(pid: str, name: str, raw: bool = False):
+async def get_skill(pid: str, name: str, raw: bool = False, version: str = ""):
+    """The version the project uses; `version` builtin / local - that one."""
     project(pid)
-    s = skills.get(pid, name)
+    s = skills.get(pid, name, version if version in ("builtin", "local") else "")
     if not s:
         raise HTTPException(404, "Скилл не найден")
     if raw:
@@ -1102,6 +1124,31 @@ async def save_skill(pid: str, name: str, body: SkillBody):
 async def delete_skill(pid: str, name: str):
     project(pid)
     return {"ok": skills.delete(pid, name)}
+
+
+@app.post("/api/projects/{pid}/skills/{name}/clone")
+async def clone_skill(pid: str, name: str):
+    """A local copy of a built-in skill: the project edits and uses it instead of the original."""
+    project(pid)
+    try:
+        return skills.clone(pid, name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class LocalBody(BaseModel):
+    use: bool
+
+
+@app.put("/api/projects/{pid}/skills/{name}/local")
+async def use_local_skill(pid: str, name: str, body: LocalBody):
+    """Which version of a built-in skill the project uses: its local copy or the original."""
+    project(pid)
+    s = skills.get(pid, name)
+    if not s or not s["builtin"] or not s["has_local"]:
+        raise HTTPException(400, "У скилла нет локальной копии")
+    skills.use_local(pid, name, body.use)
+    return skills.get(pid, name)
 
 
 # ---------- Studio sessions ----------
@@ -1147,6 +1194,7 @@ def _start_session(s: StudioSession, autopilot: bool) -> None:
         workqueue.set_owner("session", s.id, INSTANCE_URL)
 
     async def boot():
+        s.starts_in_autopilot = autopilot
         await _guard(s, s.start())
         if autopilot and s.status != "error":
             s.set_autopilot(True)
@@ -1416,6 +1464,39 @@ async def update_test(tid: str, body: dict):
     body.pop("id", None)
     body.pop("project_id", None)
     return storage.update(tid, lambda t: t.update(body)) or old
+
+
+class StepsBody(BaseModel):
+    steps: list[dict]
+
+
+@app.put("/api/tests/{tid}/steps")
+async def edit_test_steps(tid: str, body: StepsBody):
+    """The steps edited by a person in the Tests tab (a new version of the test)."""
+    test_or_404(tid)
+    try:
+        return storage.edit_steps(tid, body.steps)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class EditBody(BaseModel):
+    headless: bool = True
+
+
+@app.post("/api/tests/{tid}/edit")
+async def edit_in_studio(tid: str, body: EditBody, request: Request):
+    """A Studio session that replays the saved test and waits for the person: steps are added,
+    changed or re-recorded there and saved into the same test."""
+    t = test_or_404(tid)
+    p = project(t["project_id"], "editor")
+    s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=body.headless,
+                      credentials=storage.credentials(t), base_steps=t["steps"], task=agent_mod.EDIT_TASK,
+                      account=t.get("account") or "")
+    s.test_id = tid
+    request.state.project_id = p["id"]
+    _start_session(s, autopilot=False)
+    return {"id": s.id}
 
 
 class MetaBody(BaseModel):
@@ -1689,6 +1770,19 @@ async def get_run(rid: str):
     return runs.public(run_or_404(rid))
 
 
+@app.post("/api/runs/{rid}/retry")
+async def retry_run(rid: str, request: Request):
+    """Run the test of a run from the history again, in the same browser and device."""
+    r = run_or_404(rid)
+    if r["status"] == "running":
+        raise HTTPException(409, "Прогон ещё идёт")
+    t = storage.load(r["test_id"])
+    if not t:
+        raise HTTPException(404, "Тест прогона удалён")
+    request.state.project_id = t["project_id"]
+    return {"id": _run_request(t, None, request, r.get("browser") or "", r.get("device"))["id"]}
+
+
 @app.get("/api/runs/{rid}/files/{name}")
 async def run_file(rid: str, name: str):
     f = runs.file(run_or_404(rid), name)
@@ -1865,6 +1959,24 @@ async def get_suite(sid: str):
     return suite_or_404(sid)
 
 
+@app.post("/api/suites/{sid}/retry")
+async def retry_suite(sid: str, request: Request):
+    """A new suite run of the tests that failed (or errored, or were flaky) in this one."""
+    s = suite_or_404(sid)
+    if s["status"] == "running":
+        raise HTTPException(409, "Набор ещё выполняется")
+    failed = list(dict.fromkeys(i["test_id"] for i in s["items"] if i["status"] in ("failed", "error", "flaky")))
+    if not failed:
+        raise HTTPException(400, "В этом наборе нет упавших тестов")
+    p = project(s["project_id"], "viewer")
+    tests = storage.select(p["id"], test_ids=failed, include_drafts=True)
+    if not tests:
+        raise HTTPException(400, "Упавшие тесты удалены")
+    new = suite.new(p, tests, tags=s.get("tags") or [], trigger="manual", user=request.state.user)
+    worker_mod.start_suite(p, new, tests, submit)
+    return {"id": new["id"]}
+
+
 @app.get("/api/suites/{sid}/junit")
 async def suite_junit(sid: str):
     s = suite_or_404(sid)
@@ -1964,6 +2076,24 @@ class ReqBody(BaseModel):
     requirements: str
     url: str = ""
     stream: bool = False    # NDJSON events with the intermediate results (scenarios.generate `progress`)
+    # This generation's choice (None = the project's "scenarios" settings)
+    types: list[str] | None = None
+    layers: list[str] | None = None
+    techniques: list[str] | None = None
+    validate_spec: bool | None = None   # validate the specification first (None = "requirements.validate")
+
+
+async def _learn(p: dict, requirements: str, user: str, log=None) -> None:
+    """The application model learns from analysed requirements (the "requirements.learn_model" setting)."""
+    if not p["pipeline"]["requirements"].get("learn_model"):
+        return
+    try:
+        doc = await knowledge.extract(p, requirements, user)
+        if log:
+            log(f"Модель приложения обновлена: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}")
+    except Exception as e:      # the model is a help: scenarios do not wait for it to succeed
+        if log:
+            log(f"Модель приложения не обновлена: {llm.api_error_text(e)}")
 
 
 @app.post("/api/scenarios")
@@ -1972,9 +2102,14 @@ async def gen_scenarios(body: ReqBody, request: Request):
     p = project(body.project_id, "editor")
     _require_model(p)
     a = analyses.create(p["id"], body.requirements, body.url, request.state.user)
+    cfg = scenarios.settings(p, body.types, body.layers, body.techniques)
+    check = p["pipeline"]["requirements"]["validate"] if body.validate_spec is None else body.validate_spec
+    user = request.state.user
     if not body.stream:
         try:
-            res = await call(scenarios.generate(body.requirements, body.url, project=p))
+            learn = submit(_learn(p, body.requirements, user))
+            res = await call(scenarios.generate(body.requirements, body.url, project=p, cfg=cfg))
+            await asyncio.wrap_future(learn)
         except Exception as e:
             analyses.finish(p["id"], a["id"], error=llm.api_error_text(e))
             raise HTTPException(502, llm.api_error_text(e))
@@ -1997,12 +2132,27 @@ async def gen_scenarios(body: ReqBody, request: Request):
             event = event | {"scenarios": analyses.set_batch(p["id"], a["id"], event["start"], event["scenarios"])}
         send(event)
 
+    def log(text: str) -> None:
+        send({"type": "log", "text": text})
+
     async def work():
+        learn = asyncio.create_task(_learn(p, body.requirements, user, log))
         try:
-            res = await scenarios.generate(body.requirements, body.url, project=p, progress=emit)
+            if check:
+                log("Проверка ТЗ на соответствие стандарту документации…")
+                try:
+                    report = await validation.validate(p, body.requirements)
+                    analyses.set_validation(p["id"], a["id"], report)
+                    send({"type": "validation", "validation": report})
+                    log(f"Проверка ТЗ: {report['score']}/100, замечаний {len(report['findings'])}")
+                except Exception as e:
+                    log(f"Проверка ТЗ не удалась: {llm.api_error_text(e)}")
+            res = await scenarios.generate(body.requirements, body.url, project=p, progress=emit, cfg=cfg)
+            await learn
             done = analyses.finish(p["id"], a["id"], res.model_dump())
             send({"type": "done", "analysis": analyses.view(done)})
         except asyncio.CancelledError:
+            learn.cancel()
             analyses.finish(p["id"], a["id"], error="Остановлено", status="cancelled")
             raise
         except Exception as e:
@@ -2028,6 +2178,69 @@ async def gen_scenarios(body: ReqBody, request: Request):
 
     return StreamingResponse(events(), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+class ValidateBody(BaseModel):
+    project_id: str
+    requirements: str = ""
+    analysis_id: str = ""       # validate (and keep the report with) the requirements of this analysis
+    standard: str = ""          # empty = the project's ("requirements.standard")
+
+
+@app.post("/api/requirements/validate")
+async def validate_requirements(body: ValidateBody):
+    """The specification against the documentation standard: sections, quality of requirements, questions."""
+    p = project(body.project_id, "editor")
+    _require_model(p)
+    a = analyses.get(body.analysis_id) if body.analysis_id else None
+    if body.analysis_id and (not a or a["project_id"] != p["id"]):
+        raise HTTPException(404, "Анализ не найден")
+    text = body.requirements.strip() or (a or {}).get("requirements", "")
+    if not text.strip():
+        raise HTTPException(400, "Нет текста требований")
+    try:
+        report = await call(validation.validate(p, text, body.standard))
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    if a:
+        analyses.set_validation(p["id"], a["id"], report)
+    return report
+
+
+# ---------- The application model: entities, dependencies, lifecycles, test data, memory ----------
+
+@app.get("/api/projects/{pid}/knowledge")
+async def get_knowledge(pid: str):
+    project(pid)
+    return knowledge.get(pid)
+
+
+@app.put("/api/projects/{pid}/knowledge")
+async def save_knowledge(pid: str, body: dict, request: Request):
+    project(pid, "editor")
+    return knowledge.save(pid, body, request.state.user)
+
+
+class ExtractBody(BaseModel):
+    requirements: str = ""
+    analysis_id: str = ""
+
+
+@app.post("/api/projects/{pid}/knowledge/extract")
+async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
+    """Entities, dependencies, lifecycles and roles from requirements join the model."""
+    p = project(pid, "editor")
+    _require_model(p)
+    a = analyses.get(body.analysis_id) if body.analysis_id else None
+    if body.analysis_id and (not a or a["project_id"] != pid):
+        raise HTTPException(404, "Анализ не найден")
+    text = body.requirements.strip() or (a or {}).get("requirements", "")
+    if not text.strip():
+        raise HTTPException(400, "Нет текста требований")
+    try:
+        return await call(knowledge.extract(p, text, request.state.user))
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
 
 
 @app.get("/api/projects/{pid}/analyses")
@@ -2139,6 +2352,9 @@ class JobBody(BaseModel):
     feature: str = ""
     analysis_id: str = ""               # or scenarios of a requirements analysis (all, or `scenario_ids`)
     scenario_ids: list[str] = []
+    types: list[str] | None = None      # this run's kinds of checks, layers, techniques (None = the project's)
+    layers: list[str] | None = None
+    techniques: list[str] | None = None
 
 
 @app.post("/api/projects/{pid}/jobs")
@@ -2172,7 +2388,9 @@ async def start_job(pid: str, body: JobBody, request: Request):
         raise HTTPException(400, "Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта")
     _require_model(p)
     job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore,
-                       cases=cases, scenarios=ready, feature=feature)
+                       cases=cases, scenarios=ready, feature=feature,
+                       design={k: v for k, v in (("types", body.types), ("layers", body.layers),
+                                                 ("techniques", body.techniques)) if v is not None})
     pipeline.JOBS[job.id] = job
     job.save()
     if INSTANCE_URL:
