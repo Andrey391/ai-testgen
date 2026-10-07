@@ -285,6 +285,43 @@ def test_autopilot_batches_form_actions_and_records_api_checks(stand, project, f
     assert PASSWORD not in json.dumps(t, ensure_ascii=False)
 
 
+def test_a_long_authoring_conversation_starts_over_on_a_clean_context(stand, project, fake_llm, monkeypatch):
+    """Past FRESH_TURNS (or FRESH_INPUT_TOKENS) the next request is short: the scenario, the steps
+    recorded so far and the result of the last action - not the whole conversation."""
+    from test_agent_invariants import _run
+    monkeypatch.setattr(agent, "FRESH_TURNS", 2)
+    turns = []
+
+    def script(kind, kw):
+        turns.append(kw)
+        page = latest_page(kw)
+        if len(turns) == 1:
+            return tool("fill", ref=ref_for(page, "Логин"), text="{{username}}", press_enter=False,
+                        description="Ввести логин")
+        if len(turns) == 2:
+            return tool("fill", ref=ref_for(page, "Пароль"), text="{{password}}", press_enter=False,
+                        description="Ввести пароль")
+        if len(turns) == 3:
+            return tool("click", ref=ref_for(page, "Войти"), description="Войти")
+        return tool("finish", status="blocked", summary="хватит", evidence="")
+
+    fake_llm.script = script
+    s = StudioSession(project, "Длинный", f"{stand.url}/login.html", "Войти",
+                      credentials={"username": USERNAME, "password": PASSWORD})
+    s.starts_in_autopilot = True
+    arun(_run(s, s.to_test))
+    assert s.status == "done", s.chat
+    assert len(turns[1]["messages"]) == 3                       # the conversation grows...
+    fresh = turns[2]["messages"]
+    assert len(fresh) == 1 and fresh[0]["role"] == "user"       # ...then starts over with one request
+    body = json.dumps(fresh, ensure_ascii=False)
+    assert agent.FRESH_TASK in body and "Ввести логин" in body and "Ввести пароль" in body
+    assert "Result of your last call" in body and '"tool_result"' not in body
+    assert len(turns[3]["messages"]) == 3                       # and grows again from there
+    assert PASSWORD not in body
+    assert any("чистого контекста" in m["text"] for m in s.chat)
+
+
 def test_edit_in_studio_replays_and_waits_for_the_person(stand, project, save_test, fake_llm):
     t = save_test("Список", [new_step("navigate", "Открыть", f"{stand.url}/list.html"),
                              new_step("assert_text_present", "Список открыт", "Хлеб")])

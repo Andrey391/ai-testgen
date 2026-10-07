@@ -11,6 +11,9 @@ Features (llm.Model.features) a model may lack - the studio then does the same o
 from __future__ import annotations
 
 import anthropic
+import pydantic
+from anthropic.lib._parse._response import parse_beta_response
+from anthropic.types.beta import BetaMessage
 
 from .base import ProviderError, Reply, Request, fill_empty, trim_history, usage_dict
 
@@ -162,6 +165,19 @@ class AnthropicProvider:
         return "structured" in self.features
 
     async def parse(self, req: Request, schema) -> Reply:
-        """Server-side structured output; the caller falls back to the prompt when it is off."""
-        return await self._send(req, lambda p, betas: self.client().beta.messages.parse(
-            **p, output_format=schema, **({"betas": betas} if betas else {})))
+        """Server-side structured output; the caller falls back to the prompt when it is off.
+        The SDK validates the answer itself and raises on one cut off by max_tokens, losing the
+        stop reason and the usage: the raw response is read and validated here instead."""
+        async def call(p, betas):
+            kw = {**p, "output_format": schema, **({"betas": betas} if betas else {})}
+            api = self.client().beta.messages
+            raw_api = getattr(api, "with_raw_response", None)
+            if raw_api is None:
+                return await api.parse(**kw)
+            raw = await raw_api.parse(**kw)
+            msg = BetaMessage.model_validate(raw.http_response.json())
+            try:
+                return parse_beta_response(response=msg, output_format=schema)
+            except pydantic.ValidationError:
+                return msg          # no parsed_output: the caller sees the stop reason and the text
+        return await self._send(req, call)

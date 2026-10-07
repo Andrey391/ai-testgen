@@ -11,7 +11,7 @@ from fakes import Resp
 from testgen import auth, projects, scenarios
 from testgen.scenarios import PlannedScenario, Scenario, ScenarioBatch, ScenarioPlan
 
-N = 8   # two batches of scenarios.BATCH = 6
+N = 8   # several batches of scenarios.BATCH
 
 
 def _script(kind, kw):
@@ -47,7 +47,7 @@ def test_generation_streams_plan_batches_and_log(monkeypatch, fake_llm):
     assert plan["feature"] == "Вход" and len(plan["scenarios"]) == N
     assert kinds.index("plan") < kinds.index("batch")          # titles come before the details
     batches = [e for e in events if e["type"] == "batch"]
-    assert sorted(e["start"] for e in batches) == [0, scenarios.BATCH]
+    assert sorted(e["start"] for e in batches) == list(range(0, N, scenarios.BATCH))
     assert sum(len(e["scenarios"]) for e in batches) == N
     assert any("Готовы сценарии" in e["text"] for e in events if e["type"] == "log")
     final = events[-1]["analysis"]
@@ -153,3 +153,82 @@ def test_analysis_scenarios_are_edited_and_keep_their_tests(monkeypatch):
     job = pipeline.JOBS.pop(r.json()["id"])
     assert [s["title"] for s in job.given] == ["Свой"] and job.given[0]["scenario_id"] == new["id"]
     assert job.feature == "Корзина"
+
+
+def _cut(objs: list[dict], key: str = "scenarios") -> Resp:
+    """An answer cut off by the output limit: the complete objects and the start of the next one."""
+    text = json.dumps({"feature": "Вход", "assumptions": [], key: objs}, ensure_ascii=False)
+    text = text[:-2] + ', {"title": "Оборва'
+    return Resp(content=[{"type": "text", "text": text}], stop_reason="max_tokens")
+
+
+def test_a_long_plan_comes_in_short_parts_and_cut_answers_are_kept(monkeypatch, fake_llm):
+    """The plan and the details come in short requests; an answer cut off by max_tokens keeps its
+    complete scenarios and the rest is asked from where it stopped - not the same request again."""
+    from helpers import arun
+    total, asked, details = 40, [], []
+
+    def planned(i):
+        return {"title": f"Сценарий {i + 1}", "type": "positive", "layer": "ui", "priority": "high", "covers": "x"}
+
+    def script(kind, kw):
+        task = kw["messages"][-1]["content"]
+        m = re.search(r"scenarios (\d+)–(\d+)", task)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            details.append((a, b))
+            assert "Сценарий" in task and task.count("\n") == b - a + 1      # only this batch, not the plan
+            full = [{"title": "", "type": "positive", "priority": "high", "preconditions": "",
+                     "instructions": f"Шаги {i}", "expected_result": "", "gherkin": ""} for i in range(a, b + 1)]
+            return _cut(full[:1]) if len(full) > 2 else Resp(parsed=ScenarioBatch.model_validate({"scenarios": full}))
+        page = int(re.search(r"at most (\d+)", task).group(1))
+        done = len(re.findall(r"^\d+\. ", task, re.M))
+        asked.append((page, done))
+        part = [planned(i) for i in range(done, min(done + page, total))]
+        if page > 5:
+            return _cut(part[:4])
+        return Resp(parsed=ScenarioPlan.model_validate({"feature": "Вход", "assumptions": [], "scenarios": part,
+                                                        "more": done + len(part) < total}))
+    fake_llm.script = script
+    p = projects.create("Части " + uuid.uuid4().hex[:6])
+    projects.update_llm(p["id"], {"model": "test-model", "effort": "medium"})
+    logs = []
+    result = arun(scenarios.generate("Вход", project=projects.get(p["id"]), log=logs.append))
+    # The first answer was cut after 4 scenarios: they are kept and the plan goes on from the 5th.
+    assert asked[:3] == [(15, 0), (7, 4), (3, 8)]
+    assert [s.title for s in result.scenarios] == [f"Сценарий {i + 1}" for i in range(total)]
+    assert [s.instructions for s in result.scenarios] == [f"Шаги {i + 1}" for i in range(total)]
+    # A cut batch of 3 keeps the complete one and asks for the other 2 from the 2nd one on.
+    assert (1, 3) in details and (2, 3) in details
+    assert any("оборвался" in line for line in logs)
+
+
+def test_salvage_keeps_complete_scenarios_of_a_cut_answer():
+    text = '{"feature":"Вход","assumptions":["a"],"scenarios":[{"title":"A","type":"positive","priority":"high",' \
+           '"covers":"x"} , {"title":"B","type":"negative","priority":"low","covers":"y"},{"title":"\u043e'
+    got = scenarios._salvage(text, PlannedScenario)
+    assert [s.title for s in got] == ["A", "B"]
+    assert scenarios._field(text, "feature", "") == "Вход" and scenarios._field(text, "assumptions", []) == ["a"]
+    assert scenarios._salvage('{"feature":"Вх', PlannedScenario) == []
+
+
+def test_a_cut_off_structured_answer_reports_max_tokens():
+    """The SDK raises on a structured answer cut off by max_tokens; the provider reports the stop reason."""
+    import anthropic
+    import httpx2
+    from helpers import arun
+    from testgen.providers.anthropic import AnthropicProvider
+    from testgen.providers.base import Request
+
+    def handler(request):
+        return httpx2.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model",
+            "content": [{"type": "text", "text": '{"feature":"table-tennis","assumptions":["\u043e\u0446'}],
+            "stop_reason": "max_tokens", "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 16000}})
+    client = anthropic.AsyncAnthropic(api_key="x",
+                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+    reply = arun(AnthropicProvider(client, {"structured"}).parse(
+        Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}]), ScenarioPlan))
+    assert reply.stop == "max_tokens" and reply.parsed is None and reply.usage["output_tokens"] == 16000
+    assert reply.text.startswith('{"feature"')
