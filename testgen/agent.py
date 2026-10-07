@@ -44,6 +44,10 @@ from .steps import AUXILIARY_ASSERTIONS, new_step
 MAX_HELPER_CALLS = 12   # connection tool calls in a row before the agent must act
 MAX_REPAIRS = 2         # invalid answers in a row before the agent stops and waits for a person
 KEEP_STATES = 4         # page states (screenshots, snapshots) kept in the conversation
+# Short requests: a conversation that grew past this (input tokens of the last request, or turns)
+# starts over on a clean context - the scenario, the steps recorded so far and the current page.
+FRESH_INPUT_TOKENS = 40000
+FRESH_TURNS = 30
 # Auto-Pilot: several actions of one answer run back to back without asking the model in between,
 # while the page stays the same - the fields of a form are filled in one turn instead of one turn each.
 # After an action that may change the page (a click, a navigation) the rest of the batch is skipped.
@@ -302,6 +306,8 @@ def project_files(pid: str) -> list[str]:
 
 RESUME_TASK = ("The authoring session was interrupted (the studio restarted) and is being continued. Do not repeat "
                "the steps above: continue the test scenario from the current page.")
+FRESH_TASK = ("To keep the requests short, the conversation was started over: the steps above are already done in "
+              "the browser and recorded. Do not repeat them: continue the test scenario from the current page.")
 EDIT_TASK = ("A person opened this saved test to edit it: the steps above are already recorded in the test and have "
              "been replayed. Do only what the person asks in the chat (add, change or re-record steps from the current "
              "page); do not repeat the steps above and do not go on with the scenario on your own.")
@@ -457,6 +463,7 @@ class StudioSession:
         self.steps: list[dict] = []
         self.chat: list[dict] = []          # what the UI shows
         self.messages: list[dict] = []      # LLM conversation history
+        self.turns, self.last_input = 0, 0  # its length: past FRESH_* it starts over (_start_over)
         self.pending: dict | None = None    # proposed tool call awaiting approval
         self.unanswered: list[dict] = []    # tool_results not yet sent back
         self.notes: list[str] = []          # manual actions to tell the LLM about
@@ -677,17 +684,41 @@ class StudioSession:
             await self._think([{"type": "text", "text": self._lead() + "Continue the scenario. Current page state:"}]
                               + await self._page_state())
 
-    def _lead(self) -> str:
+    def _lead(self, task: str = RESUME_TASK) -> str:
         """The context of a conversation that has not started yet (a restored session whose replay
-        stopped): the scenario and the steps recorded so far."""
+        stopped, or one started over to keep requests short): the scenario and the steps recorded so far."""
         if self.messages:
             return ""
         done = "\n".join(f"{i + 1}. [{s['action']}] {s['description']}"
                          + (f" | value: {s['value']}" if s.get("value") else "")
+                         + (f" | FAILED: {s['error']}" if s.get("status") == "failed" else "")
                          for i, s in enumerate(recorded_steps(self.steps)))
-        return (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
+        extra = (f"Your task in this session: {self.task}\n\n"
+                 if self.task and self.task not in (EDIT_TASK, RESUME_TASK) else "")
+        return (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n{extra}"
                 f"{self._credentials_note()}{self._context_note()}The test steps recorded so far:\n{done}\n\n"
-                f"{self.task if self.task == EDIT_TASK else RESUME_TASK}\n\n")
+                f"{self.task if self.task == EDIT_TASK else task}\n\n")
+
+    def _fresh_due(self) -> bool:
+        return bool(self.messages) and (self.last_input >= FRESH_INPUT_TOKENS or self.turns >= FRESH_TURNS)
+
+    def _start_over(self, content: list[dict]) -> list[dict]:
+        """A clean conversation instead of the grown one: the lead (scenario, recorded steps) and the
+        results of the last answer's calls as plain text - their tool calls are not in it any more."""
+        self.messages, self.turns, self.last_input = [], 0, 0
+        out = [{"type": "text", "text": self._lead(FRESH_TASK)}]
+        for b in content:
+            if b.get("type") != "tool_result":
+                out.append(b)
+                continue
+            head = "Result of your last call" + (" (error)" if b.get("is_error") else "") + ": "
+            body = b.get("content")
+            if isinstance(body, str):
+                out.append({"type": "text", "text": head + body})
+            else:
+                out.append({"type": "text", "text": head})
+                out += body or []
+        return out
 
     async def reject(self, feedback: str) -> None:
         async with self.lock:
@@ -1059,6 +1090,10 @@ class StudioSession:
             content = (self.unanswered + [{"type": "text", "text": n} for n in self.notes]
                        + (extra or []))
             self.unanswered, self.notes, extra = [], [], None
+            if content and self._fresh_due() and self.messages[-1]["role"] == "assistant":
+                content = self._start_over(content)
+                self._say("system", "Контекст агента вырос — следующий запрос идёт с чистого контекста: сценарий, "
+                                    "записанные шаги и текущая страница.")
             if content:
                 self.messages.append({"role": "user", "content": content})
             if not self.messages or self.messages[-1]["role"] != "user":
@@ -1098,6 +1133,10 @@ class StudioSession:
                 self.timing["turns"] += 1
 
             self.messages.append({"role": "assistant", "content": reply.content})
+            u = reply.usage or {}
+            self.turns += 1
+            self.last_input = (u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+                               + u.get("cache_read_input_tokens", 0))
             if reply.stop == "refusal":
                 self.status = "error"
                 self._say("system", "ИИ отклонил этот запрос.")
