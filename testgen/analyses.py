@@ -13,9 +13,9 @@ import time
 import uuid
 
 from . import fs, projects
+from .catalog import LAYERS, TYPES
 
-FIELDS = ("title", "type", "priority", "preconditions", "instructions", "expected_result", "gherkin")
-TYPES = ("positive", "negative", "edge", "boundary", "accessibility", "security")
+FIELDS = ("title", "type", "layer", "priority", "preconditions", "instructions", "expected_result", "gherkin")
 PRIORITIES = ("high", "medium", "low")
 STALE = 3600     # a "running" analysis older than this was cut off (the studio restarted)
 
@@ -83,8 +83,14 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
 
 # ---------- the generation fills it in (scenarios.generate progress events) ----------
 
+def _fields(data: dict) -> dict:
+    out = {k: str(data.get(k) or "") for k in FIELDS}
+    out["layer"] = out["layer"] if out["layer"] in LAYERS else "ui"
+    return out
+
+
 def _new_scenario(data: dict) -> dict:
-    return {k: str(data.get(k) or "") for k in FIELDS} | {"id": _id(), "test_ids": []}
+    return _fields(data) | {"id": _id(), "test_ids": []}
 
 
 def set_plan(pid: str, aid: str, feature: str, assumptions: list[str], planned: list[dict]) -> list[dict]:
@@ -104,8 +110,7 @@ def set_batch(pid: str, aid: str, start: int, detailed: list[dict]) -> list[dict
             i = start + k
             if i < len(a["scenarios"]) and a["scenarios"][i].get("pending"):
                 old = a["scenarios"][i]
-                a["scenarios"][i] = {**{f: str(d.get(f) or "") for f in FIELDS}, "id": old["id"],
-                                     "test_ids": old["test_ids"]}
+                a["scenarios"][i] = {**_fields(d), "id": old["id"], "test_ids": old["test_ids"]}
                 out.append(a["scenarios"][i])
         return out
     return _change(pid, aid, fn)
@@ -118,8 +123,7 @@ def finish(pid: str, aid: str, result: dict | None = None, error: str = "", stat
             a["feature"], a["assumptions"] = result["feature"], result["assumptions"]
             for i, s in enumerate(a["scenarios"]):
                 if s.get("pending") and i < len(result["scenarios"]):
-                    a["scenarios"][i] = {**{f: str(result["scenarios"][i].get(f) or "") for f in FIELDS},
-                                         "id": s["id"], "test_ids": s["test_ids"]}
+                    a["scenarios"][i] = {**_fields(result["scenarios"][i]), "id": s["id"], "test_ids": s["test_ids"]}
         a["scenarios"] = [s for s in a["scenarios"] if not s.get("pending")]
         a["status"] = status or ("error" if error else "done")
         a["error"], a["finished"] = error, time.time()
@@ -132,6 +136,8 @@ def clean_fields(data: dict) -> dict:
     out = {k: str(v)[:20_000] for k, v in data.items() if k in FIELDS and v is not None}
     if "type" in out and out["type"] not in TYPES:
         raise ValueError("Тип сценария: " + ", ".join(TYPES))
+    if "layer" in out and out["layer"] not in LAYERS:
+        raise ValueError("Слой сценария: ui или api")
     if "priority" in out and out["priority"] not in PRIORITIES:
         raise ValueError("Приоритет сценария: high, medium или low")
     return out
@@ -168,6 +174,12 @@ def delete_scenario(pid: str, aid: str, scid: str) -> bool:
         a["scenarios"] = [s for s in a["scenarios"] if s["id"] != scid]
         return len(a["scenarios"]) < n
     return _change(pid, aid, fn)
+
+
+def set_validation(pid: str, aid: str, result: dict) -> None:
+    """The validation of the analysis's specification against the documentation standard (validation.py)."""
+    if fs.exists(_path(pid, aid)):
+        _change(pid, aid, lambda a: a.update(validation=result))
 
 
 def delete(pid: str, aid: str) -> bool:
@@ -210,5 +222,5 @@ def view(a: dict) -> dict:
                 last = t.get("last_run") or {}
                 tests.append({"id": t["id"], "name": t["name"], "status": storage.status(t),
                               "last_run": {k: last.get(k) for k in ("status", "passed", "at")} if last else None})
-        out["scenarios"].append({k: v for k, v in s.items() if k != "added"} | {"tests": tests})
+        out["scenarios"].append({"layer": "ui"} | {k: v for k, v in s.items() if k != "added"} | {"tests": tests})
     return out

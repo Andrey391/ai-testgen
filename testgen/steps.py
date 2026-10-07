@@ -9,8 +9,11 @@ Values of some actions are JSON:
                     arms the handler for the NEXT dialog (alert/confirm/prompt), so it goes before
                     the step that opens the dialog
     assert_download {"name": "report*.csv", "min_bytes": 1}   the file downloaded by the previous step
-    api_request     {"method", "url", "headers", "body", "save": {"var": "$.path"}, "expect_status"}
-                    only in a test's "before" / "after" blocks, written by a person (see run_api)
+    api_request     {"method", "url", "headers", "body", "save": {"var": "$.path"}, "expect_status",
+                     "expect": {"$.path": "value"}}
+                    a test's "before" / "after" blocks (written by a person) and the steps of an API
+                    (backend) test, which the agent writes with its api_request tool; only to the
+                    application under test, DELETE only in "after" (see run_api)
     read_email      {"to", "subject", "pattern", "save": "var", "timeout"}  a code from a test mailbox
     use_module      {"module": "<test id>", "params": {"name": "value"}}   another test as one step
     mock_route      {"url", "method", "status", "content_type", "body"}
@@ -26,7 +29,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.async_api import expect
 
 from . import checks
-from .browser import BrowserSession
+from .browser import QUIET_ACTIONS, BrowserSession
 
 # Actions that target an element (need a locator).
 ELEMENT_ACTIONS = {"click", "double_click", "fill", "select_option", "hover", "upload_file", "drag_to",
@@ -42,7 +45,7 @@ ALL_ACTIONS = ELEMENT_ACTIONS | OPTIONAL_ELEMENT | {
 ASSERTIONS = {a for a in ALL_ACTIONS if a.startswith("assert_")}
 # Checks that look at the page as a whole rather than at the scenario's result.
 AUXILIARY_ASSERTIONS = {"assert_no_console_errors", "assert_accessible", "assert_screenshot"}
-# Only in the before / after blocks of a test (a person writes them, the agent never does).
+# The only action of the before / after blocks of a test.
 DATA_ACTIONS = {"api_request"}
 TIMEOUT = 7000
 MAX_MODULE_DEPTH = 3
@@ -172,6 +175,8 @@ async def perform(bs: BrowserSession, step: dict, loc=None) -> dict | None:
     else:
         raise ValueError(f"Unknown action {a}")
     await bs.settle()
+    if a in QUIET_ACTIONS and not step.get("press_enter"):
+        bs.settled_quietly()
     if bs.dialog_error:
         error, bs.dialog_error = bs.dialog_error, ""
         raise AssertionError(error)
@@ -260,12 +265,29 @@ async def run_api(bs: BrowserSession, step: dict, phase: str = "before") -> dict
     safe_url = bs.mask(url)
     if not ok:
         raise AssertionError(f"{method} {safe_url} ответил {resp.status}" + (f", ожидался {want}" if want else ""))
+    try:
+        text = await resp.text()
+    except Exception:
+        text = ""
+    # What the authoring agent sees of the response (secrets masked): to write checks of its fields.
+    bs.last_response = {"status": resp.status, "body": bs.mask(text[:3000])}
     saved = []
-    if s.get("save"):
+    data = None
+    if s.get("save") or s.get("expect"):
         try:
-            data = await resp.json()
-        except Exception:
-            raise AssertionError(f"{method} {safe_url}: ответ не JSON, сохранить переменные нельзя")
+            data = json.loads(text)
+        except ValueError:
+            raise AssertionError(f"{method} {safe_url}: ответ не JSON, проверить поля и сохранить переменные нельзя")
+    for path, want in (s.get("expect") or {}).items():
+        try:
+            got = json_path(data, path)
+        except (KeyError, IndexError, TypeError):
+            raise AssertionError(f"{method} {safe_url}: в ответе нет {path}")
+        got_text = got if isinstance(got, str) else json.dumps(got, ensure_ascii=False)
+        if got_text != bs.expand(str(want)):
+            raise AssertionError(f"{method} {safe_url}: {path} = {bs.mask(got_text)[:200]}, ожидалось "
+                                 f"{bs.mask(bs.expand(str(want)))[:200]}")
+    if s.get("save"):
         for name, path in s["save"].items():
             try:
                 bs.vars[name] = json_path(data, path)

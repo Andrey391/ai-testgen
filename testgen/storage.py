@@ -23,7 +23,7 @@ import re
 import time
 import uuid
 
-from . import analyses, fs, projects, runs, tasks, traffic, vault
+from . import analyses, fs, projects, runs, tasks, testdata, traffic, vault
 from .repo import tests as repo
 
 TAG = re.compile(r"[\w.-]{1,40}")
@@ -113,6 +113,71 @@ def restore(test_id: str, n: int) -> dict | None:
         if not v:
             raise KeyError(n)
         t.update({k: v.get(k) for k in VERSIONED if k in v})
+    return update(test_id, change)
+
+
+LOCATOR_KINDS = ("testid", "role", "label", "placeholder", "text", "css")
+MAX_STEPS = 500
+
+
+def parse_locator(text: str) -> list[dict]:
+    """Locator candidates typed by a person, one per line: `role=button[name="Войти"]`,
+    `testid=login`, `label=Email`, `placeholder=…`, `text=…`, `css=#id` (a bare line is CSS)."""
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.fullmatch(r'role=([\w-]+)\[name="(.*)"\]', line)
+        if m:
+            out.append({"kind": "role", "role": m.group(1), "name": m.group(2)})
+            continue
+        kind, sep, value = line.partition("=")
+        if sep and kind in LOCATOR_KINDS and value.strip():
+            out.append({"kind": kind, "value": value.strip()})
+        else:
+            out.append({"kind": "css", "value": line})
+    return out
+
+
+def edit_steps(test_id: str, given: list[dict]) -> dict | None:
+    """Steps edited by a person in the Tests tab: descriptions, values, locators, order, new and
+    removed steps. What the edit does not show (alternatives of a locator, drop targets, masks...)
+    stays with the step by its id. A secret typed as a value becomes its placeholder."""
+    from .steps import ALL_ACTIONS, needs_element, new_step
+    if not isinstance(given, list) or len(given) > MAX_STEPS:
+        raise ValueError(f"Шагов должно быть не больше {MAX_STEPS}")
+
+    def change(t: dict) -> None:
+        old = {s["id"]: s for s in t.get("steps") or []}
+        secrets = testdata.secret_pairs(credentials(t))
+        steps = []
+        for n, g in enumerate(given, 1):
+            if not isinstance(g, dict):
+                raise ValueError(f"Шаг {n}: неверный формат")
+            action = str(g.get("action") or "")
+            if action not in ALL_ACTIONS:
+                raise ValueError(f"Шаг {n}: неизвестное действие «{action}»")
+            prev = old.get(str(g.get("id") or ""))
+            step = copy.deepcopy(prev) if prev else new_step(action, "", source="manual")
+            value = str(g.get("value") or "")
+            for secret, placeholder in secrets:
+                value = value.replace(secret, placeholder)
+            step.update(action=action, value=value, press_enter=bool(g.get("press_enter")),
+                        description=str(g.get("description") or "").strip()[:500] or action, error="")
+            if step.get("status") in ("failed", "pending"):
+                step["status"] = "passed"
+            if "locator_text" in g:
+                step["locator"] = parse_locator(str(g["locator_text"]))
+            if needs_element(step) and not step.get("locator"):
+                raise ValueError(f"Шаг {n} «{step['description']}»: укажите локатор элемента")
+            steps.append(step)
+        before = [(s["id"], s.get("value"), s.get("locator")) for s in t.get("steps") or []]
+        t["steps"] = steps
+        ids = {s["id"] for s in steps}
+        t["heal_proposals"] = [p for p in t.get("heal_proposals") or [] if p["step_id"] in ids]
+        if before != [(s["id"], s.get("value"), s.get("locator")) for s in steps]:
+            t.pop("verify", None)      # the mutation result was about other steps
     return update(test_id, change)
 
 

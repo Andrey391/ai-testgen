@@ -24,7 +24,7 @@ def test_normalize_pipeline_merges_defaults_and_drops_unknown():
     assert p["run"]["parallel"] == 8                  # clamped
     assert p["verify"]["enabled"] is True and p["verify"]["mutants"] == 10
     assert p["explore"]["max_pages"] == 100 and p["explore"]["max_depth"] == 1
-    assert p["authoring"]["skills"] == ["ui-test-authoring"]   # untouched stage keeps defaults
+    assert p["authoring"]["skills"] == projects.DEFAULT_PIPELINE["authoring"]["skills"]   # untouched stage: defaults
 
 
 def test_normalize_pipeline_defaults_are_complete():
