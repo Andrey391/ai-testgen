@@ -1356,7 +1356,7 @@ const api = async (method, url, body) => {
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const store = {get: k => { try { return localStorage.getItem(k) } catch { return null } },
                set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }};
-const fmtTime = t => t ? new Date(t * 1000).toLocaleString() : '';
+const fmtTime = t => t ? new Date(t * 1000).toLocaleString('ru-RU') : '';
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 
 // ---- screenshots open over the page and close with × in the top right corner, Esc or a click beside
@@ -1793,7 +1793,7 @@ function renderChanges() {
   const c = C.counts;
   $('#changesBox').innerHTML = `<div class="head"><b style="color:var(--ink)">Изменения</b>
       <span>добавлено ${c.add} · изменено ${c.edit} · удалено ${c.del}</span></div>` +
-    (C.list.map(x => `<div class="ch ${x.kind}${x.at > fresh ? ' fresh' : ''}"><span class="t">${new Date(x.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</span>
+    (C.list.map(x => `<div class="ch ${x.kind}${x.at > fresh ? ' fresh' : ''}"><span class="t">${new Date(x.at).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}</span>
       <span class="i">${icon[x.kind] || '•'}</span><span>${esc(x.text)}</span></div>`).join('')
       || '<div class="muted">Пока изменений нет: здесь появятся добавленные, выполненные и изменённые шаги.</div>');
 }
@@ -2623,7 +2623,7 @@ async function loadTasks() {
       <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select></td>
       <td><span class="badge ${cls}">${esc(pr)}</span></td>
       <td>${esc(t.assignee) || '<span class="muted">—</span>'}</td>
-      <td class="${t.overdue ? 'overdue' : ''}" title="${t.overdue ? 'Срок прошёл' : ''}">${t.due ? new Date(t.due + 'T00:00').toLocaleDateString() : '—'}</td>
+      <td class="${t.overdue ? 'overdue' : ''}" title="${t.overdue ? 'Срок прошёл' : ''}">${t.due ? new Date(t.due + 'T00:00').toLocaleDateString('ru-RU') : '—'}</td>
       <td class="row"><button class="btn small" onclick="taskToStudio('${t.id}')" title="Создать тест в Studio по описанию задачи">Тест в Studio</button>
         <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
           <button onclick="openTask('${t.id}')">Изменить</button>
@@ -2783,7 +2783,7 @@ const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready
 const isReady = s => !s.pending;
 // Lines wrap in full; the box scrolls once they do not fit and follows the newest unless scrolled up.
 function reqLog(text) {
-  const box = $('#reqLog'), t = new Date().toLocaleTimeString();
+  const box = $('#reqLog'), t = new Date().toLocaleTimeString('ru-RU');
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
   String(text).split('\n').filter(Boolean).forEach(line => {
     const d = document.createElement('div');
@@ -2906,7 +2906,7 @@ function validationHtml(v) {
     <div class="bar"><span style="width:${v.score}%;background:${color}"></span></div>
     <div style="margin-top:6px">${esc(v.summary)}</div>
     <details class="opt" open><summary>Разделы по стандарту (${v.sections.filter(x => x.status === 'present').length} из ${v.sections.length})</summary>
-      <table><tbody>${v.sections.map(x => `<tr><td>${esc(x.section)}</td><td><span class="badge ${SECTION[x.status]?.[1] || ''}">${esc(SECTION[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.comment)}</td></tr>`).join('')}</tbody></table></details>
+      <table data-nopage><tbody>${v.sections.map(x => `<tr><td>${esc(x.section)}</td><td><span class="badge ${SECTION[x.status]?.[1] || ''}">${esc(SECTION[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.comment)}</td></tr>`).join('')}</tbody></table></details>
     <details class="opt" open><summary>Замечания (${v.findings.length})</summary>
       ${v.findings.map(f => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
         <div><span class="badge ${SEVERITY[f.severity]?.[1] || ''}">${esc(SEVERITY[f.severity]?.[0] || f.severity)}</span>
@@ -3364,7 +3364,7 @@ function renderJob() {
     (j.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>` : '');
   if (about) html += `<details class="opt" data-g="about" ${opened.has('about') ? 'open' : ''}><summary>Требования и допущения</summary>${about}</details>`;
   html += `<details class="opt" data-g="log" ${opened.has('log') ? 'open' : ''}><summary>Журнал (${j.log.length})</summary><div class="log">` +
-    j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString()} — ${esc(l.text)}</div>`).join('') + '</div></details>';
+    j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString('ru-RU')} — ${esc(l.text)}</div>`).join('') + '</div></details>';
   box.innerHTML = html;
 }
 function jobScenRow(s, i) {

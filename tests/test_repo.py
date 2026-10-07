@@ -160,6 +160,8 @@ def test_run_history_is_rows(database):
     a = storage.save({"project_id": pid, "name": "А", "steps": []})
     b = storage.save({"project_id": pid, "name": "Б", "steps": []})
     made = []
+    elsewhere = runs.new(a, "suite", live=False)        # going on in another worker: not in LIVE here
+    fs.write_bytes(runs.files_dir(elsewhere) / "step-1.jpg", b"\xff\xd8")
     for i in range(5):
         r = runs.new(a, "manual", live=False)
         r.update(status="passed" if i % 2 else "failed", passed=bool(i % 2), started=100 + i)
@@ -180,6 +182,7 @@ def test_run_history_is_rows(database):
     files = lambda rid: {f.name for f in fs.glob(runs.files_dir({"project_id": pid, "test_id": a["id"], "id": rid}), "*")}
     assert files(made[2]) == {"a2-heal-1.jpg", "trace.zip"}
     assert files(made[3]) == files(made[4]) == {"step-1.jpg", "a2-step-1.jpg", "s1-actual.png", "a2-heal-1.jpg", "trace.zip"}
+    assert files(elsewhere["id"]) == {"step-1.jpg"}       # a run not yet finished keeps its screenshots
     assert runs.histories(pid, [a["id"], b["id"]], limit=2) == {a["id"]: hist[-2:],
                                                                  b["id"]: runs.history(pid, b["id"])}
     assert runs.flip_rate(hist) == 1.0
