@@ -2,6 +2,7 @@
 name: zephyr-report-run
 description: Отправка результата прогона в Zephyr Scale через MCP: тестовый цикл, статус исполнения, комментарий.
 stage: publish
+group: Zephyr Scale
 ---
 
 # Результат прогона в Zephyr Scale

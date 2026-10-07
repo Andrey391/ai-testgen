@@ -1,12 +1,14 @@
 """Skills: instructions that shape a pipeline stage, in the SKILL.md format
-(YAML-ish front matter with name / description / stage, then Markdown).
+(YAML-ish front matter with name / description / stage / group, then Markdown; the group
+only sorts skills in the studio).
 
 Built-in skills ship in testgen/skills/ and are read-only. A project clones one into
 a local copy (same name, data/projects/<id>/skills/) and edits that; a checkbox decides
 which version the project uses - the local copy or the built-in one (the names whose copy
-is switched off: data/projects/<id>/skills-local.json). A project also adds skills of
-its own. A stage uses the skills listed in the project's pipeline settings; their text
-is appended to the stage's system prompt, after the rules they cannot override.
+is switched off: data/projects/<id>/skills-local.json, "off"). A project also adds skills of
+its own. A stage uses the skills listed in the project's pipeline settings (`SLOTS`); their
+text is appended to the stage's system prompt, after the rules they cannot override. A skill
+switched off in the project ("disabled" in the same file) is used by no stage but stays listed.
 """
 from __future__ import annotations
 
@@ -19,10 +21,14 @@ BUILTIN = Path(__file__).resolve().parent / "skills"
 STAGES = ("requirements", "scenarios", "authoring", "run", "publish", "any")
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 MAX_SIZE = 50_000
+MAX_GROUP = 60
+# Pipeline settings that list skills -> the stage they belong to.
+SLOTS = {"requirements.skills": "requirements", "scenarios.skills": "scenarios", "authoring.skills": "authoring",
+         "run.skills": "run", "publish.skills": "publish", "publish.run_skills": "publish"}
 
 
 def parse(text: str) -> dict:
-    """SKILL.md text -> {name, description, stage, body}."""
+    """SKILL.md text -> {name, description, stage, group, body}."""
     meta, body = {}, text
     m = re.match(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", text, re.S)
     if m:
@@ -33,12 +39,14 @@ def parse(text: str) -> dict:
                 meta[k.strip().lower()] = v.strip().strip("\"'")
     return {"name": meta.get("name", ""), "description": meta.get("description", ""),
             "stage": meta.get("stage", "any") if meta.get("stage") in STAGES else "any",
-            "body": body.strip()}
+            "group": " ".join(meta.get("group", "").split())[:MAX_GROUP], "body": body.strip()}
 
 
-def render(name: str, description: str, stage: str, body: str) -> str:
+def render(name: str, description: str, stage: str, body: str, group: str = "") -> str:
     description = " ".join(description.split())
-    return f"---\nname: {name}\ndescription: {description}\nstage: {stage}\n---\n\n{body.strip()}\n"
+    group = " ".join(group.split())[:MAX_GROUP]
+    return (f"---\nname: {name}\ndescription: {description}\nstage: {stage}\n"
+            + (f"group: {group}\n" if group else "") + f"---\n\n{body.strip()}\n")
 
 
 def _project_dir(pid: str) -> Path:
@@ -49,16 +57,59 @@ def _settings_path(pid: str) -> Path:
     return projects.path(pid) / "skills-local.json"
 
 
+def _names(pid: str, key: str) -> set[str]:
+    return set((fs.read_json(_settings_path(pid)) or {}).get(key) or [])
+
+
 def _local_off(pid: str) -> set[str]:
     """Built-in skills whose local copy the project keeps but does not use."""
-    return set((fs.read_json(_settings_path(pid)) or {}).get("off") or [])
+    return _names(pid, "off")
+
+
+def _disabled(pid: str) -> set[str]:
+    """Skills switched off in the project: no stage uses them."""
+    return _names(pid, "disabled")
+
+
+def _toggle(pid: str, key: str, name: str, add: bool) -> None:
+    with fs.lock(_settings_path(pid)):
+        data = fs.read_json(_settings_path(pid)) or {}
+        names = set(data.get(key) or [])
+        data[key] = sorted(names | {name} if add else names - {name})
+        fs.write_json(_settings_path(pid), data)
 
 
 def use_local(pid: str, name: str, on: bool) -> None:
-    with fs.lock(_settings_path(pid)):
-        off = _local_off(pid)
-        off = off - {name} if on else off | {name}
-        fs.write_json(_settings_path(pid), {"off": sorted(off)})
+    _toggle(pid, "off", name, not on)
+
+
+def set_enabled(pid: str, name: str, on: bool) -> None:
+    _toggle(pid, "disabled", name, not on)
+
+
+def used_in(project: dict, name: str) -> list[str]:
+    """The pipeline settings (`SLOTS` keys) that list the skill."""
+    pipeline = project.get("pipeline") or {}
+    return [slot for slot in SLOTS
+            if name in ((pipeline.get(slot.split(".")[0]) or {}).get(slot.split(".")[1]) or [])]
+
+
+def attach(pid: str, name: str, slots: list[str]) -> list[str]:
+    """Make exactly these pipeline settings list the skill: the others drop it, a setting that
+    already lists it keeps its place, in a new one it goes last."""
+    if set(slots) - set(SLOTS):
+        raise ValueError("Неизвестный этап")
+    p = projects.get(pid)
+    for slot in SLOTS:
+        stage, key = slot.split(".")
+        cur = p["pipeline"][stage].get(key) or []
+        if slot not in slots:
+            cur = [n for n in cur if n != name]
+        elif name not in cur:
+            cur = cur + [name]
+        p["pipeline"][stage][key] = cur
+    projects.save(p)
+    return used_in(p, name)
 
 
 def _file(pid: str | None, name: str, version: str = "") -> Path | None:
@@ -90,6 +141,8 @@ def get(pid: str | None, name: str, version: str = "") -> dict | None:
     s["has_local"] = bool(pid) and fs.is_file(_project_dir(pid) / f"{name}.md")
     s["use_local"] = s["has_local"] and (not s["builtin"] or name not in _local_off(pid))
     s["overridden"] = s["builtin"] and s["use_local"]
+    s["enabled"] = not pid or name not in _disabled(pid)
+    s["used_in"] = used_in(projects.get(pid) or {}, name) if pid else []
     return s
 
 
@@ -121,7 +174,7 @@ def save(pid: str, name: str, text: str) -> dict:
     s = parse(text)
     if not s["body"]:
         raise ValueError("Пустой скилл")
-    text = render(name, s["description"], s["stage"], s["body"])
+    text = render(name, s["description"], s["stage"], s["body"], s["group"])
     fs.write_text(_project_dir(pid) / f"{name}.md", text)
     return get(pid, name)
 
@@ -131,13 +184,19 @@ def delete(pid: str, name: str) -> bool:
     f = _project_dir(pid) / f"{name}.md" if _NAME.fullmatch(name or "") else None
     if f and (BUILTIN / f"{name}.md").exists():
         use_local(pid, name, True)       # a later clone is used again
+    elif f and fs.is_file(f):
+        attach(pid, name, [])            # a project skill leaves the stages that listed it
+        set_enabled(pid, name, True)
     return bool(f) and fs.unlink(f)
 
 
 def prompt(pid: str, names: list[str]) -> str:
     """Text of the chosen skills for a system prompt ("" when none)."""
     parts = []
+    off = _disabled(pid)
     for n in names:
+        if n in off:
+            continue
         s = get(pid, n)
         if s and s["body"]:
             parts.append(f"## Skill: {n}\n{s['body']}")

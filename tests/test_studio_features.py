@@ -133,6 +133,40 @@ def test_builtin_skill_clone_switch_and_delete():
     assert skills.get(pid, "requirements-validation")["stage"] == "requirements"
 
 
+def test_skill_group_switch_and_stages():
+    p = _project("Группы скиллов")
+    pid = p["id"]
+    assert skills.get(pid, "test-design")["group"] == "Тест-дизайн"
+    s = skills.save(pid, "our-rules", "---\nname: our-rules\ndescription: Правила\nstage: scenarios\n"
+                                      "group:  Наши   правила \n---\n\n# Правила команды\n")
+    assert s["group"] == "Наши правила" and "group: Наши правила\n" in s["text"]
+    assert s["enabled"] and s["used_in"] == []
+
+    # attached to the requirements and scenarios stages; a stage that listed it keeps its place
+    assert skills.attach(pid, "our-rules", ["requirements.skills", "scenarios.skills"]) == [
+        "requirements.skills", "scenarios.skills"]
+    pipe = projects.get(pid)["pipeline"]
+    assert pipe["scenarios"]["skills"][-1] == "our-rules" and "our-rules" in pipe["requirements"]["skills"]
+    skills.attach(pid, "our-rules", ["scenarios.skills"])
+    assert "our-rules" not in projects.get(pid)["pipeline"]["requirements"]["skills"]
+    with pytest.raises(ValueError):
+        skills.attach(pid, "our-rules", ["run.unknown"])
+
+    # switched off: stays listed and attached, but no stage gets its text
+    skills.set_enabled(pid, "our-rules", False)
+    assert "Правила команды" not in skills.prompt(pid, ["our-rules"])
+    listed = next(x for x in skills.list_skills(pid) if x["name"] == "our-rules")
+    assert not listed["enabled"] and listed["used_in"] == ["scenarios.skills"]
+    skills.use_local(pid, "test-design", False)          # the other setting of the file is kept
+    assert not skills.get(pid, "our-rules")["enabled"]
+    skills.set_enabled(pid, "our-rules", True)
+    assert "Правила команды" in skills.prompt(pid, ["our-rules"])
+
+    # a deleted project skill leaves the stages
+    assert skills.delete(pid, "our-rules")
+    assert "our-rules" not in projects.get(pid)["pipeline"]["scenarios"]["skills"]
+
+
 # ---------- the application model ----------
 
 def test_application_model_prompt_memory_and_accounts():

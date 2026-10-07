@@ -2,6 +2,7 @@
 name: allure-publish
 description: Публикация тест-кейса в Allure TestOps через встроенный MCP-сервер: поля, сценарий, связь с ручным кейсом.
 stage: publish
+group: Allure TestOps
 ---
 
 # Публикация тест-кейса в Allure TestOps

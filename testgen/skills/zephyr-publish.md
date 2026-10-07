@@ -2,6 +2,7 @@
 name: zephyr-publish
 description: Публикация тест-кейса в Zephyr Scale через MCP: поля, шаги, папка, обновление существующего кейса.
 stage: publish
+group: Zephyr Scale
 ---
 
 # Публикация тест-кейса в Zephyr Scale

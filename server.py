@@ -201,6 +201,8 @@ AUDIT_ACTIONS = {
     ("DELETE", "/api/projects/{pid}/skills/{name}"): "skill.delete",
     ("POST", "/api/projects/{pid}/skills/{name}/clone"): "skill.save",
     ("PUT", "/api/projects/{pid}/skills/{name}/local"): "skill.save",
+    ("PUT", "/api/projects/{pid}/skills/{name}/enabled"): "skill.save",
+    ("PUT", "/api/projects/{pid}/skills/{name}/stages"): "skill.save",
     ("PUT", "/api/projects/{pid}/knowledge"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/extract"): "knowledge.save",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
@@ -296,6 +298,8 @@ ROLE_RULES = {
     ("DELETE", "/api/projects/{pid}/skills/{name}"): "owner",
     ("POST", "/api/projects/{pid}/skills/{name}/clone"): "owner",
     ("PUT", "/api/projects/{pid}/skills/{name}/local"): "owner",
+    ("PUT", "/api/projects/{pid}/skills/{name}/enabled"): "owner",
+    ("PUT", "/api/projects/{pid}/skills/{name}/stages"): "owner",
     ("GET", "/api/projects/{pid}/audit"): "owner",
 }
 
@@ -1149,6 +1153,37 @@ async def use_local_skill(pid: str, name: str, body: LocalBody):
         raise HTTPException(400, "У скилла нет локальной копии")
     skills.use_local(pid, name, body.use)
     return skills.get(pid, name)
+
+
+class EnabledBody(BaseModel):
+    on: bool
+
+
+@app.put("/api/projects/{pid}/skills/{name}/enabled")
+async def enable_skill(pid: str, name: str, body: EnabledBody):
+    """A skill switched off stays in the stage settings but no stage uses it."""
+    project(pid)
+    if not skills.get(pid, name):
+        raise HTTPException(404, "Скилл не найден")
+    skills.set_enabled(pid, name, body.on)
+    return skills.get(pid, name)
+
+
+class StagesBody(BaseModel):
+    slots: list[str]     # skills.SLOTS keys: requirements.skills, scenarios.skills, ...
+
+
+@app.put("/api/projects/{pid}/skills/{name}/stages")
+async def skill_stages(pid: str, name: str, body: StagesBody):
+    """The stages that use the skill (the skill lists of the pipeline settings)."""
+    project(pid)
+    if not skills.get(pid, name):
+        raise HTTPException(404, "Скилл не найден")
+    try:
+        skills.attach(pid, name, body.slots)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _project_view(projects.get(pid))
 
 
 # ---------- Studio sessions ----------

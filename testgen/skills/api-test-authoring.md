@@ -2,6 +2,7 @@
 name: api-test-authoring
 description: Как агент пишет API-тест (бэкенд): запросы api_request, проверки статуса и полей ответа, подготовка данных через API.
 stage: authoring
+group: Генерация тестов
 ---
 
 # API-тест
