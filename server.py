@@ -2461,7 +2461,9 @@ async def resume_job(jid: str, request: Request):
     j = pipeline.get_job(jid)
     if not j:
         raise HTTPException(404, "Запуск не найден")
-    if jid in pipeline.JOBS or j["status"] not in ("error", "cancelled"):
+    # A finished run stays in JOBS until a restart: only one still working is in the way.
+    running = pipeline.JOBS.get(jid)
+    if (running and not running.finished) or j["status"] not in ("error", "cancelled"):
         raise HTTPException(409, "Запуск ещё идёт")
     p = project(j["project_id"])
     _require_model(p)
