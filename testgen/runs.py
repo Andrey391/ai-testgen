@@ -91,13 +91,16 @@ def finish(run: dict, keep: int = 30) -> None:
 
 
 def prune_shots(run: dict) -> None:
-    """Screenshots of older runs of the test go; the records, traces and heal screenshots stay."""
+    """Screenshots of older finished runs of the test go; the records, traces and heal screenshots
+    stay. Only finished runs are looked at: a run of the same test going on in another worker keeps its own."""
     pid, tid = run["project_id"], run["test_id"]
-    keep = {x["id"] for x in history(pid, tid, SHOT_RUNS)} | {run["id"]} | set(LIVE)
+    old = {x["id"] for x in history(pid, tid, 0)[:-SHOT_RUNS]} - {run["id"]}
+    if not old:
+        return
     d = repo.test_dir(pid, tid)
     for pattern in SHOTS:
         for f in fs.glob(d, "*/" + pattern):
-            if f.parent.name not in keep and "heal-" not in f.name:
+            if f.parent.name in old and "heal-" not in f.name:
                 fs.unlink(f)
 
 
