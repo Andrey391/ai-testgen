@@ -406,6 +406,12 @@ def context_options(device: str = "", locale: str = "", timezone: str = "",
 
 
 SETTLED_FOR = 0.5       # seconds a settled page counts as settled
+NAVIGATION_GRACE = 0.3  # seconds for a navigation started by a step to begin before a snapshot
+# Steps that never start a navigation: after a click, a key or a navigation the page may only begin
+# to change once the step's own wait is over, so the snapshot waits again.
+QUIET_ACTIONS = {"fill", "select_option", "hover", "upload_file", "assert_visible", "assert_text_present",
+                 "assert_element_text", "assert_value", "assert_checked", "assert_enabled", "assert_count",
+                 "assert_url_contains", "assert_no_console_errors"}
 
 
 class BrowserSession:
@@ -445,7 +451,10 @@ class BrowserSession:
         self._errors_checked = 0            # assert_no_console_errors looks at errors after this
         self._frame_paths: dict[Frame, list[str]] = {}
         self._pending: set[asyncio.Task] = set()
-        self._settled = 0.0                 # when the page last settled: a snapshot right after a step skips it
+        # When and where the page last settled after a step that cannot start a navigation (QUIET_ACTIONS):
+        # a snapshot right after it does not wait again.
+        self._settled: tuple[float, str] = (0.0, "")
+        self._in_flight: set = set()        # XHR/fetch requests of the page not finished yet
 
     @classmethod
     async def launch(cls, headless: bool = True, browser: Browser | None = None, record_traffic: bool = False,
@@ -477,6 +486,9 @@ class BrowserSession:
         s.context.on("weberror", s._on_page_error)
         s.context.on("response", s._on_response)
         s.context.on("requestfailed", s._on_request_failed)
+        s.context.on("request", s._xhr_started)
+        s.context.on("requestfinished", s._xhr_done)
+        s.context.on("requestfailed", s._xhr_done)
         if record_traffic:
             s.traffic = []
             s.context.on("requestfinished", s._on_request_finished)
@@ -537,6 +549,34 @@ class BrowserSession:
         if response.status >= 400:
             self._event("http", f"{response.status} {response.request.method} {response.url}",
                         status=response.status, url=response.url[:300])
+
+    def _xhr_started(self, request) -> None:
+        # documents too: a navigation is a request until the new page commits
+        if request.resource_type in ("xhr", "fetch", "document"):
+            self._in_flight.add(request)
+
+    def _xhr_done(self, request) -> None:
+        self._in_flight.discard(request)
+
+    async def calm(self, rounds: int = 3) -> None:
+        """Until the page stops changing: loaded, its requests answered, the same address as before
+        (a script that redirects after a request starts the navigation only when the request ends)."""
+        for _ in range(rounds):
+            url = self.page.url
+            await self.settle()
+            await self.requests_done()
+            if self.page.url == url and not self._in_flight:
+                return
+
+    async def requests_done(self, timeout: float = 3) -> None:
+        """Wait for the page's requests in flight (a step's result that arrives by a request:
+        networkidle of a loaded document does not wait for them). A request that never ends (polling,
+        a stream) only costs `timeout`."""
+        deadline = time.monotonic() + timeout
+        while self._in_flight and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if not self._in_flight:
+            await asyncio.sleep(0.05)       # the page renders what the request brought
 
     def _on_request_failed(self, request) -> None:
         self._event("network", f"{request.method} {request.url[:300]}: {request.failure or 'failed'}",
@@ -658,12 +698,16 @@ class BrowserSession:
             await self.page.wait_for_load_state("networkidle", timeout=3000)
         except Exception:
             pass
-        self._settled = time.monotonic()
+
+    def settled_quietly(self) -> None:
+        """The step just finished was a quiet one: the page it settled is the page a snapshot sees."""
+        self._settled = (time.monotonic(), self.page.url if self.page else "")
 
     def just_settled(self) -> bool:
         """The page settled a moment ago (the end of a step): waiting again only costs time - on a page
         that polls the network, up to the whole networkidle timeout on every snapshot."""
-        return time.monotonic() - self._settled < SETTLED_FOR
+        at, url = self._settled
+        return time.monotonic() - at < SETTLED_FOR and bool(self.page) and self.page.url == url
 
     async def _frame_path(self, frame: Frame) -> list[str] | None:
         """Selectors of the iframes from the top page down to `frame` (None: cannot be addressed)."""
@@ -694,11 +738,19 @@ class BrowserSession:
         """Every frame of the page: elements with refs (unique across frames), the top page's
         text, the element under `point` (Element Picker, with coordinates of the top page) and
         under `point2` (the drop target of drag & drop)."""
+        quiet = self.just_settled()
+        if not quiet:
+            # A click or a key may start a navigation (a redirect by the page's script) only after the
+            # step's own wait: give it a moment to begin, or the snapshot shows the page it is leaving.
+            await asyncio.sleep(NAVIGATION_GRACE)
         for attempt in range(4):
-            if attempt or not self.just_settled():
-                await self.settle()
+            if attempt or not quiet:
+                await self.calm()
+            url = self.page.url
             try:
                 snap = await self._snapshot_frames(max_items, point, content_items, point2)
+                if snap["url"] != url and attempt < 3:
+                    continue        # the page navigated while it was being read: read the new one
                 break
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Страница не ответила на снимок за {EVAL_TIMEOUT} с (скрипт страницы "

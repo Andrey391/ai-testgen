@@ -29,7 +29,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.async_api import expect
 
 from . import checks
-from .browser import BrowserSession
+from .browser import QUIET_ACTIONS, BrowserSession
 
 # Actions that target an element (need a locator).
 ELEMENT_ACTIONS = {"click", "double_click", "fill", "select_option", "hover", "upload_file", "drag_to",
@@ -175,6 +175,8 @@ async def perform(bs: BrowserSession, step: dict, loc=None) -> dict | None:
     else:
         raise ValueError(f"Unknown action {a}")
     await bs.settle()
+    if a in QUIET_ACTIONS and not step.get("press_enter"):
+        bs.settled_quietly()
     if bs.dialog_error:
         error, bs.dialog_error = bs.dialog_error, ""
         raise AssertionError(error)

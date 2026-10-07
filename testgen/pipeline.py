@@ -198,9 +198,10 @@ async def run_and_record(project: dict, test: dict, headless: bool | None = None
             else:
                 proposals[p["step_id"]] = p | {"run_id": run["id"]}
     run["proposals"] = len(proposals) + sum(len(x) for x in module_proposals.values())
-    runs.finish(run, keep=cfg["keep_runs"])
+    # The test first: whoever sees the run finished also sees its outcome in the test.
     _record(project, test, run, attempts, proposals)
     _record_modules(project, attempts, module_proposals)
+    runs.finish(run, keep=cfg["keep_runs"])
 
     pub = project["pipeline"]["publish"]
     if pub["enabled"] and pub["report_runs"] and publisher.external(test, project).get("key") \
@@ -224,7 +225,11 @@ def _record(project: dict, test: dict, run: dict, attempts: list[dict], proposal
     healed = {s["id"]: s["locator"] for s in test["steps"] if s["id"] in healed_ids and s["action"] != "use_module"}
     failed = next((r for r in run["results"] if r["status"] == "failed"), None)
     paths = sorted({urlparse(r["url"]).path for a in attempts for r in a["results"] if r.get("url")})
-    rate = runs.flip_rate(runs.history(project["id"], test["id"]))
+    # The run is not in the history yet (it is finished after the test is written): its outcomes go last.
+    history = [h for h in runs.history(project["id"], test["id"]) if h.get("id") != run["id"]]
+    outcomes = [bool(a.get("passed")) for a in run.get("attempts") or []] or (
+        [bool(run["passed"])] if run.get("passed") is not None else [])
+    rate = runs.flip_rate(history + [{"outcomes": outcomes}])
 
     def change(t: dict) -> None:
         if cfg["heal_mode"] == "auto":

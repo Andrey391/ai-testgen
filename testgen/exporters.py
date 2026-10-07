@@ -216,6 +216,11 @@ HELPER_SWITCH_TAB = '''def _switch_tab(page, which: str = "last"):
     """The tab to go on with: "last", "first", a number (1 = first) or text of its URL."""
     page.wait_for_timeout(300)
     pages = [p for p in page.context.pages if not p.is_closed()]
+    for _ in range(50):          # a tab opened by the previous step may appear a moment later
+        if which != "last" or pages[-1] is not page:
+            break
+        page.wait_for_timeout(100)
+        pages = [p for p in page.context.pages if not p.is_closed()]
     if which == "last":
         target = pages[-1]
     elif which == "first":
