@@ -31,7 +31,8 @@ from playwright.async_api import Error as PlaywrightError
 
 from .testdata import CREDENTIALS, PLACEHOLDER, DataValues, auth_params, secret_values, totp
 
-VIEWPORT = {"width": 1280, "height": 800}
+VIEWPORT = {"width": 1920, "height": 1080}       # the desktop screen; a run may choose another (screen_size)
+SCREEN = re.compile(r"\s*(\d{1,5})\s*[x×хX]\s*(\d{1,5})\s*")
 MAX_EVENTS = 300
 MAX_TRAFFIC = 500
 MAX_LISTED = 150         # interactive elements listed to the model (the rest: find_text)
@@ -385,11 +386,22 @@ def resolve(page: Page, cand: dict):
 DEVICES: dict[str, dict] = {}      # Playwright's device profiles, filled by the first launch
 
 
+def screen_size(device: str) -> dict | None:
+    """A desktop screen given as the device: "1366x768" -> {"width": 1366, "height": 768}."""
+    m = SCREEN.fullmatch(device or "")
+    if not m:
+        return None
+    w, h = int(m[1]), int(m[2])
+    if not (320 <= w <= 7680 and 240 <= h <= 4320):
+        raise ValueError(f"Размер экрана {w}×{h} вне пределов 320×240 … 7680×4320")
+    return {"width": w, "height": h}
+
+
 def context_options(device: str = "", locale: str = "", timezone: str = "",
                     storage_state: dict | None = None, engine: str = "chromium") -> dict:
     """new_context() arguments: a device profile (iPhone, Pixel...), locale, time zone, a saved login."""
-    opts: dict = {"viewport": VIEWPORT}
-    if device and device != "desktop":
+    opts: dict = {"viewport": screen_size(device) or VIEWPORT}
+    if device and device != "desktop" and not screen_size(device):
         if device not in DEVICES:
             raise ValueError(f"Неизвестное устройство «{device}» (например: iPhone 13, Pixel 7, iPad Mini)")
         opts = dict(DEVICES[device])

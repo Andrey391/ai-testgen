@@ -55,8 +55,9 @@ button:disabled{opacity:.5;cursor:default}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px}
 .dot.run{background:var(--warn);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
-.live{position:relative;flex:1;min-height:0;display:flex;align-items:flex-start;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
-.live img{max-width:100%;border:1px solid var(--line);border-radius:6px;display:block}
+.live{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
+.live img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border:1px solid var(--line);border-radius:6px;display:block}
+.live .size{position:absolute;right:6px;bottom:6px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--card);color:var(--muted);opacity:.85;pointer-events:none}
 .live.picking img{cursor:crosshair;outline:2px solid var(--accent)}
 .urlbar{font-size:12px;color:var(--muted);margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .steps{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px}
@@ -451,7 +452,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </select>
       </div>
       <div class="urlbar" id="urlbar"></div>
-      <div class="live" id="live"><img id="shot" alt=""></div>
+      <div class="live" id="live"><img id="shot" alt=""><span class="size hidden" id="shotSize" title="Размер окна браузера и масштаб, в котором он показан"></span></div>
       <div class="muted" style="font-size:12px;margin-top:6px" id="modeHint">Выберите Element Picker или Record &amp; Play, чтобы добавлять шаги кликом по экрану.</div>
     </div>
 
@@ -511,6 +512,20 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="row">
       <b class="grow">Тесты проекта</b>
       <select id="tagFilter" style="width:auto" title="Фильтр по тегу"><option value="">Все тесты</option></select>
+      <select id="runScreen" style="width:auto" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
+        <option value="">Экран: как в проекте</option>
+        <option value="1920x1080">1920×1080</option>
+        <option value="2560x1440">2560×1440</option>
+        <option value="1600x900">1600×900</option>
+        <option value="1536x864">1536×864</option>
+        <option value="1440x900">1440×900</option>
+        <option value="1366x768">1366×768</option>
+        <option value="1280x720">1280×720</option>
+        <option value="1024x768">1024×768 (планшет)</option>
+        <option value="iPhone 13">iPhone 13</option>
+        <option value="Pixel 7">Pixel 7</option>
+        <option value="custom">Другой…</option>
+      </select>
       <label class="inline"><input type="checkbox" id="runHeaded"> в видимом окне</label>
       <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="runDrafts"> с черновиками</label>
       <button class="btn primary" id="suiteBtn">Запустить набор</button>
@@ -931,8 +946,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div data-subpanel="data" class="hidden">
         <div class="card">
           <h3>Модель приложения и тестовые данные</h3>
-          <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Пример: для создания турнира нужен клуб, в котором разрешены турниры, и пользователь — администратор этого клуба. Модель получают ИИ при проектировании сценариев (предусловия), агент при записи теста (готовит недостающие данные или останавливается) и анализ падений (отсутствие данных — проблема окружения, а не дефект).</div>
-          <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Сервис турниров для теннисных клубов: клубы, корты, игроки, турниры, рейтинги"></textarea>
+          <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Пример: для оформления заказа нужен товар в наличии и покупатель с адресом доставки, а товар создаёт менеджер магазина в категории каталога. Модель строится сама: из требований при их анализе, из карты сайта при «Исследовать сайт» (Planner) и при записи тестов — агент заносит найденные и созданные данные (инструмент <code>test_data</code>), а следующие тесты их переиспользуют. Модель получают ИИ при проектировании сценариев (предусловия), агент при записи теста (готовит недостающие данные или останавливается) и анализ падений (отсутствие данных — проблема окружения, а не дефект).</div>
+          <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Интернет-магазин: каталог, категории, товары, корзина, заказы, оплата, доставка, покупатели"></textarea>
           <details class="opt" style="margin-top:8px"><summary>Построить из требований (ИИ дополнит модель, ваши записи не меняются)</summary>
             <textarea id="knReq" rows="5" placeholder="Вставьте текст требований или оставьте пустым — возьмётся последний анализ требований"></textarea>
             <div class="row" style="margin-top:6px"><span class="muted grow" id="knExtractMsg"></span><button class="btn" id="knExtract">Построить</button></div>
@@ -952,7 +967,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
         <div class="card">
           <h3>Тестовые данные стенда</h3>
-          <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Клуб "Теннис Про" — турниры разрешены, администратор — учётная запись "Администратор клуба"».</div>
+          <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio): такие записи обновляются новыми находками; очистите поле, чтобы запись больше не менялась.</div>
           <div id="knData"></div>
           <button class="btn small" style="margin-top:6px" onclick="knAdd('data')">+ Запись</button>
         </div>
@@ -960,7 +975,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <h3>Память проекта</h3>
           <div class="hint">Факты и события, которые запомнил агент при записи тестов (инструмент <code>remember</code>) или добавили люди. Пароли сюда не попадают.</div>
           <div id="knMemory"></div>
-          <div class="row" style="margin-top:6px"><input id="knFact" class="grow" placeholder="Новый факт: «Турнир в статусе "завершён" нельзя редактировать»"><button class="btn small" onclick="knAddFact()">Добавить</button></div>
+          <div class="row" style="margin-top:6px"><input id="knFact" class="grow" placeholder="Новый факт: «Оплаченный заказ покупатель отменить не может»"><button class="btn small" onclick="knAddFact()">Добавить</button></div>
         </div>
         <div class="card row" style="position:sticky;bottom:10px">
           <span class="muted grow" id="knMsg"></span>
@@ -997,7 +1012,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               </select></div>
             <div><label>Подключение Playwright MCP</label><select data-p="authoring.browser_connection" data-conn="playwright"></select></div>
             <div><label>Лимит шагов Auto-Pilot</label><input type="number" min="1" max="200" data-p="authoring.max_steps"></div>
-            <div><label>Устройство при записи</label><input data-p="authoring.device" placeholder="пусто — десктоп; iPhone 13"></div>
+            <div><label>Экран или устройство при записи</label><input data-p="authoring.device" placeholder="пусто — 1920x1080; 1366x768; iPhone 13"></div>
           </div>
           <div class="checks" style="margin-top:10px">
             <label class="inline"><input type="checkbox" data-p="authoring.autopilot"> Auto-Pilot в конвейере (иначе шаги ждут подтверждения в Studio)</label>
@@ -1067,8 +1082,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           </div>
           <label>Браузеры наборов</label>
           <div class="checks" data-list="run.browsers" data-kind="browsers"></div>
-          <label>Устройства (через запятую; desktop — обычный экран)</label>
-          <input data-csv="run.devices" placeholder="desktop, iPhone 13, Pixel 7">
+          <label>Экраны и устройства (через запятую; desktop — экран 1920×1080, размер окна — 1366x768)</label>
+          <input data-csv="run.devices" placeholder="desktop, 1366x768, iPhone 13, Pixel 7">
           <div class="hint">Набор прогоняет каждый тест во всех выбранных браузерах и на всех устройствах. Firefox и WebKit нужно установить: <code>playwright install firefox webkit</code>.</div>
           <div class="checks" style="margin-top:8px">
             <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
@@ -1372,7 +1387,7 @@ function openSession(sid) {
   SID = sid; TEST_ID = null; STATE = null;
   $('#startForm').classList.add('hidden'); $('#resumeBox').classList.add('hidden'); $('#workspace').classList.remove('hidden');
   $('#savedBar').classList.add('hidden');
-  $('#chat').innerHTML = $('#steps').innerHTML = ''; $('#shot').removeAttribute('src');
+  $('#chat').innerHTML = $('#steps').innerHTML = ''; $('#shot').removeAttribute('src'); $('#shotSize').classList.add('hidden');
   showTab('studio');
   poll();
 }
@@ -1427,10 +1442,20 @@ function refreshShot() {
   if (shotBusy) return;
   shotBusy = true;
   const img = new Image();
-  img.onload = () => { $('#shot').src = img.src; shotBusy = false; };
+  img.onload = () => { $('#shot').src = img.src; shotBusy = false; shotSize(); };
   img.onerror = () => { shotBusy = false; };
   img.src = `/api/sessions/${SID}/screenshot?t=${Date.now()}`;
 }
+
+// the browser window is larger than the studio: Live View shows it whole, scaled (the picker maps clicks back)
+function shotSize() {
+  const img = $('#shot'), box = $('#shotSize');
+  if (!img.naturalWidth || !img.getAttribute('src')) { box.classList.add('hidden'); return; }
+  const scale = Math.round(img.getBoundingClientRect().width / img.naturalWidth * 100);
+  box.textContent = `${img.naturalWidth}×${img.naturalHeight}${scale && scale !== 100 ? ' · ' + scale + '%' : ''}`;
+  box.classList.remove('hidden');
+}
+window.addEventListener('resize', shotSize);
 
 function render() {
   const s = STATE;
@@ -1851,11 +1876,20 @@ async function strengthen(id) {
 // run of one test
 async function runTest(id, browser) {
   try {
-    const {id: rid} = await api('POST', `/api/tests/${id}/run`, {headless: $('#runHeaded').checked ? false : null, browser: browser || ''});
+    const {id: rid} = await api('POST', `/api/tests/${id}/run`, {headless: $('#runHeaded').checked ? false : null, browser: browser || '',
+      device: runScreen() || null});
     openRun(rid);
     setTimeout(loadTests, 500);
   } catch (e) { alert(e.message); }
 }
+// the screen chosen for this run: "" = the project's (run.devices; desktop 1920x1080), "1366x768", a device
+function runScreen() { return $('#runScreen').value === 'custom' ? ($('#runScreen').dataset.custom || '') : $('#runScreen').value; }
+$('#runScreen').onchange = e => {
+  if (e.target.value !== 'custom') return;
+  const v = prompt('Размер окна (ширина×высота, например 1680x1050) или устройство Playwright (iPad Mini):', e.target.dataset.custom || '');
+  if (v && v.trim()) { e.target.dataset.custom = v.trim(); e.target.selectedOptions[0].textContent = `Другой: ${v.trim()}`; }
+  else e.target.value = '';
+};
 const RETRYABLE = ['failed', 'error', 'flaky'];
 async function retryRun(rid, btn) {
   if (btn) btn.disabled = true;
@@ -2224,7 +2258,7 @@ $('#suiteBtn').onclick = async () => {
   $('#suiteBtn').disabled = true;
   try {
     const r = await api('POST', `/api/projects/${PID}/runs`, {tags: tag ? [tag] : [], headless: $('#runHeaded').checked ? false : null,
-      include_drafts: $('#runDrafts').checked});
+      include_drafts: $('#runDrafts').checked, device: runScreen()});
     openSuite(r.id);
   } catch (e) { alert(e.message); }
   finally { $('#suiteBtn').disabled = false; }
@@ -2464,7 +2498,8 @@ $('#exploreBtn').onclick = async () => {
       if (r.status !== 'done') { $('#srcStatus').innerHTML = `<span class="err">${esc(r.error || 'Исследование не удалось')}</span>`; return; }
       appendText($('#reqText'), '', r.requirements);
       if (!$('#reqUrl').value) $('#reqUrl').value = url;
-      $('#srcStatus').innerHTML = `<span class="ok">Карта сайта:</span> страниц ${r.pages.length}, пропущено ссылок ${r.skipped} (выход, удаление, файлы, другие сайты). Теперь «Сгенерировать сценарии».`;
+      const learned = (r.log || []).filter(x => x.startsWith('Модель приложения ')).at(-1);
+      $('#srcStatus').innerHTML = `<span class="ok">Карта сайта:</span> страниц ${r.pages.length}, пропущено ссылок ${r.skipped} (выход, удаление, файлы, другие сайты).${learned ? ' ' + esc(learned) + ' («Проект → Тестовые данные»).' : ''} Теперь «Сгенерировать сценарии».`;
     };
     tick();
   } catch (e) { $('#srcStatus').innerHTML = `<span class="err">${esc(e.message)}</span>`; $('#exploreBtn').disabled = false; }
@@ -3861,12 +3896,12 @@ $('#skDelete').onclick = async () => {
 // application model and test data: entities with dependencies and lifecycles, roles -> accounts, stand data, memory
 let KN = null;
 const KN_FIELDS = {
-  entities: [['name', 'Сущность', 'Турнир'], ['description', 'Что это', ''], ['depends_on', 'Требует (через запятую)', 'Клуб (турниры разрешены)'],
-             ['lifecycle', 'Жизненный цикл', 'черновик → набор → идёт → завершён'], ['create', 'Кто и как создаёт', 'администратор клуба, раздел «Турниры»'],
-             ['rules', 'Правила', 'завершённый турнир нельзя изменить']],
-  roles: [['name', 'Роль', 'Администратор клуба'], ['description', 'Что может', ''], ['account', 'Учётная запись проекта', '']],
-  data: [['entity', 'Сущность', 'Клуб'], ['name', 'Объект', 'Теннис Про'], ['details', 'Подробности', 'турниры разрешены, 4 корта'],
-         ['state', 'Состояние', 'активен'], ['account', 'Учётная запись', '']],
+  entities: [['name', 'Сущность', 'Заказ'], ['description', 'Что это', ''], ['depends_on', 'Требует (через запятую)', 'Товар (в наличии), Покупатель (с адресом)'],
+             ['lifecycle', 'Жизненный цикл', 'новый → оплачен → отправлен → доставлен; новый → отменён'], ['create', 'Кто и как создаёт', 'покупатель: корзина → оформление заказа'],
+             ['rules', 'Правила', 'отправленный заказ нельзя отменить']],
+  roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Что может', ''], ['account', 'Учётная запись проекта', '']],
+  data: [['entity', 'Сущность', 'Товар'], ['name', 'Объект', 'Тестовый товар А'], ['details', 'Подробности', 'категория «Категория 1», цена 1000'],
+         ['state', 'Состояние', 'в наличии'], ['account', 'Учётная запись', ''], ['source', 'Найдено', '']],
 };
 async function loadKnowledge() {
   try { KN = await api('GET', `/api/projects/${PID}/knowledge`); } catch (e) { $('#knMsg').textContent = e.message; return; }
@@ -3927,7 +3962,7 @@ $('#knExtract').onclick = async () => {
     readKnowledge();
     await api('PUT', `/api/projects/${PID}/knowledge`, KN);       // what was typed is kept, the model only adds
     KN = await api('POST', `/api/projects/${PID}/knowledge/extract`, body);
-    renderKnowledge(); msg.textContent = `Готово: сущностей ${KN.entities.length}, ролей ${KN.roles.length}. Проверьте и привяжите роли к учётным записям.`;
+    renderKnowledge(); msg.textContent = `Готово: сущностей ${KN.entities.length}, ролей ${KN.roles.length}, тестовых данных ${KN.data.length}. Проверьте и привяжите роли к учётным записям.`;
   } catch (e) { msg.textContent = e.message; }
   finally { btn.disabled = false; }
 };

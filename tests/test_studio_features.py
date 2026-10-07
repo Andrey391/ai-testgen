@@ -190,6 +190,63 @@ def test_application_model_api_and_extraction(monkeypatch, fake_llm):
     assert r.status_code == 200 and client.get(f"/api/projects/{p['id']}/knowledge").json()["memory"][0]["text"] == "факт"
 
 
+def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
+    from testgen import explorer
+    p = _project("Магазин")
+    pid = p["id"]
+    knowledge.save(pid, {"data": [{"entity": "Категория", "name": "Категория 1", "details": "написали люди"}]})
+
+    def script(kind, kw):
+        return Resp(parsed=knowledge.XModel(
+            summary="Интернет-магазин", roles=[knowledge.XRole(name="Покупатель", description="оформляет заказы")],
+            entities=[knowledge.XEntity(name="Товар", description="", depends_on=["Категория"], lifecycle="",
+                                        create="", rules="")],
+            data=[knowledge.XData(entity="Товар", name="Тестовый товар А", details="цена 1000", state="в наличии"),
+                  knowledge.XData(entity="Категория", name="категория 1", details="с карты", state="")]))
+    fake_llm.script = script
+    m = {"start": "http://shop.test", "pages": [{"url": "http://shop.test/catalog", "title": "Каталог",
+                                                  "text": "Тестовый товар А — 1000 ₽, в наличии"}]}
+    logs = []
+    arun(explorer.learn_model(p, m, logs.append))
+    assert "Map of the site" in dump(fake_llm.calls[-1][1]) and "Тестовый товар А" in dump(fake_llm.calls[-1][1])
+    doc = knowledge.get(pid)
+    item = next(d for d in doc["data"] if d["name"] == "Тестовый товар А")
+    assert item["state"] == "в наличии" and item["source"] == "Planner" and "обновлена" in logs[-1]
+    assert [d["details"] for d in doc["data"] if d["entity"] == "Категория"] == ["написали люди"]   # people's record kept
+
+    # The authoring agent records what a test found or created: the record is refreshed, the entity learns.
+    say = []
+    fake = SimpleNamespace(project_id=pid, name="Оформление заказа", credentials={"password": "pw-secret"},
+                           _say=lambda who, msg: say.append(msg))
+    out = arun(StudioSession._helper(fake, "test_data", {
+        "entity": "Товар", "name": "Тестовый товар А", "state": "нет в наличии", "details": "pw-secret",
+        "depends_on": "Категория, Склад", "lifecycle": "в наличии → нет в наличии"}))
+    assert out.startswith("Recorded") and say
+    doc = knowledge.get(pid)
+    item = next(d for d in doc["data"] if d["name"] == "Тестовый товар А")
+    assert item["state"] == "нет в наличии" and item["source"] == "Studio: Оформление заказа" and "pw-secret" not in item["details"]
+    product = next(e for e in doc["entities"] if e["name"] == "Товар")
+    assert product["depends_on"] == ["Категория", "Склад"] and product["lifecycle"] == "в наличии → нет в наличии"
+    text_ = knowledge.prompt(pid)
+    assert "Тестовый товар А" in text_ and "found by: Studio: Оформление заказа" in text_
+    assert "test_data" in agent.HELPERS and agent.DATA_TOOL["name"] == "test_data"
+    assert arun(StudioSession._helper(fake, "test_data", {"entity": "Товар"})) == "Укажите сущность и объект"
+
+
+def test_screen_size_of_a_run():
+    from testgen.browser import VIEWPORT, context_options, screen_size
+    assert VIEWPORT == {"width": 1920, "height": 1080}
+    assert context_options()["viewport"] == VIEWPORT
+    assert context_options("1366x768")["viewport"] == {"width": 1366, "height": 768}
+    assert screen_size("1280 × 720") == {"width": 1280, "height": 720} and screen_size("iPhone 13") is None
+    with pytest.raises(ValueError):
+        screen_size("10x10")
+    p = _project("Экраны")
+    t = storage.save({"project_id": p["id"], "name": "Тест", "url": p["base_url"], "scenario": "", "steps": []})
+    s = suite.new(p, [t], devices=["1366x768", "desktop"])
+    assert [(i["browser"], i["device"]) for i in s["items"]] == [("chromium", "1366x768"), ("chromium", "")]
+
+
 # ---------- what to design: kinds of checks, layers, techniques ----------
 
 def test_scenario_settings_and_context():

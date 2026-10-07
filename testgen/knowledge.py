@@ -5,14 +5,18 @@ data/projects/<id>/knowledge.json:
     summary    what the application is, in a few lines
     entities   objects of the domain: description, which entities must exist first (`depends_on`),
                their lifecycle (states and transitions), how one is created, business rules.
-               Tennis: a tournament depends on a club that allows tournaments; its admin creates it.
+               Online shop: an order depends on a product in stock and a customer with a delivery
+               address; it goes new → paid → shipped → delivered.
     roles      roles of users and the project account (projects.accounts) that has each role
-    data       test data that exists on the test stand: "club «Tennis Pro», tournaments on, its admin -
-               the account «Club admin»"
+    data       test data that exists on the test stand: "product «Test product A», in stock: 10";
+               `source` - who found it automatically ("" - people wrote it)
     memory     facts learned while working: the agent's `remember` tool, people, events
 
-It is built from requirements (extract(): every analysis of requirements adds to it, the setting
-"requirements.learn_model") and edited by people in "Проект → Тестовые данные". prompt() is what
+It builds itself as the studio works (the setting "requirements.learn_model"): every analysis of
+requirements and every exploration of the site (Planner) adds entities, roles and the data seen on
+the stand (extract()), and the authoring agent records the data a test found or created and the
+dependencies it discovered (the `test_data` tool -> record()), so later tests reuse them instead of
+creating duplicates. People edit it in "Проект → Тестовые данные". prompt() is what
 the scenarios, the authoring agent and the failure analysis are told: scenarios state their
 preconditions, the agent checks that the data a step depends on exists (or prepares it), the
 analysis tells a missing precondition from a product bug.
@@ -32,7 +36,7 @@ LIMITS = {"entities": 200, "roles": 50, "data": 300}
 FIELDS = {
     "entities": ("name", "description", "depends_on", "lifecycle", "create", "rules"),
     "roles": ("name", "description", "account"),
-    "data": ("entity", "name", "details", "account", "state"),
+    "data": ("entity", "name", "details", "account", "state", "source"),
 }
 
 
@@ -132,9 +136,11 @@ def prompt(pid: str, limit: int = 12000) -> str:
                   + (f" (project account «{accounts[r['account']]}»)" if r["account"] in accounts else "")
                   for r in doc["roles"]]
     if doc["data"]:
-        lines.append("Test data on the stand:")
+        lines.append("Test data on the stand (reuse it; found by: Planner - the site map, Studio - a test that "
+                     "found or created it):")
         lines += [f"- [{d['entity'] or 'data'}] {d['name']}" + (f" — {d['details']}" if d["details"] else "")
                   + (f"; state: {d['state']}" if d["state"] else "")
+                  + (f"; found by: {d['source']}" if d["source"] else "")
                   + (f"; account «{accounts[d['account']]}»" if d["account"] in accounts else "")
                   for d in doc["data"]]
     if doc["memory"]:
@@ -173,35 +179,72 @@ class XRole(BaseModel):
     description: str
 
 
+class XData(BaseModel):
+    entity: str
+    name: str
+    details: str
+    state: str
+
+
 class XModel(BaseModel):
     summary: str
     entities: list[XEntity]
     roles: list[XRole]
+    data: list[XData] = []
 
 
-EXTRACT = """You are a business analyst. From the requirements, build the model of the application under test that a test engineer needs to prepare correct test data: the domain entities, for each one which other entities (or settings of them) must exist before it can be created (`depends_on`, by entity names), its lifecycle (states and allowed transitions, e.g. "draft → published → finished; finished cannot be edited"), how and by which role it is created, and its business rules; the roles of users and what each may do. Example: in a tennis app "Tournament" depends on "Club" (a club with tournaments enabled), it is created by the club's administrator.
+EXTRACT = """You are a business analyst. From the requirements, build the model of the application under test that a test engineer needs to prepare correct test data: the domain entities, for each one which other entities (or settings of them) must exist before it can be created (`depends_on`, by entity names), its lifecycle (states and allowed transitions, e.g. "new → paid → shipped → delivered; a shipped order cannot be cancelled"), how and by which role it is created, and its business rules; the roles of users and what each may do. Example: in an online shop "Order" depends on "Product" (in stock) and "Customer" (with a delivery address), the customer creates it at checkout; "Product" depends on "Category", the shop manager creates it.
 
-Take only what the requirements say or clearly imply; leave a field empty when unknown. Merge with the model you are given: keep its entities and roles (by name) and add what is new. Write in the language of the requirements."""
+Take only what the text says or clearly implies; leave a field empty when unknown. Merge with the model you are given: keep its entities and roles (by name) and add what is new. Write in the language of the text."""
+
+EXPLORE = """The text is not a specification but the map of the site made by an automatic walk through its pages (titles, forms, buttons, links, text). Infer the entities, their dependencies and lifecycles and the roles from what the pages show (a cart and a checkout form mean "Order" depends on "Product" and "Cart"). Also list in `data` the concrete objects that already exist on the test stand and that tests can rely on: e.g. the product «Test product A» of the category «Category 1», in stock, price 1000 - its entity, its name as shown, details and state. Only objects the pages actually show, at most 50."""
+
+SOURCES = {"requirements": ("Requirements", "", "требования"), "explore": ("Map of the site", EXPLORE, "Planner")}
 
 
-async def extract(project: dict, requirements: str, user: str = "") -> dict:
-    """Add what the requirements say about entities, dependencies, lifecycles and roles to the model."""
+async def extract(project: dict, requirements: str, user: str = "", source: str = "requirements") -> dict:
+    """Add what the requirements (or a map of the site, `source="explore"`) say about entities,
+    dependencies, lifecycles, roles and the data on the stand to the model."""
     pid = project["id"]
     cfg = project["pipeline"]["requirements"]
+    title, extra, label = SOURCES[source]
     current = prompt(pid)
-    reply = await llm.parse(cfg, system=EXTRACT + projects.language_rule(project),
-                            context=f"Requirements:\n{requirements[:150_000]}",
+    reply = await llm.parse(cfg, system=EXTRACT + (f"\n\n{extra}" if extra else "") + projects.language_rule(project),
+                            context=f"{title}:\n{requirements[:150_000]}",
                             messages=[{"role": "user", "content": (f"The current model:\n{current}\n\n" if current
                                                                    else "") + "Build the application model."}],
                             schema=XModel, max_tokens=12000, project_id=pid, stage_name="requirements")
     if reply.parsed is None:
         raise RuntimeError("Модель не смогла выделить сущности из требований")
-    return merge(pid, reply.parsed.model_dump(), user)
+    found = reply.parsed.model_dump()
+    found["data"] = [d | {"source": label} for d in found.get("data") or []]
+    return merge(pid, found, user)
+
+
+def record(pid: str, item: dict, source: str) -> dict:
+    """Test data a test found or created (the agent's `test_data` tool): the record joins the stand
+    data (by entity and name), its entity - the entities, with the dependencies and lifecycle seen."""
+    entity = " ".join(str(item.get("entity") or "").split())
+    name = " ".join(str(item.get("name") or "").split())
+    if not entity or not name:
+        raise ValueError("Укажите сущность и объект")
+    depends = item.get("depends_on") or []
+    found = {"data": [{"entity": entity, "name": name, "details": item.get("details") or "",
+                       "state": item.get("state") or "", "source": source}],
+             "entities": [{"name": entity, "depends_on": depends if isinstance(depends, list) else str(depends).split(","),
+                           "lifecycle": item.get("lifecycle") or "", "create": item.get("create") or ""}]}
+    return merge(pid, found)
+
+
+def _data_key(d: dict) -> tuple[str, str]:
+    return d["entity"].strip().lower(), d["name"].strip().lower()
 
 
 def merge(pid: str, found: dict, user: str = "") -> dict:
-    """Entities and roles found in requirements join the model: new ones are added, known ones (by
-    name) get the fields they lacked and new dependencies. What people wrote is never overwritten."""
+    """Entities, roles and stand data found automatically join the model: new ones are added, known
+    ones (by name; data by entity and name) get the fields they lacked and new dependencies. What
+    people wrote is never overwritten; a data record found automatically (it has a `source`) is
+    refreshed by a newer finding: the state of an object changes."""
     with fs.lock(_path(pid)):
         doc = get(pid)
         if found.get("summary") and not doc["summary"]:
@@ -222,6 +265,21 @@ def merge(pid: str, found: dict, user: str = "") -> dict:
                         old[f] = list(dict.fromkeys(old.get(f, []) + item[f]))
                     elif not old.get(f) and item.get(f):
                         old[f] = item[f]
+        known = {_data_key(x): x for x in doc["data"]}
+        for item in found.get("data") or []:
+            item = _clean_item("data", item)
+            if not item or not item["name"]:
+                continue
+            old = known.get(_data_key(item))
+            if old is None:
+                doc["data"].append(item)
+                known[_data_key(item)] = item
+                continue
+            if old["source"]:
+                old["source"] = item["source"] or old["source"]
+            for f in ("details", "state"):
+                if item[f] and (old["source"] or not old[f]):
+                    old[f] = item[f]
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)
     return out

@@ -208,7 +208,7 @@ API_TOOL = _tool(
     "scenario depends on. DELETE is not allowed. The step fails when the status or a checked field differs. The "
     "response body is shown to you after the step: check its fields in the next call or with `expect_json`.", {
         "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH"]},
-        "path": {"type": "string", "description": "Path of the API, e.g. /api/clubs?limit=10 (or a full URL of the app)."},
+        "path": {"type": "string", "description": "Path of the API, e.g. /api/products?limit=10 (or a full URL of the app)."},
         "body": {"type": "string", "description": "JSON body, or an empty string."},
         "expect_status": {"type": "integer", "description": "Expected HTTP status; 0 = any 2xx."},
         "expect_json": {"type": "string", "description": "JSON object of checks {\"$.path\": \"expected value\"}, "
@@ -218,12 +218,25 @@ API_TOOL = _tool(
         "description": _DESC})
 REMEMBER_TOOL = _tool(
     "remember",
-    "Save a fact about the application or its test data to the project's memory, for later tests (not a test step): "
-    "test data that exists or that this test created and keeps (\"club «Tennis Pro» has tournaments enabled, its admin "
-    "is the account «Club admin»\"), a dependency or a lifecycle rule you discovered. Only facts that hold beyond this "
-    "run; never passwords.", {"fact": {"type": "string"}})
+    "Save a fact about the application to the project's memory, for later tests (not a test step): a rule or a "
+    "behaviour you discovered (\"a paid order cannot be cancelled by the customer\"). Objects of the test data go to "
+    "`test_data`. Only facts that hold beyond this run; never passwords.", {"fact": {"type": "string"}})
+DATA_TOOL = _tool(
+    "test_data",
+    "Record test data in the project's application model, so later tests reuse it instead of creating it again (not "
+    "a test step): an object the scenario relies on that exists on the stand (the product «Test product A» in stock), "
+    "or one this test creates and keeps, with what it requires and its lifecycle as you saw them. Call it when you "
+    "find or create such an object; for an object created with {{unique}} name the kind (\"a new order of the "
+    "customer\") and how it is created. Never passwords.", {
+        "entity": {"type": "string", "description": "Entity of the domain: Product, Category, Order, Customer…"},
+        "name": {"type": "string", "description": "The object as the application shows it: «Test product A»."},
+        "details": {"type": "string", "description": "What matters for tests: price, settings, links to other objects."},
+        "state": {"type": "string", "description": "Its state in the lifecycle: in stock, paid, blocked…; or \"\"."},
+        "depends_on": {"type": "string", "description": "Entities that must exist before it, comma-separated; or \"\"."},
+        "lifecycle": {"type": "string", "description": "States and transitions seen: \"new → paid → shipped\"; or \"\"."},
+        "create": {"type": "string", "description": "How and by which role it is created; or \"\"."}})
 # Tools that help the agent but are not recorded as steps.
-HELPERS = {"look", "find_elements", "remember"}
+HELPERS = {"look", "find_elements", "remember", "test_data"}
 
 
 def _json(d: dict) -> str:
@@ -441,7 +454,7 @@ class StudioSession:
         self.files = project_files(self.project_id)
         self.modules = [t for t in storage.all_tests(self.project_id) if t.get("role") == "module"] if builtin else []
         self.mailbox = bool((project.get("mailbox") or {}).get("kind"))
-        self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY] + [REMEMBER_TOOL]
+        self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY] + [REMEMBER_TOOL, DATA_TOOL]
         if builtin:
             self.tools += [FIND_TOOL, API_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
                 ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else [])
@@ -668,9 +681,11 @@ class StudioSession:
         model = knowledge.prompt(self.project_id)
         if model:
             parts.append(model + "\nBefore a step that needs other data (an object it depends on, a role, a state), "
-                                 "make sure that data exists: use the test data listed above, or prepare it first as "
-                                 "part of the test (through the UI or api_request). If a precondition cannot be met, "
-                                 "finish with status \"blocked\" and name it.")
+                                 "make sure that data exists: reuse the test data listed above (do not create a "
+                                 "duplicate), or prepare it first as part of the test (through the UI or api_request). "
+                                 "If a precondition cannot be met, finish with status \"blocked\" and name it.")
+        parts.append("Record the test data the scenario finds or creates with `test_data` (an object, its state, what it "
+                     "requires): later tests of the project reuse it.")
         return "\n\n".join(parts) + ("\n\n" if parts else "")
 
     async def approve(self) -> None:
@@ -963,6 +978,18 @@ class StudioSession:
                 return str(e)
             self._say("system", f"🧠 Запомнено: {fact[:300]}")
             return "Saved to the project's memory."
+        if name == "test_data":
+            item = {k: str(inp.get(k) or "") for k in ("entity", "name", "details", "state", "lifecycle", "create")}
+            for secret in testdata.secret_values(self.credentials):
+                item = {k: v.replace(secret, "***") for k, v in item.items()}
+            item["depends_on"] = [x.strip() for x in str(inp.get("depends_on") or "").split(",") if x.strip()]
+            try:
+                knowledge.record(self.project_id, item, source=f"Studio: {self.name}")
+            except ValueError as e:
+                return str(e)
+            self._say("system", f"🗂 Тестовые данные: {item['entity']} «{item['name']}»"
+                                + (f" — {item['state']}" if item["state"] else ""))
+            return "Recorded in the application model of the project."
         if name == "find_elements":
             if not isinstance(self.bs, BrowserSession):
                 return "find_elements works with the built-in browser engine only."

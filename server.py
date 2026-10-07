@@ -32,6 +32,7 @@ from testgen import (access, analyses, audit, auth, catalog, checks, db, defects
 from testgen import worker as worker_mod
 from testgen import agent as agent_mod
 from testgen.agent import StudioSession
+from testgen.browser import screen_size
 from testgen.paths import utf8_console
 from testgen.steps import ALL_ACTIONS, DATA_ACTIONS, check_api, new_step
 
@@ -1741,13 +1742,21 @@ def _run_request(t: dict, headless: bool | None, request: Request, browser: str 
 class RunBody(BaseModel):
     headless: bool | None = None   # None = project setting
     browser: str = ""              # chromium | firefox | webkit; empty = the project's first
-    device: str | None = None      # a device profile; None = the project's first
+    device: str | None = None      # a device profile or a screen "1366x768"; None = the project's first
+
+
+def _check_device(device: str | None) -> None:
+    try:
+        screen_size(device or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/tests/{tid}/run")
 async def run(tid: str, body: RunBody, request: Request):
     if body.browser and body.browser not in ("chromium", "firefox", "webkit"):
         raise HTTPException(400, "Браузер: chromium, firefox или webkit")
+    _check_device(body.device)
     return {"id": _run_request(test_or_404(tid), body.headless, request, body.browser, body.device)["id"]}
 
 
@@ -1927,6 +1936,7 @@ class SuiteBody(BaseModel):
     headless: bool | None = None
     parallel: int | None = None
     include_drafts: bool = False     # also drafts and tests under review
+    device: str = ""                 # this run's device or screen ("1366x768"); empty = the project's
 
 
 @app.post("/api/projects/{pid}/runs")
@@ -1936,7 +1946,9 @@ async def run_suite(pid: str, body: SuiteBody, request: Request):
     tests = storage.select(pid, tags=tags, test_ids=body.test_ids, include_drafts=body.include_drafts)
     if not tests:
         raise HTTPException(400, "Нет тестов для прогона" + (f" с тегами {', '.join(tags)}" if tags else ""))
-    s = suite.new(p, tests, tags=tags, trigger="manual", user=request.state.user)
+    _check_device(body.device)
+    s = suite.new(p, tests, tags=tags, trigger="manual", user=request.state.user,
+                  devices=[body.device] if body.device else None)
     worker_mod.start_suite(p, s, tests, submit, headless=body.headless, parallel=body.parallel)
     return {"id": s["id"]}
 
@@ -2087,6 +2099,8 @@ async def _learn(p: dict, requirements: str, user: str, log=None) -> None:
     """The application model learns from analysed requirements (the "requirements.learn_model" setting)."""
     if not p["pipeline"]["requirements"].get("learn_model"):
         return
+    if requirements.lstrip().startswith(explorer.MAP_TITLE):
+        return      # a map of the site only: the model learned from it when the site was explored
     try:
         doc = await knowledge.extract(p, requirements, user)
         if log:

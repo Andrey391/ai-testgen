@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parallel", type=int, help="tests at once (default: project setting)")
     ap.add_argument("--browser", action="append", default=[], choices=["chromium", "firefox", "webkit"],
                     help="run in this browser (repeatable; default: the project's run.browsers)")
+    ap.add_argument("--screen", default="", help="screen size of this run, e.g. 1366x768 (default: the project's "
+                                                 "run.devices; desktop 1920x1080)")
     ap.add_argument("--headed", action="store_true", help="show the browser windows")
     ap.add_argument("--list", action="store_true", help="only list the tests that would run")
     ap.add_argument("--include-drafts", action="store_true", help="also drafts and tests under review")
@@ -84,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"{project['name']}: {len(tests)} tests")
-    s = suite.new(project, tests, tags=storage.normalize_tags(args.tag), trigger="cli", browsers=args.browser or None)
+    s = suite.new(project, tests, tags=storage.normalize_tags(args.tag), trigger="cli", browsers=args.browser or None,
+                  devices=[args.screen] if args.screen else None)
     audit.record("suite.start", user=os.environ.get("TESTGEN_CLI_USER") or getpass.getuser(), project_id=project["id"],
                  target={"sid": s["id"]}, details={"tags": s["tags"], "tests": len(tests)}, via="cli")
 
