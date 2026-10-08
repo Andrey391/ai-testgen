@@ -285,13 +285,14 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
     out = arun(StudioSession._helper(fake, "test_data", {
         "entity": "Покупатель", "name": "Иван", "details": "вошёл с паролем Gen-Pass-9", "role": "Покупатель",
         "login": "ivan+{{unique}}@example.com", "password": "{{faker.password}}"}))
-    assert out.startswith("Recorded") and "Учётная запись «ivan+42@example.com»" in say[-2]
+    assert out == "Recorded as a project account with its roles." and "Учётная запись «ivan+42@example.com»" in say[-1]
     acc = next(a for a in projects.accounts_view(pid) if a["username"] == "ivan+42@example.com")
     assert projects.account_credentials(pid, acc["id"])["password"] == "Gen-Pass-9"
+    assert "Gen-Pass-9" not in json.dumps(projects.accounts_view(pid), ensure_ascii=False)
     doc = knowledge.get(pid)
-    item = next(d for d in doc["data"] if d["name"] == "Иван")
-    assert item["account"] == acc["id"] and "Gen-Pass-9" not in json.dumps(doc, ensure_ascii=False)
-    assert next(r for r in doc["roles"] if r["name"] == "Покупатель")["account"] == acc["id"]
+    assert all(d["name"] != "Иван" for d in doc["data"]) and "Gen-Pass-9" not in json.dumps(doc, ensure_ascii=False)
+    buyer = next(r for r in doc["roles"] if r["name"] == "Покупатель")
+    assert buyer["account"] == acc["id"] and acc["roles"] == [buyer["id"]]
 
 
 def test_screen_size_of_a_run():
