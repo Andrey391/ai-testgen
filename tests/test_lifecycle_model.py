@@ -439,8 +439,16 @@ def test_a_model_of_an_earlier_version_moves_its_users_to_the_accounts():
         {"id": "u3", "entity": "User", "name": "Андрей М", "details": "виден в рейтинге", "source": "Planner"},
         {"id": "p1", "entity": "Покупатель", "name": "Покупатель с адресом", "role": "Покупатель", "source": "Planner"},
         {"id": "o1", "entity": "Заказ", "name": "Заказ 1", "role": "Покупатель", "account": "", "source": "Planner"}]
+    order = next(e for e in raw["entities"] if e["name"] == "Заказ")
+    raw["pending"] = [   # updates found before stay
+        {"id": "pe", "kind": "entities", "target": order["id"], "match": "same", "item": order | {"rules": "нельзя отменить"},
+         "changes": {"rules": "нельзя отменить"}, "before": {"rules": ""}, "source": "Planner", "at": 1},
+        {"id": "pd", "kind": "data", "target": "o1", "match": "same", "item": raw["data"][4] | {"state": "оплачен"},
+         "changes": {"state": "оплачен", "role": "Покупатель"}, "before": {"state": ""}, "source": "Planner", "at": 1}]
     fs.write_json(knowledge._path(pid), raw)
     doc = knowledge.get(pid)
+    assert {p["id"]: p["changes"] for p in doc["pending"] if p["id"] in ("pe", "pd")} == {
+        "pe": {"rules": "нельзя отменить"}, "pd": {"state": "оплачен"}}
     assert [d["name"] for d in doc["data"]] == ["Андрей М", "Покупатель с адресом", "Заказ 1"]
     assert all("role" not in d and "account" not in d for d in doc["data"])
     accounts = {a["name"]: a for a in projects.accounts_view(pid)}
