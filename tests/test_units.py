@@ -251,3 +251,19 @@ def test_fix_task_names_failed_step_and_rest():
     assert "the button was renamed" in text and "use Submit" in text
     assert "3. [assert_text_present] Saved | value: Saved" in text and "1. [navigate]" not in text
     assert "last step" in fix_task(steps, 2, {"error": "no text"})
+
+def test_explorer_scope_is_start_page_and_children():
+    """Planner explores only the given page and its child pages."""
+    from testgen.explorer import _in_scope
+
+    start = "https://app.test/catalog"
+    assert _in_scope("https://app.test/catalog", start)
+    assert _in_scope("https://app.test/catalog/", start)
+    assert _in_scope("https://app.test/catalog/42?tab=info", start)
+    assert not _in_scope("https://app.test/catalog-old", start)
+    assert not _in_scope("https://app.test/admin", start)
+    assert not _in_scope("https://app.test/", start)
+    assert not _in_scope("https://other.test/catalog/1", start)
+    assert _in_scope("https://app.test/anything", "https://app.test/")             # from the root: the whole site
+    assert _in_scope("https://app.test/app/list.html", "https://app.test/app/index.html")
+    assert not _in_scope("https://app.test/list.html", "https://app.test/app/index.html")
