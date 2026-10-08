@@ -769,6 +769,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div><label>Номера кейсов (через запятую; пусто — все кейсы проекта, только Test IT)</label><input id="pipeCaseIds" placeholder="101, 102, 115"></div>
       </div>
     </details>
+    <details class="opt" id="pipeScenBox">
+      <summary>Сценарии из анализа требований <span class="muted" id="pipeScenCount"></span></summary>
+      <div class="hint">Общий список сценариев, сгенерированных раньше во вкладке «Требования». Отмеченные сразу идут на генерацию тестов — без нового анализа требований; ссылки и текст тогда не нужны. Тесты привяжутся к своим сценариям.</div>
+      <div class="row" style="margin-top:6px"><input id="pipeScenFind" class="grow" placeholder="Поиск по названию, шагам или анализу">
+        <select id="pipeScenShow" style="width:auto"><option value="">все сценарии</option><option value="untested">без тестов</option></select></div>
+      <div style="max-height:460px;overflow:auto;margin-top:6px"><table class="scen-list"><thead><tr><th class="chk"><input type="checkbox" id="pipeScenAll" title="Отметить все показанные"></th>
+        <th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Тестов</th></tr></thead><tbody id="pipeScenBody"></tbody></table></div>
+    </details>
     <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
     <div class="design-choice" id="pipeChoice"></div>
     <label class="inline" style="margin-top:10px"><input type="checkbox" id="pipeExplore"> Исследовать сайт (Planner): карта страниц и форм — источник сценариев, когда ТЗ нет</label>
@@ -3252,8 +3260,9 @@ function toStudio(id) {
 const STAGES = [['requirements', 'Требования'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
 const JOB_STATUS = {running: 'Выполняется', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
 const ITEM_STATUS = {queued: ['в очереди', 'off'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
-  done: ['готово', 'ok'], needs_attention: ['нужен человек', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
+  done: ['готово', 'ok'], needs_attention: ['нужно подтверждение', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
 let JOB = null, jobTimer = null;
+const JOB_FOLDED = new Set();      // groups of a run open by default that the person folded
 // The scenarios of a run awaiting selection, as in «Требования»: chosen and expanded rows survive the polling.
 let JOB_PICK = {id: null, sel: new Set(), open: new Set()};
 
@@ -3270,6 +3279,7 @@ async function loadPipe() {
   const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
   $('#pipeCasesBox').classList.toggle('hidden', !tms.length);
   $('#pipeCaseConn').innerHTML = tms.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  loadPipeScen();
   const jobs = await api('GET', `/api/projects/${PID}/jobs`);
   $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
     <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
@@ -3290,6 +3300,51 @@ function pipeBusy(job) {
   if (job) $('#pipeBusy').innerHTML = `<div class="row"><span class="dot run"></span><b class="grow">Конвейер выполняется — запуск от ${fmtTime(job.created)}</b>
     <span class="muted" style="font-size:12px">Новый запуск станет доступен, когда этот завершится или будет остановлен</span></div>`;
 }
+// The common list of the scenarios of every requirements analysis: a run can start on a choice of them.
+let PIPE_SCEN = [], PIPE_SEL = new Set(), PIPE_SCEN_PID = null;
+const scenKey = s => s.analysis_id + ':' + s.id;
+async function loadPipeScen() {
+  try { PIPE_SCEN = await api('GET', `/api/projects/${PID}/scenarios`); } catch { PIPE_SCEN = []; }
+  if (PIPE_SCEN_PID !== PID) { PIPE_SEL = new Set(); PIPE_SCEN_PID = PID; }
+  const keys = new Set(PIPE_SCEN.map(scenKey));
+  PIPE_SEL = new Set([...PIPE_SEL].filter(k => keys.has(k)));
+  renderPipeScen();
+}
+function pipeScenShown() {
+  const q = $('#pipeScenFind').value.trim().toLowerCase(), untested = $('#pipeScenShow').value === 'untested';
+  return PIPE_SCEN.filter(s => (!untested || !s.tests) &&
+    (!q || [s.title, s.instructions, s.analysis].some(t => (t || '').toLowerCase().includes(q))));
+}
+function renderPipeScen() {
+  const shown = pipeScenShown();
+  $('#pipeScenCount').textContent = PIPE_SCEN.length ? `— выбрано ${PIPE_SEL.size} из ${PIPE_SCEN.length}` : '— пока нет';
+  $('#pipeScenAll').checked = shown.length > 0 && shown.every(s => PIPE_SEL.has(scenKey(s)));
+  let html = '', last = null;
+  for (const s of shown) {
+    if (s.analysis_id !== last) {
+      last = s.analysis_id;
+      const group = shown.filter(x => x.analysis_id === last);
+      html += `<tr><td class="chk"><input type="checkbox" data-pick-an="${last}" ${group.every(x => PIPE_SEL.has(scenKey(x))) ? 'checked' : ''}></td>
+        <td colspan="4"><b>${esc(s.analysis || 'Анализ без названия')}</b> <span class="muted">— ${fmtTime(s.created)}, сценариев: ${group.length}</span></td></tr>`;
+    }
+    html += `<tr><td class="chk"><input type="checkbox" data-pick="${scenKey(s)}" ${PIPE_SEL.has(scenKey(s)) ? 'checked' : ''}></td>
+      <td><span class="sc-title">${esc(s.title || 'Без названия')}</span><div class="hint sc-preview">${esc(s.instructions || '')}</div></td>
+      <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority || '')}</td>
+      <td>${s.tests ? `<span class="badge ok">${s.tests}</span>` : '<span class="muted">—</span>'}</td></tr>`;
+  }
+  $('#pipeScenBody').innerHTML = html || `<tr><td colspan="5" class="muted">${PIPE_SCEN.length ? 'Ничего не найдено.' : 'Сценариев пока нет: сгенерируйте их во вкладке «Требования».'}</td></tr>`;
+  $('#pipeStart').textContent = PIPE_SEL.size ? `Сгенерировать тесты (${PIPE_SEL.size})` : 'Запустить';
+}
+$('#pipeScenFind').oninput = renderPipeScen;
+$('#pipeScenShow').onchange = renderPipeScen;
+$('#pipeScenAll').onchange = e => { pipeScenShown().forEach(s => e.target.checked ? PIPE_SEL.add(scenKey(s)) : PIPE_SEL.delete(scenKey(s))); renderPipeScen(); };
+$('#pipeScenBody').addEventListener('change', e => {
+  const el = e.target;
+  if (el.dataset.pick) el.checked ? PIPE_SEL.add(el.dataset.pick) : PIPE_SEL.delete(el.dataset.pick);
+  else if (el.dataset.pickAn) pipeScenShown().filter(s => s.analysis_id === el.dataset.pickAn)
+    .forEach(s => el.checked ? PIPE_SEL.add(scenKey(s)) : PIPE_SEL.delete(scenKey(s)));
+  renderPipeScen();
+});
 $('#pipeFileBtn').onclick = () => $('#pipeFile').click();
 $('#pipeFile').onchange = async e => {
   try { for (const f of e.target.files) { const d = await readSpec(f); appendText($('#pipeText'), d.title, d.text); } }
@@ -3301,6 +3356,7 @@ $('#pipeStart').onclick = async () => {
   const links = $('#pipeLinks').value.split('\n').map(s => s.trim()).filter(Boolean);
   const text = $('#pipeText').value.trim(), explore = $('#pipeExplore').checked;
   const caseConn = $('#pipeCasesBox').open ? $('#pipeCaseConn').value : '';
+  if (PIPE_SEL.size) return startPicked();
   if (!links.length && !text && !explore && !caseConn) { $('#pipeErr').textContent = 'Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта'; return; }
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
   $('#pipeStart').disabled = true;
@@ -3313,6 +3369,21 @@ $('#pipeStart').onclick = async () => {
   } catch (e) { $('#pipeErr').textContent = e.message; }
   finally { $('#pipeStart').disabled = false; }
 };
+async function startPicked() {
+  if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
+  const picks = [...PIPE_SEL].map(k => { const [analysis_id, scenario_id] = k.split(':'); return {analysis_id, scenario_id}; });
+  const tested = PIPE_SCEN.filter(s => PIPE_SEL.has(scenKey(s)) && s.tests).length;
+  if (!confirm(`Сгенерировать тесты по ${picks.length} сценариям? Агент пройдёт их в браузере по очереди — расход модели.` +
+    (tested ? `
+У ${tested} из них тесты уже есть — будут созданы ещё.` : ''))) return;
+  $('#pipeStart').disabled = true;
+  try {
+    const r = await api('POST', `/api/projects/${PID}/jobs`, {picks, url: $('#pipeUrl').value.trim()});
+    PIPE_SEL = new Set(); $('#pipeScenBox').open = false;
+    openJob(r.id); loadPipe();
+  } catch (e) { $('#pipeErr').textContent = e.message; }
+  finally { $('#pipeStart').disabled = false; }
+}
 async function openJob(jid) {
   clearTimeout(jobTimer);
   try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { alert(e.message); return; }
@@ -3361,7 +3432,7 @@ function jobItemRow([it, i]) {
     (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
   const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
     : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
-  const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужен человек</span>' : '';
+  const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужно подтверждение</span>' : '';
   return `<tr class="${kind === 'bug' ? 'hl-bad' : kind === 'attention' ? 'hl-warn' : ''}"><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span> ${flag}
       ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}</td>
     <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
@@ -3391,7 +3462,7 @@ function renderJob() {
     const finished = j.items.filter(it => !ACTIVE_ITEM.includes(it.status) && it.status !== 'queued').length;
     const k = (n, label, cls) => `<div class="k${n && cls ? ' ' + cls : ''}"><b>${n}</b><span>${label}</span></div>`;
     html += `<div class="pbar" title="Обработано сценариев: ${finished} из ${j.items.length}"><i style="width:${Math.round(finished / j.items.length * 100)}%"></i></div>
-      <div class="job-sum">${k(groups.attention.length, 'нужен человек', 'warn')}${k(groups.bug.length, 'возможные дефекты', 'bad')}
+      <div class="job-sum">${k(groups.attention.length, 'нужно подтверждение', 'warn')}${k(groups.bug.length, 'возможные дефекты', 'bad')}
         ${k(groups.active.length, 'в работе')}${k(groups.done.length, 'готово', 'ok')}${k(groups.waiting.length, live ? 'в очереди' : 'не начато или прервано')}</div>`;
   }
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
@@ -3421,8 +3492,11 @@ function renderJob() {
         <tbody>${j.scenarios.map(jobScenRow).join('') || '<tr><td colspan="5" class="muted">Сценариев нет.</td></tr>'}</tbody></table></div>`;
   }
   const group = (g, cls, title, hint) => groups[g].length ? `<div class="job-group ${cls}"><div class="gh">${title}${hint ? ` <span class="muted">— ${hint}</span>` : ''}</div>${jobItemsTable(groups[g], 'job-' + g)}</div>` : '';
-  html += group('attention', 'warn', 'Нужен человек', 'откройте сессию в Studio или разберите упавший прогон') +
-    group('bug', 'bad', 'Возможные дефекты', 'приложение ведёт себя не так, как ожидает сценарий: проверьте и заведите дефект') +
+  // «Нужно подтверждение» is open until the person folds it; folded, it stays so across the polling
+  if (groups.attention.length) html += `<details class="job-group warn" data-g="attention" ${JOB_FOLDED.has('attention') ? '' : 'open'}
+    ontoggle="this.open ? JOB_FOLDED.delete('attention') : JOB_FOLDED.add('attention')"><summary>Нужно подтверждение (${groups.attention.length})
+    <span class="muted" style="font-weight:400;font-size:12px">— откройте сессию в Studio или разберите упавший прогон</span></summary>${jobItemsTable(groups.attention, 'job-attention')}</details>`;
+  html += group('bug', 'bad', 'Возможные дефекты', 'приложение ведёт себя не так, как ожидает сценарий: проверьте и заведите дефект') +
     group('active', '', 'В работе', '');
   const fold = (g, title) => groups[g].length ? `<details class="job-group" data-g="${g}" ${opened.has(g) ? 'open' : ''}><summary>${title} (${groups[g].length})</summary>${jobItemsTable(groups[g], 'job-' + g)}</details>` : '';
   html += fold('done', 'Готово') + fold('waiting', live ? 'В очереди' : 'Не начато или прервано');

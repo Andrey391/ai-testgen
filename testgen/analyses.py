@@ -82,6 +82,23 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
     return sorted(out, key=lambda x: x["created"], reverse=True)[:limit]
 
 
+def all_scenarios(pid: str) -> list[dict]:
+    """Every ready scenario of the project's analyses, newest analysis first: the pipeline picks from them."""
+    out = []
+    for _, text, _ in fs.documents(_dir(pid)):
+        try:
+            a = _stale(json.loads(text))
+        except ValueError:
+            continue
+        for s in a["scenarios"]:
+            if s.get("pending"):
+                continue
+            out.append({"layer": "ui"} | {k: s.get(k) for k in (*FIELDS, "id", "test_data", "match")}
+                       | {"analysis_id": a["id"], "analysis": a.get("feature") or a.get("title") or "",
+                          "created": a["created"], "tests": len(s.get("test_ids") or [])})
+    return sorted(out, key=lambda x: x["created"], reverse=True)
+
+
 # ---------- the generation fills it in (scenarios.generate progress events) ----------
 
 def _fields(data: dict) -> dict:

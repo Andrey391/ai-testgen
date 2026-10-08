@@ -154,6 +154,25 @@ def test_analysis_scenarios_are_edited_and_keep_their_tests(monkeypatch):
     assert [s["title"] for s in job.given] == ["Свой"] and job.given[0]["scenario_id"] == new["id"]
     assert job.feature == "Корзина"
 
+    # The pipeline's common list: scenarios of every analysis, a run on a choice from several of them.
+    b = analyses.create(p["id"], "# Оплата")
+    analyses.set_plan(p["id"], b["id"], "Оплата", [], [{"title": "Оплатить", "type": "positive", "priority": "high"}])
+    analyses.finish(p["id"], b["id"], {"feature": "Оплата", "assumptions": [], "scenarios": [
+        {"title": "Оплатить", "type": "positive", "priority": "high", "instructions": "Платёж"}]})
+    common = client.get(f"/api/projects/{p['id']}/scenarios").json()
+    assert {s["title"] for s in common} == {"Добавить товар", "Свой", "Оплатить"}
+    pay = next(s for s in common if s["title"] == "Оплатить")
+    assert pay["analysis_id"] == b["id"] and pay["analysis"] == "Оплата" and pay["tests"] == 0
+    picks = [{"analysis_id": a["id"], "scenario_id": new["id"]}, {"analysis_id": b["id"], "scenario_id": pay["id"]}]
+    r = client.post(f"/api/projects/{p['id']}/jobs", json={"picks": picks})
+    assert r.status_code == 200, r.text
+    job = pipeline.JOBS.pop(r.json()["id"])
+    assert [(s["title"], s["analysis_id"]) for s in job.given] == [("Свой", a["id"]), ("Оплатить", b["id"])]
+    assert job.feature == "Корзина; Оплата"
+    other = projects.create("Чужой " + uuid.uuid4().hex[:6])
+    r = client.post(f"/api/projects/{other['id']}/jobs", json={"picks": picks[1:]})
+    assert r.status_code == 404
+
 
 def _cut(objs: list[dict], key: str = "scenarios") -> Resp:
     """An answer cut off by the output limit: the complete objects and the start of the next one."""
