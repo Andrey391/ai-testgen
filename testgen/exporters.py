@@ -243,7 +243,13 @@ HELPER_DIALOG = '''def _answer_dialog(dialog, action: str, prompt_text: str, see
 '''
 
 HELPER_API = '''def _api(page, method: str, url: str, expect=None, **kwargs):
-    """A request through the page's context (its cookies): the test's data preparation."""
+    """A request through the page's context (its cookies): the test's data preparation and the steps
+    of an API test. A token of the API: TESTGEN_API_TOKEN (Authorization: Bearer, or the header
+    named in TESTGEN_API_HEADER)."""
+    token, name = os.environ.get("TESTGEN_API_TOKEN"), os.environ.get("TESTGEN_API_HEADER", "Authorization")
+    if token:
+        kwargs["headers"] = {name: f"Bearer {token}" if name.lower() == "authorization" else token,
+                             **(kwargs.get("headers") or {})}
     r = page.request.fetch(url, method=method, **kwargs)
     ok = r.status == expect if expect else 200 <= r.status < 300
     assert ok, f"{method} {url} -> {r.status}"

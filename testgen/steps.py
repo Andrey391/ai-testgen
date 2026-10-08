@@ -260,17 +260,21 @@ async def run_api(bs: BrowserSession, step: dict, phase: str = "before") -> dict
         else:
             kw["data"] = bs.expand(str(body))
     resp = await bs.context.request.fetch(url, **kw)
-    want = s.get("expect_status")
-    ok = resp.status == int(want) if want else 200 <= resp.status < 300
-    safe_url = bs.mask(url)
-    if not ok:
-        raise AssertionError(f"{method} {safe_url} ответил {resp.status}" + (f", ожидался {want}" if want else ""))
     try:
         text = await resp.text()
     except Exception:
         text = ""
-    # What the authoring agent sees of the response (secrets masked): to write checks of its fields.
-    bs.last_response = {"status": resp.status, "body": bs.mask(text[:3000])}
+    status = resp.status
+    if bs.options.get("mutate_response"):          # mutation testing of an API test (mutations.py)
+        status, text = bs.options["mutate_response"](step, status, text)
+    want = s.get("expect_status")
+    ok = status == int(want) if want else 200 <= status < 300
+    safe_url = bs.mask(url)
+    # What the authoring agent sees of the response (secrets masked): to write checks of its fields,
+    # or to see why the status was not the expected one.
+    bs.last_response = {"status": status, "body": bs.mask(text[:3000])}
+    if not ok:
+        raise AssertionError(f"{method} {safe_url} ответил {status}" + (f", ожидался {want}" if want else ""))
     saved = []
     data = None
     if s.get("save") or s.get("expect"):
@@ -296,4 +300,4 @@ async def run_api(bs: BrowserSession, step: dict, phase: str = "before") -> dict
             saved.append(name)
             if phase == "before":
                 bs.options.setdefault("own_vars", []).append(name)
-    return {"api": {"method": method, "url": safe_url, "status": resp.status, "saved": saved}}
+    return {"api": {"method": method, "url": safe_url, "status": status, "saved": saved}}

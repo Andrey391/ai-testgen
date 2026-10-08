@@ -26,7 +26,7 @@ AI Test Generator — студия генерации автотестов с п
 | Требования/user stories → сценарии, Gherkin | Вкладка «Требования»: живая лента генерации, история анализов (раскрывающийся список: требования → сценарии с правкой → тесты по каждому), «Сгенерировать все»; число сценариев не ограничено; без ТЗ — «Исследовать сайт» (Planner). На каждую генерацию (и запуск конвейера) выбираются слои UI / API, виды проверок и техники тест-дизайна; умолчания — «Проект → Сценарии» |
 | Проверка ТЗ | «Проверить ТЗ» во вкладке «Требования» (и автоматически перед генерацией): разделы по стандарту (ГОСТ 34.602, ГОСТ 19.201, ISO/IEC/IEEE 29148, user story), качество требований, правила команды, вопросы авторам; стандарт — «Проект → Требования» |
 | Модель приложения, тестовые данные, память | «Проект → Тестовые данные»: сущности с зависимостями и жизненным циклом, роли с возможностями и ограничениями → учётные записи, данные стенда и «нужные» сценариям, память; найденное повторно не дублируется — обновление существующей записи ждёт подтверждения («Обновления»: по одной или все), «Дубли» — проверка и объединение похожих записей; каждый блок — узел дерева настроек, списки с фильтрами и страницами (агент — инструмент `remember`); строится сама: из требований, из карты сайта (Planner), из сценариев (роль и `test_data` сценария) и при записи тестов (агент — инструмент `test_data`), следующие тесты переиспользуют данные. **Тесты генерируются только по подтверждённому жизненному циклу** («Подтвердить», `requirements.confirm_model`): конвейер ждёт (`awaiting_model`), «Тест в Studio» из сценария — 409; скиллы группы «Тестовые данные» |
-| UI- и API-тесты | Слой сценария `ui`/`api`; агент пишет API-шаги инструментом `api_request` (статус, поля ответа), экспорт — в тот же `.py` |
+| UI- и API-тесты | Слой сценария `ui`/`api`. API-тест пишется и прогоняется **без браузера** (`apiclient.ApiClient`): каждый шаг — `api_request` (статус, поля ответа), в Studio вместо Live View — запросы и ответы. «Проект → API приложения»: адрес API, авторизация (cookies теста входа, Bearer, API-ключ, запрос входа → токен; токен — в хранилище секретов) и эндпоинты из трафика UI-тестов и Planner (`traffic.catalog`; фильтр по тексту, методу и ответам; эндпоинты добавляют, правят и удаляют люди — их версия главнее записанной, удалённый не возвращается из трафика) — их получают генерация API-сценариев и агент. Мутации API-теста — поле и статус ответа. Экспорт — в тот же `.py` |
 | Экспорт в Selenium/Playwright и Gherkin | `.py` (pytest-playwright, локаторы с `.or_()`), `.feature`, проект целиком `.zip`, API-тесты по трафику |
 | Интеграции (Jira, test management) | Проект → Подключения (MCP): Jira/Confluence, Zephyr Scale, Playwright MCP, любой MCP |
 | Сквозной процесс генерации | Вкладка «Конвейер»; запуск по сценариям, выбранным из общего списка анализов («Сценарии из анализа требований», `picks`, `GET /api/projects/{pid}/scenarios`); этапы настраиваются в «Проект → Процесс генерации» и «Скиллы». «Перезапустить сбойные» — заново все сценарии с ошибкой агента; пункт «нужно подтверждение» становится готовым, когда тест его сессии сохранён в Studio |
@@ -97,7 +97,8 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 ```
 
 Экспортированный тест: `pip install pytest pytest-playwright faker`, затем `pytest test_xxx.py`
-(логин/пароль — `TESTGEN_USERNAME` / `TESTGEN_PASSWORD`, адрес стенда — `TESTGEN_BASE_URL`).
+(логин/пароль — `TESTGEN_USERNAME` / `TESTGEN_PASSWORD`, адрес стенда — `TESTGEN_BASE_URL`, токен API —
+`TESTGEN_API_TOKEN`, его заголовок — `TESTGEN_API_HEADER`, по умолчанию `Authorization: Bearer`).
 
 Тесты самой студии — pytest на локальном стенде `tests/site/` (`tests/stand.py`, вариант `v2` —
 изменённая вёрстка) с заглушкой LLM (`tests/fakes.py`: `FakeClient` вместо клиента API — фикстура `fake_llm`;
@@ -167,7 +168,7 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 ## Архитектура
 
 - `server.py` — FastAPI: REST API (`/api/projects` с подресурсами `access`, `audit`, `connections`, `skills`, `jobs`, `tasks`, `sessions` (прерванные),
-  `credentials`, `runs` (прогон набора), `suites`, `export` (.zip), `tags`, `explore`, `coverage`, `knowledge`;
+  `credentials`, `api` (адрес, авторизация и эндпоинты API приложения), `runs` (прогон набора), `suites`, `export` (.zip), `tags`, `explore`, `coverage`, `knowledge`;
   `/api/mcp/presets`, `/api/sessions`, `/api/tests` (+ `meta`, `runs`, `proposals`, `verify`,
   `strengthen`, `traffic`, `mock`, `baselines`), `/api/runs` (+ `files`, `baseline`), `/api/suites`,
   `/api/jobs`, `/api/tasks`, `/api/scenarios`, `/api/requirements/fetch` и `validate`, `/api/auth/*` (+ `tokens`, `oidc`),
@@ -263,6 +264,14 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   Интерфейс движка для агента: `describe()`, `screenshot_b64()`, `execute(step)`, `url`, `close()`.
 - `testgen/testdata.py` — плейсхолдеры `{{unique}}`, `{{today}}`, `{{faker.email}}`, … : новое значение
   на каждый прогон, одно и то же внутри прогона (`DataValues`); экспорт встраивает тот же генератор.
+- `testgen/apiclient.py` — `ApiClient`: тот же интерфейс без браузера для API-тестов (слой `api`, `test["layer"]`,
+  движок сессии `engine="api"`, `agent.test_engine(test)` — для сессий над сохранённым тестом): запросы через
+  Playwright `APIRequestContext` на `projects.api_base()` с авторизацией `projects.api_settings()` (`auth`:
+  `cookies` — сохранённый вход теста входа, `none`, `bearer`, `header`, `login` — запрос входа, токен из ответа);
+  токен (`projects.api_token`, секрет `api`) только в заголовках контекста и маскируется (`secrets()`). Агент
+  получает `API_SYSTEM_PROMPT` и инструменты `api_request`/`finish`/`remember`/`test_data`, состояние — `describe()`:
+  запросы сессии, последний ответ, каталог эндпоинтов. Раннер (`run_test`) для слоя `api` — без trace и
+  скриншотов; набор гоняет API-тест один раз, не по матрице браузеров.
 - `testgen/mcp_browser.py` — `McpBrowser`: тот же интерфейс поверх Playwright MCP (`TESTGEN_PLAYWRIGHT_MCP`).
   Агент и шаги не меняются; снимок — ARIA-снапшот MCP. Локаторы шага: код, сгенерированный MCP
   (`--codegen python`), плюс `ELEMENT_INFO_JS` через `browser_evaluate` (те же поля, что у встроенного
@@ -345,12 +354,16 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   контекстов; карантин не валит набор. `testgen/reports.py` — JUnit XML и Allure.
   `testgen/run.py` — CLI `python -m testgen.run`.
 - `testgen/mutations.py` — мутационное тестирование проверок: мутанты `noop_action`, `assertion`,
-  `api_500` применяются хуками раннера; результат в `test["verify"]`; `improvement_task()` — задача агенту.
-- `testgen/explorer.py` — Planner: обход по ссылкам только переданной страницы и дочерних (`_in_scope`: путь под начальным; от корня — весь сайт; только GET, без форм; `SKIP` — выход,
+  `api_500` применяются хуками раннера, у API-теста — `api_field`/`api_status` (ответ подменяется в
+  `steps.run_api` через `options["mutate_response"]`); результат в `test["verify"]`; `improvement_task()` — задача агенту.
+- `testgen/explorer.py` — Planner: обход по ссылкам только переданной страницы и дочерних (`_in_scope`: путь под начальным; от корня — весь сайт; запросы страниц — в каталог API, `explore["api"]`; только GET, без форм; `SKIP` — выход,
   удаление, файлы), карта в `data/projects/<id>/explore/`, `to_requirements()` для сценариев,
   `coverage()` — страницы без тестов.
 - `testgen/traffic.py` — XHR/fetch сессии автора: маскирование, HAR в `data/projects/<id>/traffic/`,
-  `mock_spec()` для шага `mock_route`.
+  `mock_spec()` для шага `mock_route`; каталог API `catalog()` — эндпоинты (метод + путь-шаблон с `{id}`,
+  статусы, названия полей, без значений) из HAR тестов и карты Planner (`explore["api"]`, `recorded()`) с правками людей
+  (`save_endpoint`/`delete_endpoint`, документ `data/projects/<id>/api-endpoints.json`: `manual`, `removed`), `catalog_text()` —
+  для модели (генерация API-сценариев, агент API-теста).
 - `testgen/mcp_server.py` — студия как MCP-сервер для IDE (FastMCP): `generate_test`, `run_test`,
   `run_suite`, `list_failures`, `list_tasks`, `export_test`, `get_trace` и др.; HTTP на `/mcp` в студии или stdio.
 - `testgen/publisher.py` — публикация в Zephyr Scale через MCP: Claude получает инструменты

@@ -36,6 +36,7 @@ import uuid
 from urllib.parse import urlparse
 
 from . import fs, knowledge, llm, mailbox, mcp_hub, projects, skills, storage, testdata, traffic, vault
+from .apiclient import ApiClient
 from .browser import BrowserSession, describe_element
 from .mcp_browser import McpBrowser
 from .providers.base import check_call
@@ -89,6 +90,24 @@ Rules:
 8. If a step fails, fix the cause (close a pop-up, pick another element) and try again.
 9. Tools with "__" in the name are read-only helpers of connected systems, not test steps.
 10. Before every tool call write one short sentence in the language of the scenario: what you do and why. In finish, `evidence` lists the assertion steps (numbers) that prove the result."""
+
+# An API (backend) test: no browser, the session talks to the API through apiclient.ApiClient.
+API_SYSTEM_PROMPT = """You are a QA engineer that authors API (backend) test cases by sending requests to the API of a web application.
+
+The user gives you the application and a test scenario of its API. There is no browser and no page: you carry out the scenario one request at a time with `api_request`. Every request is recorded as a step of the test case, which will later be replayed automatically. So:
+
+- Send the most direct sequence of requests the scenario needs. Avoid exploratory requests that do not belong in the final test.
+- Take the paths, methods and fields from the scenario and from the known endpoints of the application listed in the state. If a path is not known, try the most likely one and look at the response.
+- Verify outcomes: give each meaningful request `expect_status` and check the fields of its response with `expect_json`; read a created object back (GET) to check what was saved. Save ids and values with `save` and use them in later requests as {{vars.name}}. The test must end with at least one request that checks the scenario's expected result.
+- Write each `description` as a clear test step in imperative form, e.g. "Create an order for product 42" or "Check that the order has the status 'new'". Write descriptions in the same language as the scenario.
+- Authorization is already set up by the studio (cookies or a token in the headers): never ask for, guess or write tokens. Login credentials, when provided, are placeholders: pass the literal text {{username}} or {{password}} in a request body; the real values are substituted when the step runs. Never put a password in a step description.
+- Data that must be new on every run (an e-mail, a login, a name of something you create) must not be a literal: use {{faker.email}}, {{faker.name}}, {{faker.first_name}}, {{faker.last_name}}, {{faker.phone}}, {{faker.company}}, {{faker.city}}, {{faker.address}}, {{faker.user_name}}, {{unique}}, {{today}}. Each gets a fresh value on every run and the same value within one run.
+- Never complete irreversible real-world actions: do not make real payments, place real orders, send messages; DELETE is not allowed. Go up to that point, check you reached it, then finish.
+- A step that fails is not kept in the recorded test. If a request fails, look at its response, fix the request (path, body, expected status) and send it again.
+- If you are blocked (no access, the API is down, an endpoint you cannot find), call finish with status "blocked" and explain. If the API does not behave as the scenario expects (a product bug), call finish with status "failed" and describe the bug.
+- When the scenario is fully covered and its expected result is checked, call finish with status "passed" and a short summary. In `evidence` name the steps (by their numbers) whose checks prove the expected result.
+- A person watches you work. Before every tool call write exactly one short sentence in the language of the scenario: which part of the scenario you are on and why this request. No other text outside tool calls.
+- Tools whose names contain "__" come from the project's connected systems (Jira, Confluence, test management...). They are read-only helpers for context, not test steps."""
 
 LOOK_NOTE = ("\n- You get the page as a list of elements. Call `look` when you need to SEE the page (layout, "
              "images, a result that is only visible). `look` is not a test step.")
@@ -326,6 +345,11 @@ FRESH_TASK = ("To keep the requests short, the conversation was started over: th
 EDIT_TASK = ("A person opened this saved test to edit it: the steps above are already recorded in the test and have "
              "been replayed. Do only what the person asks in the chat (add, change or re-record steps from the current "
              "page); do not repeat the steps above and do not go on with the scenario on your own.")
+def test_engine(test: dict) -> str:
+    """The engine a Studio session over a saved test needs: an API test has no browser."""
+    return "api" if test.get("layer") == "api" else ""
+
+
 FIX_TASK = "A run of this saved test failed and a person asked you to fix the test."
 
 
@@ -391,7 +415,7 @@ def restored(project: dict, cp: dict) -> "StudioSession":
     s = StudioSession(project, cp["name"], cp["url"], cp.get("scenario", ""), headless=cp.get("headless", True),
                       credentials=creds or projects.account_credentials(project["id"], account),
                       base_steps=recorded_steps(cp.get("steps") or []), task=RESUME_TASK, account=account,
-                      session_id=cp["id"])
+                      session_id=cp["id"], engine=cp.get("engine") or "")
     s.restored, s.origin = True, cp.get("origin")
     s.test_id, s.task_id = cp.get("test_id"), cp.get("task_id") or ""
     s.chat = list(cp.get("chat") or []) + [{"role": "system", "text": "Сессия восстановлена после перезапуска студии: "
@@ -453,8 +477,9 @@ class StudioSession:
         self.cfg = project["pipeline"]["authoring"]
         self.run_cfg = project["pipeline"]["run"]
         self.connections = project.get("connections", [])
-        # A saved test is replayed with its locators, which only the built-in engine resolves.
-        self.engine = "builtin" if base_steps else (engine or self.cfg["engine"])
+        # A saved test is replayed with its locators, which only the built-in engine resolves;
+        # an API test has no browser at all (apiclient.ApiClient).
+        self.engine = "api" if engine == "api" else "builtin" if base_steps else (engine or self.cfg["engine"])
         self.name, self.url, self.scenario = name, url, scenario
         self.base_steps, self.task = copy.deepcopy(base_steps or []), task
         self.headless = headless
@@ -467,8 +492,9 @@ class StudioSession:
             self.model = ""
         chosen = list(self.cfg["skills"]) + ([EXAMPLES_SKILL] if compact and EXAMPLES_SKILL not in self.cfg["skills"]
                                              else [])
-        self.system = ((SYSTEM_PROMPT_COMPACT if compact else SYSTEM_PROMPT)
-                       + (LOOK_NOTE if self.screenshots == "on_request" else "")
+        api = self.engine == "api"
+        self.system = ((API_SYSTEM_PROMPT if api else SYSTEM_PROMPT_COMPACT if compact else SYSTEM_PROMPT)
+                       + (LOOK_NOTE if self.screenshots == "on_request" and not api else "")
                        + projects.language_rule(project)
                        + skills.prompt(self.project_id, chosen))
         builtin = self.engine == "builtin"
@@ -480,7 +506,9 @@ class StudioSession:
         if builtin:
             self.tools += [FIND_TOOL, API_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
                 ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else [])
-        if self.screenshots == "on_request":
+        if api:
+            self.tools = [API_TOOL] + [t for t in TOOLS if t["name"] == "finish"] + [REMEMBER_TOOL, DATA_TOOL]
+        elif self.screenshots == "on_request":
             self.tools.append(LOOK_TOOL)
         self.repairs = 0                    # invalid answers in a row
         self.device = self.cfg.get("device") or ""
@@ -537,6 +565,7 @@ class StudioSession:
             "pending": self.pending and {k: self.pending[k] for k in ("name", "input", "step")},
             "page_url": self.page_url, "has_credentials": bool(self.credentials),
             "usage": self.usage.as_dict(), "traffic": len(getattr(self.bs, "traffic", None) or []),
+            "api_log": getattr(self.bs, "responses", None) if self.engine == "api" else None,
             "model": {"name": self.model, "screenshots": self.screenshots},
             "timing": {k: round(v, 1) for k, v in self.timing.items()},
         }
@@ -545,7 +574,8 @@ class StudioSession:
         """The recorded test, ready for storage.save (keeps its id across re-saves)."""
         return {"id": self.test_id or uuid.uuid4().hex[:10], "project_id": self.project_id,
                 "name": self.name, "url": self.url, "scenario": self.scenario, "summary": self.summary,
-                "engine": self.engine, "steps": recorded_steps(self.steps),
+                "engine": self.engine, "layer": "api" if self.engine == "api" else "ui",
+                "steps": recorded_steps(self.steps),
                 "authoring_usage": self.usage.as_dict(),
                 "authoring_stats": {"model": self.model, "edits": self.edits,
                                     "timing": {k: round(v, 1) for k, v in self.timing.items()},
@@ -612,6 +642,9 @@ class StudioSession:
                     raise mcp_hub.McpError("Движок Playwright MCP выбран, но в проекте нет включённого "
                                            "подключения Playwright MCP")
                 self.bs = await McpBrowser.launch(self.project_id, conn, headless=self.headless)
+            elif self.engine == "api":
+                state = await self._login_state() if projects.api_settings(self.project)["auth"] == "cookies" else None
+                self.bs = await ApiClient.launch(self.project, self.credentials, state)
             else:
                 state = await self._login_state()
                 self.bs = await BrowserSession.launch(headless=self.headless, record_traffic=True, device=self.device,
@@ -657,15 +690,17 @@ class StudioSession:
                         f"{self._credentials_note()}{self._context_note()}The recorded test has been replayed in "
                         f"the browser:\n{done}\n\n{self.task}\n\nCurrent page state:")
             else:
-                step = new_step("navigate", f"Open {self.url}", self.url, source="system")
-                await self._run_step(step)
+                if self.engine != "api":
+                    step = new_step("navigate", f"Open {self.url}", self.url, source="system")
+                    await self._run_step(step)
                 # a test fixed at its first step starts from scratch with the fix task
                 fixing = self.task.startswith(FIX_TASK)
                 self._say("user", self.task if fixing else self.scenario)
                 text = (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
                         + (f"{self.task}\n\n" if fixing else "") +
                         f"{self._credentials_note()}{self._context_note()}"
-                        "The browser has already opened the application. Current page state:")
+                        + ("The API session is ready. Current state:" if self.engine == "api" else
+                           "The browser has already opened the application. Current page state:"))
             await self._think([{"type": "text", "text": text}] + await self._page_state())
 
     async def _login_state(self) -> dict | None:
@@ -1054,7 +1089,7 @@ class StudioSession:
         self.status = "executing"
         t0 = time.monotonic()
         self._mask(step)
-        builtin = isinstance(self.bs, BrowserSession)
+        builtin = isinstance(self.bs, (BrowserSession, ApiClient))
         dialogs = len(self.bs.dialogs) if builtin else 0
         if builtin:
             self.bs.step_index = len(self.steps)

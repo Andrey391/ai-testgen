@@ -12,7 +12,8 @@ data/projects/<id>/baselines/     visual check baselines (checks.py)
 data/projects/<id>/traffic/*.har  requests recorded while authoring (traffic.py)
 data/projects/<id>/explore/       site maps built by the Planner (explorer.py)
 secrets/projects/<id>/            tokens of MCP connections, login for the app under test,
-                                  API key of the model connection (llm.json)
+                                  API key of the model connection (llm.json), token of the
+                                  application's API for API tests (api.json)
 
 With a shared database the same paths are keys of its rows (fs.py), except tests, tasks, runs
 and model spending: they are rows of their own tables (repo/).
@@ -495,6 +496,60 @@ def clear_llm_key(pid: str) -> None:
     if p:
         p["llm"]["check"], p["llm"]["models"] = None, []
         save(p)
+
+
+# ---------- the API of the application (API tests, apiclient.py) ----------
+
+API_AUTH = ("cookies", "none", "bearer", "header", "login")
+DEFAULT_API = {"base_url": "", "auth": "cookies", "header": "X-API-Key",
+               "login": {"method": "POST", "path": "", "body": "", "token": "$.token", "header": "Authorization"}}
+
+
+def normalize_api(d: dict | None) -> dict:
+    """project.json "api": the API address (empty = the application's URL) and how API tests authorize:
+    cookies (the login test's saved login) | none | bearer (a token) | header (a token in `header`) |
+    login (a request with the account's login; the token from its response goes into login.header)."""
+    d = d if isinstance(d, dict) else {}
+    login = d.get("login") if isinstance(d.get("login"), dict) else {}
+    out = {"base_url": str(d.get("base_url") or "").strip().rstrip("/"),
+           "auth": d.get("auth") if d.get("auth") in API_AUTH else "cookies",
+           "header": str(d.get("header") or DEFAULT_API["header"]).strip()[:100],
+           "login": {k: str(login.get(k) or "").strip()[:2000] or v for k, v in DEFAULT_API["login"].items()}}
+    out["login"]["body"] = str(login.get("body") or "").strip()[:2000]
+    out["login"]["path"] = str(login.get("path") or "").strip()[:500]
+    if out["login"]["method"].upper() not in ("POST", "PUT", "GET"):
+        out["login"]["method"] = "POST"
+    out["login"]["method"] = out["login"]["method"].upper()
+    if out["base_url"] and not re.fullmatch(r"https?://[^\s/]+(/\S*)?", out["base_url"]):
+        raise ValueError("Адрес API должен начинаться с http:// или https://")
+    return out
+
+
+def api_settings(p: dict) -> dict:
+    return normalize_api(p.get("api"))
+
+
+def api_base(p: dict) -> str:
+    """Where API requests go: the API address of the project, else the application's URL."""
+    return api_settings(p)["base_url"] or str(p.get("base_url") or "").strip().rstrip("/")
+
+
+def api_token(pid: str) -> str:
+    return (vault.load(secrets_kind(pid), "api") or {}).get("token", "")
+
+
+def update_api(pid: str, patch: dict, token: str = "", clear_token: bool = False) -> dict:
+    """`token` empty keeps the saved one; it is kept only in the vault."""
+    p = get(pid)
+    if not p:
+        raise KeyError(pid)
+    cur = api_settings(p)
+    p["api"] = normalize_api(cur | {k: v for k, v in patch.items() if k in ("base_url", "auth", "header", "login")})
+    if clear_token:
+        vault.delete(secrets_kind(pid), "api")
+    elif token.strip():
+        vault.save(secrets_kind(pid), "api", {"token": token.strip()})
+    return save(p)
 
 
 # ---------- first start ----------

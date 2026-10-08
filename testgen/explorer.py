@@ -25,7 +25,7 @@ import time
 import uuid
 from urllib.parse import urldefrag, urlparse
 
-from . import fs, knowledge, llm, projects, storage
+from . import fs, knowledge, llm, projects, storage, traffic
 from .browser import BrowserSession
 from .steps import needs_element, perform
 
@@ -145,7 +145,8 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
     result.update({"id": result.get("id") or uuid.uuid4().hex[:10], "project_id": project["id"],
                    "start": start, "at": time.time(), "status": "running", "pages": [], "skipped": 0,
                    "error": ""})
-    bs = await BrowserSession.launch(headless=cfg["headless"])
+    # The requests the pages make go into the API catalog (traffic.catalog): endpoints for API tests.
+    bs = await BrowserSession.launch(headless=cfg["headless"], record_traffic=True)
     try:
         login = find_test(project["id"], cfg.get("login_test", ""))
         if login:
@@ -185,6 +186,7 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
     except Exception as e:
         result.update(status="error", error=str(e).splitlines()[0][:300])
     finally:
+        result["api"] = traffic.endpoints(bs.traffic or [], start)
         await bs.close()
     if result["status"] == "running":
         if learn:

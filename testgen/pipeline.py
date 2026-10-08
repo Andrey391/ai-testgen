@@ -59,6 +59,9 @@ def save_state(pid: str, creds: dict, state: dict) -> None:
 
 def uses_login_state(project: dict, test: dict) -> bool:
     lt = login_test(project["id"])
+    # An API test signs in with the cookies of the login test only when the project's API uses cookies.
+    if test.get("layer") == "api" and projects.api_settings(project)["auth"] != "cookies":
+        return False
     return bool(project["pipeline"]["run"].get("login_once") and lt and lt["id"] != test["id"]
                 and test.get("role") != "module")
 
@@ -128,7 +131,10 @@ async def run_and_record(project: dict, test: dict, headless: bool | None = None
     engine = engine or first_combo[0]
     device = first_combo[1] if device is None else device
     run = run or runs.new(test, trigger, suite_id, user)
-    run.update(browser=engine, device=device)
+    if test.get("layer") == "api":
+        run.update(browser="api", device="")        # no browser: requests to the API
+    else:
+        run.update(browser=engine, device=device)
     creds = storage.credentials(test)
     files = runs.files_dir(run)
     attempts: list[dict] = []
@@ -746,7 +752,8 @@ class Job:
                    or knowledge.account_for(project["id"], f"{sc.get('preconditions', '')}\n{sc['instructions']}"))
         s = StudioSession(project, sc["title"], self.url, scenario, headless=a["headless"],
                           credentials=projects.account_credentials(project["id"], account) if account
-                          else projects.app_credentials(project["id"]), account=account)
+                          else projects.app_credentials(project["id"]), account=account,
+                          engine="api" if sc.get("layer") == "api" else "")
         self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
         outcome = await self._author(project, item, s)
         return await self._authored(project, item, sc, s, outcome)
@@ -758,7 +765,7 @@ class Job:
         self._log(f"«{sc['title']}»: доработка теста «{test['name']}»")
         s = StudioSession(project, test["name"], test["url"], test.get("scenario", ""), headless=a["headless"],
                           credentials=storage.credentials(test), base_steps=test["steps"],
-                          task=reuse.REFINE_TASK.format(scenario=scenario_text(sc)))
+                          task=reuse.REFINE_TASK.format(scenario=scenario_text(sc)), engine=agent.test_engine(test))
         s.test_id = test["id"]
         outcome = await self._author(project, item, s)
         steps = s.to_test()["steps"] if outcome == "done" else []
@@ -843,7 +850,7 @@ class Job:
         a = project["pipeline"]["authoring"]
         s = StudioSession(project, name, test["url"], test.get("scenario", ""), headless=a["headless"],
                           credentials=storage.credentials(test), base_steps=test["steps"],
-                          task=mutations.improvement_task(res))
+                          task=mutations.improvement_task(res), engine=agent.test_engine(test))
         s.test_id = test["id"]
         outcome = await self._author(project, item, s)
         if outcome != "done" or s.finish_status != "passed":
