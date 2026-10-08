@@ -247,7 +247,9 @@ DATA_TOOL = _tool(
     "or one this test creates and keeps, with what it requires, its lifecycle and the role it belongs to as you saw "
     "them; data the model lists as needed becomes data on the stand. Call it when you "
     "find or create such an object; for an object created with {{unique}} name the kind (\"a new order of the "
-    "customer\") and how it is created. Never passwords.", {
+    "customer\") and how it is created. A user account the test registered or found that tests can log in with "
+    "(a customer, a player, a manager): give its `login` and `password` - it becomes a project account of its role. "
+    "Never put passwords into name or details.", {
         "entity": {"type": "string", "description": "Entity of the domain: Product, Category, Order, Customer…"},
         "name": {"type": "string", "description": "The object as the application shows it: «Test product A»."},
         "details": {"type": "string", "description": "What matters for tests: price, settings, links to other objects."},
@@ -255,7 +257,12 @@ DATA_TOOL = _tool(
         "depends_on": {"type": "string", "description": "Entities that must exist before it, comma-separated; or \"\"."},
         "lifecycle": {"type": "string", "description": "States and transitions seen: \"new → paid → shipped\"; or \"\"."},
         "create": {"type": "string", "description": "How and by which role it is created; or \"\"."},
-        "role": {"type": "string", "description": "The role whose object it is or who works with it (Customer); or \"\"."}})
+        "role": {"type": "string", "description": "The role whose object it is or who works with it (Customer); or \"\"."},
+        "login": {"type": "string", "description": "For a user account: its login or email exactly as typed in the "
+                                                   "step, placeholders included (user+{{unique}}@example.com); or \"\"."},
+        "password": {"type": "string", "description": "For a user account: its password as typed in the step "
+                                                      "({{faker.password}}, the literal you typed, {{password}}); "
+                                                      "or \"\". Stored encrypted, never shown to the model again."}})
 # Tools that help the agent but are not recorded as steps.
 HELPERS = {"look", "find_elements", "remember", "test_data"}
 
@@ -1041,13 +1048,25 @@ class StudioSession:
         if name == "test_data":
             item = {k: str(inp.get(k) or "") for k in ("entity", "name", "details", "state", "lifecycle", "create",
                                                  "role")}
-            for secret in testdata.secret_values(self.credentials):
+            # A user account: the values of this run (placeholders expanded) go to the encrypted accounts.
+            login = str(inp.get("login") or "").strip()
+            login = self.bs.expand(login).strip() if login else ""
+            raw = str(inp.get("password") or "")
+            password = self.bs.expand(raw) if login else ""
+            secrets = [*testdata.secret_values(self.credentials), *([password, raw] if password else [])]
+            for secret in sorted({s for s in secrets if s}, key=len, reverse=True):
                 item = {k: v.replace(secret, "***") for k, v in item.items()}
             item["depends_on"] = [x.strip() for x in str(inp.get("depends_on") or "").split(",") if x.strip()]
             try:
-                doc = knowledge.record(self.project_id, item, source=f"Studio: {self.name}")
+                doc = knowledge.record(self.project_id, item, source=f"Studio: {self.name}", login=login,
+                                       password=password)
             except ValueError as e:
                 return str(e)
+            if login:
+                self._say("system", f"🔑 Учётная запись «{login}» добавлена в «Тестовые данные → Учётные записи»"
+                                    + (f" (роль «{item['role']}»)" if item["role"] else ""))
+            if self.project["pipeline"]["requirements"].get("learn_model", True) and knowledge.to_sort(doc):
+                knowledge.sort_soon(self.project)     # its section is in doubt: what is unclear asks a person
             waits = any(p["kind"] == "data" and p["item"]["name"] == " ".join(item["name"].split())
                         for p in doc["pending"])
             self._say("system", f"🗂 Тестовые данные: {item['entity']} «{item['name']}»"

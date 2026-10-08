@@ -39,9 +39,11 @@ a transition the lifecycle does not allow, a precondition missing a dependency).
 """
 from __future__ import annotations
 
+import asyncio
 import difflib
 import hashlib
 import json
+import logging
 import re
 import time
 import uuid
@@ -49,6 +51,8 @@ import uuid
 from pydantic import BaseModel
 
 from . import fs, llm, projects, skills
+
+log = logging.getLogger(__name__)
 
 MAX_MEMORY = 300
 MAX_PENDING = 500
@@ -79,7 +83,7 @@ def _id() -> str:
 
 def empty() -> dict:
     return {"summary": "", "entities": [], "roles": [], "data": [], "memory": [], "pending": [], "distinct": [],
-            "updated": None, "updated_by": "", "confirmed": None}
+            "sorted": [], "updated": None, "updated_by": "", "confirmed": None}
 
 
 def get(pid: str) -> dict:
@@ -115,6 +119,7 @@ def normalize(doc: dict) -> dict:
     out["pending"] = [p for p in (_clean_pending(x) for x in doc.get("pending") or [] if isinstance(x, dict)) if p]
     out["pending"] = out["pending"][-MAX_PENDING:]
     out["distinct"] = [str(x)[:16] for x in doc.get("distinct") or [] if x][-MAX_PENDING:]
+    out["sorted"] = [str(x)[:16] for x in doc.get("sorted") or [] if x][-LIMITS["data"]:]
     c = doc.get("confirmed")
     out["confirmed"] = {k: c.get(k) for k in ("at", "by", "sig")} if isinstance(c, dict) and c.get("sig") else None
     return out
@@ -129,7 +134,8 @@ def _clean_pending(p: dict) -> dict | None:
     if not item or not changes:
         return None
     return {"id": str(p.get("id") or _id())[:16], "kind": kind, "target": str(p.get("target") or "")[:16],
-            "match": "similar" if p.get("match") == "similar" else "same", "item": item, "changes": changes,
+            "match": p.get("match") if p.get("match") in ("similar", "sort") else "same", "item": item, "changes": changes,
+            "reason": str(p.get("reason") or "")[:500],
             "before": {f: v for f, v in (p.get("before") or {}).items() if f in changes},
             "source": str(p.get("source") or "")[:200], "at": p.get("at") or time.time()}
 
@@ -140,7 +146,7 @@ def save(pid: str, doc: dict, user: str = "") -> dict:
     name) is not added twice: it becomes an update of the stored record that the person confirms."""
     with fs.lock(_path(pid)):
         stored = get(pid)
-        out = normalize(doc | {k: stored[k] for k in ("confirmed", "pending", "distinct")})
+        out = normalize(doc | {k: stored[k] for k in ("confirmed", "pending", "distinct", "sorted")})
         for kind in ("entities", "roles", "data"):
             known = {x["id"] for x in stored[kind]}
             fresh = [x for x in out[kind] if x["id"] not in known]
@@ -494,22 +500,176 @@ async def extract(project: dict, requirements: str, user: str = "", source: str 
         raise RuntimeError("Модель не смогла выделить сущности из требований")
     found = reply.parsed.model_dump()
     found["data"] = [d | {"source": label} for d in found.get("data") or []]
-    return merge(pid, found, user, source=label)
+    out = merge(pid, found, user, source=label)
+    try:                            # the stand data in doubt goes to its section; what is unclear asks a person
+        if to_sort(out):
+            await sort(project, user=user)
+            out = get(pid)
+    except Exception as e:          # the model is built; sorting waits for the next time or the button
+        log.warning("Разбор данных стенда не удался: %s", e)
+    return out
 
 
-def record(pid: str, item: dict, source: str) -> dict:
+def record(pid: str, item: dict, source: str, login: str = "", password: str = "") -> dict:
     """Test data a test found or created (the agent's `test_data` tool): the record joins the stand
-    data (by entity and name), its entity - the entities, with the dependencies and lifecycle seen."""
+    data (by entity and name), its entity - the entities, with the dependencies and lifecycle seen.
+    A user account a test registered or found (`login`, `password` - real values, not placeholders)
+    becomes a project account (the password only in the encrypted store), the record points to it and
+    so does its role when the role has no account yet."""
     entity = " ".join(str(item.get("entity") or "").split())
     name = " ".join(str(item.get("name") or "").split())
     if not entity or not name:
         raise ValueError("Укажите сущность и объект")
     depends = item.get("depends_on") or []
+    account = projects.ensure_account(pid, name, login.strip(), password) if login.strip() else ""
     found = {"data": [{"entity": entity, "name": name, "details": item.get("details") or "",
-                       "state": item.get("state") or "", "role": item.get("role") or "", "source": source}],
+                       "state": item.get("state") or "", "role": item.get("role") or "", "source": source,
+                       "account": account}],
              "entities": [{"name": entity, "depends_on": depends if isinstance(depends, list) else str(depends).split(","),
                            "lifecycle": item.get("lifecycle") or "", "create": item.get("create") or ""}]}
-    return merge(pid, found, source=source)
+    doc = merge(pid, found, source=source)
+    if account:
+        doc = attach_account(pid, entity, name, account, item.get("role") or "")
+    return doc
+
+
+def attach_account(pid: str, entity: str, name: str, account: str, role: str = "") -> dict:
+    """A stand data record is a project account: the record points to it (a stored record repeated by
+    a test too - the link is no lifecycle change for a person to confirm), and its role logs in with it
+    when the role has no account yet."""
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        x, _ = _find(doc, "data", {"entity": _entity_name(doc, entity), "name": name})
+        if x is not None:
+            x["account"] = account
+            role = role or x["role"]
+        r = find_role(doc, role)
+        if r is not None and r["account"] not in set(_accounts(pid)) | {NO_LOGIN}:
+            r["account"] = account
+        fs.write_json(_path(pid), doc, indent=1)
+    return doc
+
+
+USERISH = re.compile(r"польз|user|аккаунт|account|учётн|учетн|игрок|player|клиент|customer|покупател|сотрудник|"
+                     r"employee|участник|member|админ|admin|login|логин")
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+def to_sort(doc: dict) -> list[dict]:
+    """Stand data whose section is in doubt and that nobody sorted yet: its category is no entity of the
+    model, or it is a user (one logs in as) without a role."""
+    names = {e["name"] for e in doc["entities"]}
+    done = set(doc["sorted"])
+    return [d for d in doc["data"] if d["id"] not in done
+            and (d["entity"] not in names
+                 or not d["role"] and (d["account"] or USERISH.search(d["entity"].lower())
+                                       or EMAIL.search(f"{d['name']} {d['details']}")))]
+
+
+class XSorted(BaseModel):
+    id: str
+    entity: str
+    role: str
+    account: bool
+    sure: bool
+    reason: str
+
+
+class XSort(BaseModel):
+    items: list[XSorted]
+
+
+SORT = """You sort the test data of the stand into the sections of the application model. For each record decide: `entity` - the entity of the model the record is an object of: exactly one of the listed entity names ("" when none fits; a user's profile, a player and a user account are objects of the entity of users the model has); `role` - when the record is a user one logs in as (an account, a registered player or customer, an administrator), exactly one of the listed role names it has ("" when it is not a user or the text does not say); `account` - true when the record is a user one can log in as; `sure` - false when the record fits several entities or roles, or the text does not say enough to decide; `reason` - one short sentence in the language of the records: why the record goes there, or what is in doubt. Return every record you were given, with its id."""
+SORT_BATCH = 60
+
+
+async def sort(project: dict, ids: list[str] | None = None, user: str = "") -> dict:
+    """The stand data sorted into the sections of the model (entities and the roles of users): a change the
+    model is sure of is made at once, one it doubts waits in `pending` for a person (match "sort", with its
+    reason). `ids` - these records (None - every record whose section is in doubt, to_sort())."""
+    pid = project["id"]
+    doc = get(pid)
+    records = [d for d in doc["data"] if d["id"] in ids] if ids is not None else to_sort(doc)
+    entities, roles = [e["name"] for e in doc["entities"]], [r["name"] for r in doc["roles"]]
+    if not records or not entities:
+        return {"applied": 0, "asked": 0, "checked": 0}
+    cfg = project["pipeline"]["requirements"]
+    system = SORT + projects.language_rule(project)
+    model = ("Entities of the model:\n" + "\n".join(f"- {e['name']}: {e['description'][:200]}" for e in doc["entities"])
+             + "\n\nRoles of the model:\n" + ("\n".join(f"- {r['name']}: {r['description'][:200]}" for r in doc["roles"]) or "(none)"))
+    found: dict[str, XSorted] = {}
+    for at in range(0, len(records), SORT_BATCH):
+        batch = records[at:at + SORT_BATCH]
+        lines = "\n".join(f"{d['id']} | category: {d['entity']} | {d['name']} | {d['details'][:300]} | role: {d['role']}"
+                          for d in batch)
+        reply = await llm.parse(cfg, system=system, context=model,
+                                messages=[{"role": "user", "content": f"Records (id | category | object | details | role):\n{lines}"}],
+                                schema=XSort, max_tokens=8000, project_id=pid, stage_name="requirements")
+        for x in (reply.parsed.items if reply.parsed else []):
+            found[x.id] = x
+    applied = asked = 0
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        names = {norm(n): n for n in entities}
+        role_names = {norm(n): n for n in roles}
+        waiting = {p["target"] for p in doc["pending"] if p["kind"] == "data"}
+        for d in doc["data"]:
+            x = found.get(d["id"])
+            if x is None:
+                continue
+            changes = {}
+            entity, role = names.get(norm(x.entity), ""), role_names.get(norm(x.role), "")
+            if entity and entity != d["entity"]:
+                changes["entity"] = entity
+            if role and x.account and norm(role) != norm(d["role"]):
+                changes["role"] = role
+            # Nothing of the model fits: the record keeps its category («не сущность модели» for a person).
+            sure = x.sure and bool(entity or d["entity"] in names.values())
+            if changes and sure:
+                _apply(d, changes)
+                applied += 1
+            elif changes and d["id"] not in waiting:
+                doc["pending"].append({"id": _id(), "kind": "data", "target": d["id"], "match": "sort",
+                                       "item": d | changes, "changes": changes, "before": {f: d[f] for f in changes},
+                                       "reason": x.reason, "source": "разбор по разделам", "at": time.time()})
+                asked += 1
+            doc["sorted"].append(d["id"])
+        out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
+        fs.write_json(_path(pid), out, indent=1)
+    return {"applied": applied, "asked": asked, "checked": len(found)}
+
+
+_SORTING: dict[str, bool] = {}     # project -> another record came while it was sorting
+
+
+def sort_soon(project: dict) -> None:
+    """sort() in the background of the running loop (a test records data while it goes on): one sorting
+    per project at a time, records added meanwhile are sorted right after it."""
+    pid = project["id"]
+    if pid in _SORTING:
+        _SORTING[pid] = True
+        return
+    _SORTING[pid] = False
+
+    async def run():
+        try:
+            while True:
+                await sort(project)
+                if not _SORTING.get(pid):
+                    break
+                _SORTING[pid] = False
+        except Exception as e:
+            log.warning("Разбор данных стенда не удался: %s", e)
+        finally:
+            _SORTING.pop(pid, None)
+    asyncio.get_running_loop().create_task(run())
+
+
+def _entity_name(doc: dict, entity: str) -> str:
+    """The data's category: the model's entity the name means («Игроки» - «Игрок»), else the name itself."""
+    entity = " ".join(str(entity or "").split())
+    return (next((e["name"] for e in doc["entities"] if norm(e["name"]) == norm(entity)), None)
+            or next((e["name"] for e in doc["entities"] if similar(e["name"], entity)), entity))
 
 
 def norm(text: str) -> str:
@@ -634,6 +794,8 @@ def merge(pid: str, found: dict, user: str = "", source: str = "") -> dict:
             for item in found.get(kind) or []:
                 item = _clean_item(kind, item)
                 if item and item["name"]:
+                    if kind == "data":       # one category per entity of the model, however a finding names it
+                        item["entity"] = _entity_name(doc, item["entity"])
                     _join(doc, kind, item, item.get("source") or source or user, added)
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)

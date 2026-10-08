@@ -385,6 +385,67 @@ def test_an_account_is_linked_to_its_roles_from_the_account_form(monkeypatch):
     assert all(not r["account"] for r in knowledge.get(pid)["roles"]) and knowledge.is_confirmed(pid)
 
 
+def test_a_user_a_test_registers_becomes_an_account_of_its_role():
+    pid = _project()["id"]
+    knowledge.save(pid, SHOP)
+    doc = knowledge.record(pid, {"entity": "Покупатели", "name": "Иван Иванов", "details": "пароль Secret-123, город Москва",
+                                 "role": "покупатель"}, "Studio: Регистрация", login="ivan@example.com", password="Secret-123")
+    acc = next(a for a in projects.accounts_view(pid) if a["username"] == "ivan@example.com")
+    assert acc["name"] == "Иван Иванов" and acc["has_password"]
+    assert projects.account_credentials(pid, acc["id"])["password"] == "Secret-123"
+    d = next(x for x in doc["data"] if x["name"] == "Иван Иванов")
+    assert d["account"] == acc["id"] and {r["name"]: r["account"] for r in doc["roles"]}["Покупатель"] == acc["id"]
+
+    # The same login again: the same account, the role keeps it; a role with an account is not taken over.
+    knowledge.record(pid, {"entity": "Покупатель", "name": "Иван", "role": "Покупатель"}, "Studio: Вход",
+                     login="IVAN@example.com", password="Secret-456")
+    assert len(projects.accounts_view(pid)) == 1
+    assert projects.account_credentials(pid, acc["id"])["password"] == "Secret-456"
+    other = projects.save_account(pid, {"name": "Менеджер", "username": "man"})["id"]
+    knowledge.link_account(pid, other, [r["id"] for r in knowledge.get(pid)["roles"] if r["name"] == "Менеджер"])
+    knowledge.record(pid, {"entity": "Сотрудник", "name": "Пётр", "role": "Менеджер"}, "t", login="petr", password="x")
+    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]}["Менеджер"] == other
+
+
+def test_stand_data_goes_to_the_entity_of_the_model():
+    pid = _project()["id"]
+    knowledge.save(pid, SHOP)
+    doc = knowledge.merge(pid, {"data": [{"entity": "заказы", "name": "Заказ 1"}, {"entity": "Склад", "name": "Основной"}]})
+    assert {d["name"]: d["entity"] for d in doc["data"]} == {"Заказ 1": "Заказ", "Основной": "Склад"}
+    assert [d["name"] for d in knowledge.to_sort(doc)] == ["Основной"]
+
+
+def test_stand_data_is_sorted_and_a_doubt_asks_a_person(fake_llm):
+    p = _project()
+    pid = p["id"]
+    projects.update_llm(pid, {"model": "test-model", "effort": "medium"})
+    knowledge.save(pid, SHOP | {"data": [{"entity": "User", "name": "buyer@example.com"},
+                                         {"entity": "Склад", "name": "Основной склад"},
+                                         {"entity": "Item", "name": "Тестовый товар"}]})
+    ids = {d["name"]: d["id"] for d in knowledge.get(pid)["data"]}
+    asked = []
+
+    def script(kind, kw):
+        asked.append(kw["messages"][-1]["content"])
+        return Resp(parsed=knowledge.XSort(items=[
+            knowledge.XSorted(id=ids["buyer@example.com"], entity="Заказ", role="Покупатель", account=True, sure=False,
+                              reason="пользователь, но сущности пользователей в модели нет"),
+            knowledge.XSorted(id=ids["Тестовый товар"], entity="Товар", role="", account=False, sure=True, reason="товар"),
+            knowledge.XSorted(id=ids["Основной склад"], entity="", role="", account=False, sure=False, reason="нет такой сущности")]))
+    fake_llm.script = script
+    res = arun(knowledge.sort(projects.get(pid)))
+    assert res == {"applied": 1, "asked": 1, "checked": 3}
+    doc = knowledge.get(pid)
+    by = {d["name"]: d for d in doc["data"]}
+    assert by["Тестовый товар"]["entity"] == "Товар" and by["buyer@example.com"]["entity"] == "User"
+    [p_] = doc["pending"]
+    assert p_["match"] == "sort" and p_["changes"] == {"entity": "Заказ", "role": "Покупатель"} and "нет" in p_["reason"]
+    doc = knowledge.resolve(pid, [p_["id"]], "accept")
+    assert {d["name"]: d["role"] for d in doc["data"]}["buyer@example.com"] == "Покупатель"
+    # What was sorted is not sent to the model again.
+    assert arun(knowledge.sort(projects.get(pid)))["checked"] == 0 and len(asked) == 1
+
+
 def test_a_scenario_breaking_the_lifecycle_does_not_start(fake_llm, monkeypatch):
     import server
     v = {"rule": "Покупатель не видит чужие заказы", "problem": "сценарий ждёт, что покупатель откроет чужой заказ",

@@ -211,6 +211,7 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/knowledge/extract"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/confirm"): "knowledge.confirm",
     ("POST", "/api/projects/{pid}/knowledge/pending"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/knowledge/sort"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/duplicates"): "knowledge.save",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
     ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
@@ -2470,6 +2471,25 @@ async def resolve_knowledge(pid: str, body: PendingBody, request: Request):
         return knowledge.resolve(pid, None if body.all else body.ids, body.action, request.state.user)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class SortBody(BaseModel):
+    all: bool = False       # every stand data record, not only those whose section is in doubt
+
+
+@app.post("/api/projects/{pid}/knowledge/sort")
+async def sort_knowledge(pid: str, request: Request, body: SortBody | None = None):
+    """The stand data sorted into the sections of the model (entities, the roles of users): what the model
+    is sure of is changed, what it doubts waits in «Обновления» for a person."""
+    p = project(pid, "editor")
+    _require_model(p)
+    doc = knowledge.get(pid)
+    ids = [d["id"] for d in doc["data"]] if body and body.all else None
+    try:
+        res = await knowledge.sort(p, ids, request.state.user)
+    except llm.ProviderError as e:
+        raise HTTPException(502, str(e))
+    return knowledge.view(pid) | {"sorting": res}
 
 
 @app.get("/api/projects/{pid}/knowledge/duplicates")

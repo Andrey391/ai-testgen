@@ -237,6 +237,8 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
     knowledge.save(pid, {"data": [{"entity": "Категория", "name": "Категория 1", "details": "написали люди"}]})
 
     def script(kind, kw):
+        if "You sort the test data" in dump(kw["system"]):      # the stand data in doubt is sorted after it
+            return Resp(parsed=knowledge.XSort(items=[]))
         return Resp(parsed=knowledge.XModel(
             summary="Интернет-магазин", roles=[knowledge.XRole(name="Покупатель", description="оформляет заказы")],
             entities=[knowledge.XEntity(name="Товар", description="", depends_on=["Категория"], lifecycle="",
@@ -248,7 +250,8 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
                                                   "text": "Тестовый товар А — 1000 ₽, в наличии"}]}
     logs = []
     arun(explorer.learn_model(p, m, logs.append))
-    assert "Map of the site" in dump(fake_llm.calls[-1][1]) and "Тестовый товар А" in dump(fake_llm.calls[-1][1])
+    extract = next(c for c in fake_llm.calls if "Map of the site" in dump(c[1]))
+    assert "Тестовый товар А" in dump(extract[1])
     doc = knowledge.get(pid)
     item = next(d for d in doc["data"] if d["name"] == "Тестовый товар А")
     assert item["state"] == "в наличии" and item["source"] == "Planner" and "обновлена" in logs[-1]
@@ -257,7 +260,8 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
     # The authoring agent records what a test found or created: the record is refreshed, the entity learns.
     say = []
     fake = SimpleNamespace(project_id=pid, name="Оформление заказа", credentials={"password": "pw-secret"},
-                           _say=lambda who, msg: say.append(msg))
+                           _say=lambda who, msg: say.append(msg),
+                           project={"id": pid, "pipeline": {"requirements": {"learn_model": False}}})
     out = arun(StudioSession._helper(fake, "test_data", {
         "entity": "Товар", "name": "Тестовый товар А", "state": "нет в наличии", "details": "pw-secret",
         "depends_on": "Категория, Склад", "lifecycle": "в наличии → нет в наличии"}))
@@ -274,6 +278,20 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
     assert "Тестовый товар А" in text_ and "found by: Studio: Оформление заказа" in text_
     assert "test_data" in agent.HELPERS and agent.DATA_TOOL["name"] == "test_data"
     assert arun(StudioSession._helper(fake, "test_data", {"entity": "Товар"})) == "Укажите сущность и объект"
+
+    # A user the test registered: the values of the run go to an encrypted project account of its role.
+    knowledge.save(pid, knowledge.get(pid))
+    fake.bs = SimpleNamespace(expand=lambda v: v.replace("{{unique}}", "42").replace("{{faker.password}}", "Gen-Pass-9"))
+    out = arun(StudioSession._helper(fake, "test_data", {
+        "entity": "Покупатель", "name": "Иван", "details": "вошёл с паролем Gen-Pass-9", "role": "Покупатель",
+        "login": "ivan+{{unique}}@example.com", "password": "{{faker.password}}"}))
+    assert out.startswith("Recorded") and "Учётная запись «ivan+42@example.com»" in say[-2]
+    acc = next(a for a in projects.accounts_view(pid) if a["username"] == "ivan+42@example.com")
+    assert projects.account_credentials(pid, acc["id"])["password"] == "Gen-Pass-9"
+    doc = knowledge.get(pid)
+    item = next(d for d in doc["data"] if d["name"] == "Иван")
+    assert item["account"] == acc["id"] and "Gen-Pass-9" not in json.dumps(doc, ensure_ascii=False)
+    assert next(r for r in doc["roles"] if r["name"] == "Покупатель")["account"] == acc["id"]
 
 
 def test_screen_size_of_a_run():
