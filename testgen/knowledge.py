@@ -7,10 +7,17 @@ data/projects/<id>/knowledge.json:
                their lifecycle (states and transitions), how one is created, business rules.
                Online shop: an order depends on a product in stock and a customer with a delivery
                address; it goes new → paid → shipped → delivered.
-    roles      roles of users and the project account (projects.accounts) that has each role
+    roles      roles of users: what each may do (`capabilities`) and may not (`restrictions`), and the
+               project account (projects.accounts) that has the role
     data       test data that exists on the test stand: "product «Test product A», in stock: 10";
-               `source` - who found it automatically ("" - people wrote it)
+               `source` - who found it automatically ("" - people wrote it); `status` "needed" - data
+               the scenarios need that nobody has seen on the stand yet (`needed_by` - the scenarios):
+               the first test that prepares or finds it records it, and the next ones reuse it
     memory     facts learned while working: the agent's `remember` tool, people, events
+    confirmed  who confirmed the lifecycle of the system (entities, dependencies, lifecycles, roles
+               and their capabilities) and its signature: tests are generated only from a confirmed
+               model (the setting "requirements.confirm_model", the pipeline waits for it); a change
+               of what was confirmed asks for a new confirmation (confirmation())
 
 It builds itself as the studio works (the setting "requirements.learn_model"): every analysis of
 requirements and every exploration of the site (Planner) adds entities, roles and the data seen on
@@ -23,21 +30,27 @@ analysis tells a missing precondition from a product bug.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import uuid
 
 from pydantic import BaseModel
 
-from . import fs, llm, projects
+from . import fs, llm, projects, skills
 
 MAX_MEMORY = 300
 MAX_TEXT = 4000
 LIMITS = {"entities": 200, "roles": 50, "data": 300}
 FIELDS = {
     "entities": ("name", "description", "depends_on", "lifecycle", "create", "rules"),
-    "roles": ("name", "description", "account"),
-    "data": ("entity", "name", "details", "account", "state", "source"),
+    "roles": ("name", "description", "capabilities", "restrictions", "account"),
+    "data": ("entity", "name", "details", "account", "state", "role", "source", "status", "needed_by"),
 }
+LISTS = ("depends_on", "needed_by")
+# What a confirmation of the lifecycle covers: a change of these asks for a new one.
+CONFIRMED = {"entities": ("name", "depends_on", "lifecycle", "create", "rules"),
+             "roles": ("name", "capabilities", "restrictions")}
 
 
 def _path(pid: str):
@@ -49,20 +62,25 @@ def _id() -> str:
 
 
 def empty() -> dict:
-    return {"summary": "", "entities": [], "roles": [], "data": [], "memory": [], "updated": None, "updated_by": ""}
+    return {"summary": "", "entities": [], "roles": [], "data": [], "memory": [], "updated": None, "updated_by": "",
+            "confirmed": None}
 
 
 def get(pid: str) -> dict:
-    return empty() | (fs.read_json(_path(pid)) or {})
+    """The stored model with every field of this version (a model saved before has fewer)."""
+    raw = fs.read_json(_path(pid)) or {}
+    return normalize(raw) | {"updated": raw.get("updated"), "updated_by": raw.get("updated_by") or ""}
 
 
 def _clean_item(kind: str, item: dict) -> dict | None:
     out = {"id": str(item.get("id") or "")[:16] or _id()}
     for f in FIELDS[kind]:
         v = item.get(f)
-        if f == "depends_on":
+        if f in LISTS:
             v = v if isinstance(v, list) else str(v or "").split(",")
-            out[f] = [str(x).strip()[:120] for x in v if str(x).strip()][:20]
+            out[f] = list(dict.fromkeys(str(x).strip()[:120] for x in v if str(x).strip()))[:20]
+        elif f == "status":
+            out[f] = "needed" if v == "needed" else ""
         else:
             out[f] = str(v or "").strip()[:MAX_TEXT]
     return out if out.get("name") or out.get("details") else None
@@ -78,13 +96,68 @@ def normalize(doc: dict) -> dict:
                       "source": str(m.get("source") or "")[:200], "at": m.get("at") or time.time()}
                      for m in doc.get("memory") or [] if isinstance(m, dict) and str(m.get("text") or "").strip()]
     out["memory"] = out["memory"][-MAX_MEMORY:]
+    c = doc.get("confirmed")
+    out["confirmed"] = {k: c.get(k) for k in ("at", "by", "sig")} if isinstance(c, dict) and c.get("sig") else None
     return out
 
 
 def save(pid: str, doc: dict, user: str = "") -> dict:
-    out = normalize(doc) | {"updated": time.time(), "updated_by": user}
-    fs.write_json(_path(pid), out, indent=1)
+    """What people wrote; the confirmation stays the stored one (confirm() gives it)."""
+    with fs.lock(_path(pid)):
+        out = normalize(doc | {"confirmed": get(pid)["confirmed"]}) | {"updated": time.time(), "updated_by": user}
+        fs.write_json(_path(pid), out, indent=1)
+    return view(pid)
+
+
+def signature(doc: dict) -> str:
+    """The lifecycle of the system as confirmed: entities, dependencies, lifecycles, roles and their capabilities."""
+    part = {kind: sorted(([" ".join(str(x.get(f) or "").split()).lower() if f not in LISTS
+                           else sorted(str(v).strip().lower() for v in x.get(f) or []) for f in fields]
+                          for x in doc.get(kind) or []), key=str)
+            for kind, fields in CONFIRMED.items()}
+    return hashlib.sha256(json.dumps(part, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def missing(doc: dict) -> list[str]:
+    """What the model lacks to be confirmed: the lifecycle of the system and who works with it."""
+    out = []
+    if not doc["entities"]:
+        out.append("нет сущностей")
+    elif not any(e["lifecycle"] for e in doc["entities"]):
+        out.append("ни у одной сущности не описан жизненный цикл")
+    if not doc["roles"]:
+        out.append("нет ролей пользователей (если входа нет — роль «Гость»)")
+    elif not any(r["capabilities"] for r in doc["roles"]):
+        out.append("у ролей не описаны возможности")
     return out
+
+
+def confirmation(doc: dict) -> dict:
+    """state: none - never confirmed | changed - changed since the confirmation | confirmed."""
+    c = doc.get("confirmed")
+    state = "none" if not c else "confirmed" if c["sig"] == signature(doc) else "changed"
+    return {"state": state, "at": (c or {}).get("at"), "by": (c or {}).get("by", ""), "missing": missing(doc)}
+
+
+def view(pid: str) -> dict:
+    doc = get(pid)
+    return doc | {"confirmation": confirmation(doc)}
+
+
+def is_confirmed(pid: str) -> bool:
+    return confirmation(get(pid))["state"] == "confirmed"
+
+
+def confirm(pid: str, user: str = "") -> dict:
+    """A person confirms the lifecycle of the system: tests may be generated from it."""
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        lacks = missing(doc)
+        if lacks:
+            raise ValueError("Модель нельзя подтвердить: " + "; ".join(lacks))
+        doc["confirmed"] = {"at": time.time(), "by": user, "sig": signature(doc)}
+        fs.write_json(_path(pid), doc, indent=1)
+    return view(pid)
 
 
 def remember(pid: str, text: str, source: str = "") -> dict:
@@ -132,17 +205,30 @@ def prompt(pid: str, limit: int = 12000) -> str:
             lines += parts
     if doc["roles"]:
         lines.append("Roles:")
-        lines += [f"- {r['name']}" + (f": {r['description']}" if r["description"] else "")
-                  + (f" (project account «{accounts[r['account']]}»)" if r["account"] in accounts else "")
-                  for r in doc["roles"]]
-    if doc["data"]:
+        for r in doc["roles"]:
+            lines.append(f"- {r['name']}" + (f": {r['description']}" if r["description"] else "")
+                         + (f" (project account «{accounts[r['account']]}»)" if r["account"] in accounts else ""))
+            if r["capabilities"]:
+                lines.append(f"  may: {r['capabilities']}")
+            if r["restrictions"]:
+                lines.append(f"  may not: {r['restrictions']}")
+
+    def data_line(d: dict) -> str:
+        return (f"- [{d['entity'] or 'data'}] {d['name']}" + (f" — {d['details']}" if d["details"] else "")
+                + (f"; state: {d['state']}" if d["state"] else "") + (f"; role: {d['role']}" if d["role"] else "")
+                + (f"; found by: {d['source']}" if d["source"] and d["status"] != "needed" else "")
+                + (f"; account «{accounts[d['account']]}»" if d["account"] in accounts else "")
+                + (f"; needed by: {', '.join(d['needed_by'][:5])}" if d["needed_by"] else ""))
+    stand = [d for d in doc["data"] if d["status"] != "needed"]
+    needed = [d for d in doc["data"] if d["status"] == "needed"]
+    if stand:
         lines.append("Test data on the stand (reuse it; found by: Planner - the site map, Studio - a test that "
                      "found or created it):")
-        lines += [f"- [{d['entity'] or 'data'}] {d['name']}" + (f" — {d['details']}" if d["details"] else "")
-                  + (f"; state: {d['state']}" if d["state"] else "")
-                  + (f"; found by: {d['source']}" if d["source"] else "")
-                  + (f"; account «{accounts[d['account']]}»" if d["account"] in accounts else "")
-                  for d in doc["data"]]
+        lines += [data_line(d) for d in stand]
+    if needed:
+        lines.append("Test data the scenarios need that nobody has seen on the stand yet (find it or prepare it, "
+                     "then record it with `test_data` so later tests reuse it):")
+        lines += [data_line(d) for d in needed]
     if doc["memory"]:
         lines.append("Remembered facts (newest last):")
         lines += [f"- {m['text']}" for m in doc["memory"][-40:]]
@@ -177,6 +263,8 @@ class XEntity(BaseModel):
 class XRole(BaseModel):
     name: str
     description: str
+    capabilities: str = ""
+    restrictions: str = ""
 
 
 class XData(BaseModel):
@@ -193,7 +281,7 @@ class XModel(BaseModel):
     data: list[XData] = []
 
 
-EXTRACT = """You are a business analyst. From the requirements, build the model of the application under test that a test engineer needs to prepare correct test data: the domain entities, for each one which other entities (or settings of them) must exist before it can be created (`depends_on`, by entity names), its lifecycle (states and allowed transitions, e.g. "new → paid → shipped → delivered; a shipped order cannot be cancelled"), how and by which role it is created, and its business rules; the roles of users and what each may do. Example: in an online shop "Order" depends on "Product" (in stock) and "Customer" (with a delivery address), the customer creates it at checkout; "Product" depends on "Category", the shop manager creates it.
+EXTRACT = """You are a business analyst. From the requirements, build the model of the application under test that a test engineer needs to prepare correct test data: the domain entities, for each one which other entities (or settings of them) must exist before it can be created (`depends_on`, by entity names), its lifecycle (states and allowed transitions, e.g. "new → paid → shipped → delivered; a shipped order cannot be cancelled"), how and by which role it is created, and its business rules; the roles of users with their capabilities (what each role may do: which entities it sees, creates, changes, moves to which state) and restrictions (what it may not do). Write a lifecycle with the role that makes each transition: "new → paid (customer) → shipped (shop manager) → delivered; a shipped order cannot be cancelled". Example: in an online shop "Order" depends on "Product" (in stock) and "Customer" (with a delivery address), the customer creates it at checkout; "Product" depends on "Category", the shop manager creates it; the role "Customer" may: browse the catalog, create and pay own orders, cancel an unpaid order; may not: see other customers' orders, change prices. When the application has no login, the role is "Guest".
 
 Take only what the text says or clearly implies; leave a field empty when unknown. Merge with the model you are given: keep its entities and roles (by name) and add what is new. Write in the language of the text."""
 
@@ -209,7 +297,9 @@ async def extract(project: dict, requirements: str, user: str = "", source: str 
     cfg = project["pipeline"]["requirements"]
     title, extra, label = SOURCES[source]
     current = prompt(pid)
-    reply = await llm.parse(cfg, system=EXTRACT + (f"\n\n{extra}" if extra else "") + projects.language_rule(project),
+    system = (EXTRACT + (f"\n\n{extra}" if extra else "") + projects.language_rule(project)
+              + skills.prompt(pid, cfg.get("model_skills") or []))
+    reply = await llm.parse(cfg, system=system,
                             context=f"{title}:\n{requirements[:150_000]}",
                             messages=[{"role": "user", "content": (f"The current model:\n{current}\n\n" if current
                                                                    else "") + "Build the application model."}],
@@ -230,7 +320,7 @@ def record(pid: str, item: dict, source: str) -> dict:
         raise ValueError("Укажите сущность и объект")
     depends = item.get("depends_on") or []
     found = {"data": [{"entity": entity, "name": name, "details": item.get("details") or "",
-                       "state": item.get("state") or "", "source": source}],
+                       "state": item.get("state") or "", "role": item.get("role") or "", "source": source}],
              "entities": [{"name": entity, "depends_on": depends if isinstance(depends, list) else str(depends).split(","),
                            "lifecycle": item.get("lifecycle") or "", "create": item.get("create") or ""}]}
     return merge(pid, found)
@@ -261,7 +351,7 @@ def merge(pid: str, found: dict, user: str = "") -> dict:
                     known[item["name"].lower()] = item
                     continue
                 for f in FIELDS[kind]:
-                    if f == "depends_on":
+                    if f in LISTS:
                         old[f] = list(dict.fromkeys(old.get(f, []) + item[f]))
                     elif not old.get(f) and item.get(f):
                         old[f] = item[f]
@@ -275,11 +365,34 @@ def merge(pid: str, found: dict, user: str = "") -> dict:
                 doc["data"].append(item)
                 known[_data_key(item)] = item
                 continue
+            old["needed_by"] = list(dict.fromkeys(old["needed_by"] + item["needed_by"]))[:20]
+            if item["status"] == "needed":      # one more scenario needs it: what it has is kept
+                for f in ("details", "state", "role"):
+                    old[f] = old[f] or item[f]
+                continue
+            if old["status"] == "needed":       # a test found or prepared it: it is on the stand now
+                old["status"], old["source"] = "", item["source"] or "тест"
             if old["source"]:
                 old["source"] = item["source"] or old["source"]
-            for f in ("details", "state"):
+            for f in ("details", "state", "role"):
                 if item[f] and (old["source"] or not old[f]):
                     old[f] = item[f]
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)
     return out
+
+
+def need(pid: str, scenarios: list[dict]) -> dict:
+    """The test data the scenarios need (`test_data` of a scenario) joins the model: data on the stand
+    gets the scenarios that rely on it, unknown data is added as "needed" - the first test that finds or
+    prepares it records it (record()), the next ones reuse it. Roles the scenarios act as join the roles."""
+    data, roles = [], []
+    for sc in scenarios:
+        title = str(sc.get("title") or "").strip()
+        for d in sc.get("test_data") or []:
+            if isinstance(d, dict) and d.get("entity") and d.get("name"):
+                data.append({k: d.get(k) or "" for k in ("entity", "name", "details", "state", "role")}
+                            | {"status": "needed", "needed_by": [title] if title else []})
+        if str(sc.get("role") or "").strip():
+            roles.append({"name": sc["role"]})
+    return merge(pid, {"data": data, "roles": roles})

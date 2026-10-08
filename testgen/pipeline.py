@@ -24,8 +24,8 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import (analyses, audit, explorer, fs, knowledge, llm, mcp_hub, mutations, notify, projects, publisher, runner,
-               runs, scenarios, sources, storage, validation, vault)
+from . import (analyses, audit, explorer, fs, knowledge, llm, mcp_hub, mutations, notify, projects, publisher, reuse,
+               runner, runs, scenarios, sources, storage, validation, vault)
 from . import agent
 from .agent import StudioSession, has_assertion
 
@@ -300,7 +300,8 @@ class Job:
         self.design = {k: list(v) for k, v in (design or {}).items() if k in ("types", "layers", "techniques")}
         self.validation: dict | None = None     # the specification checked against the documentation standard
         self.sessions = sessions
-        self.status = "running"     # running | awaiting_selection | done | error | cancelled
+        # running | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
+        self.status = "running"
         self.stage = "requirements"
         self.created = time.time()
         self.finished = None
@@ -312,6 +313,7 @@ class Job:
         self.error = ""
         self.usage: dict = {}
         self._selected = asyncio.Event()
+        self._wake = asyncio.Event()        # the application model may have been confirmed
         self._cancel = False
         self._session: StudioSession | None = None
 
@@ -324,9 +326,32 @@ class Job:
                       if 0 <= i < len(self.scenarios)]
         self._selected.set()
 
+    def model_confirmed(self) -> None:
+        self._wake.set()
+
+    def session_saved(self, sid: str, test: dict) -> None:
+        """A person finished in Studio the session of an item and saved its test (call on the worker loop)."""
+        if _saved_item(self.state(), sid, test):
+            self._log(f"Тест «{test['name']}» сохранён в Studio: сценарий готов")
+
+    def decide(self, decisions: dict[int, str]) -> None:
+        """What to do with scenarios similar to earlier ones (reuse.DECISIONS), by item index."""
+        for i, d in decisions.items():
+            if 0 <= i < len(self.items) and self.items[i].get("match") and d in reuse.DECISIONS:
+                self.items[i]["match"]["decision"] = d
+                sc = self.given[i] if self.given and len(self.given) == len(self.items) else {}
+                if sc.get("analysis_id"):       # the Requirements tab shows the same decision
+                    try:
+                        analyses.update_scenario(self.project_id, sc["analysis_id"], sc["scenario_id"], {"decision": d})
+                    except (KeyError, ValueError):
+                        pass
+        self.save()
+        self._wake.set()
+
     def cancel(self) -> None:
         self._cancel = True
         self._selected.set()
+        self._wake.set()
         if self._session:
             self._session.autopilot = False
 
@@ -356,6 +381,18 @@ class Job:
         job._log(f"Конвейер продолжен ({user or 'студия'}): готовые сценарии не повторяются")
         return job
 
+    @classmethod
+    def retried(cls, project: dict, j: dict, sessions: dict, indices: list[int], user: str = "") -> "Job":
+        """The run goes on (as resumed()) and the given items whose authoring failed start over: a fresh
+        session, no error; the caller has closed their old sessions."""
+        job = cls.resumed(project, j, sessions, user)
+        for i in indices:
+            item = job.items[i]
+            item.update(status="queued", error="", session_id=None, summary="", bug=False)
+        job._log(f"Перезапуск генерации ({user or 'студия'}): сценариев {len(indices)} — "
+                 + ", ".join(f"«{job.items[i]['title']}»" for i in indices[:10]) + ("…" if len(indices) > 10 else ""))
+        return job
+
     def save(self) -> None:
         fs.write_json(_jobs_dir(self.project_id) / f"{self.id}.json", self.state(), indent=1)
 
@@ -366,7 +403,7 @@ class Job:
     @staticmethod
     def _item(sc: dict) -> dict:
         return {"title": sc["title"], "priority": sc.get("priority", ""), "type": sc.get("type", ""),
-                "layer": sc.get("layer") or "ui",
+                "layer": sc.get("layer") or "ui", "match": reuse.clean(sc.get("match")),
                 "status": "queued", "session_id": None, "test_id": None, "summary": "",
                 "run": None, "verify": None, "publish": None, "error": ""}
 
@@ -410,10 +447,17 @@ class Job:
                 return
         if self._cancel:
             return
+        if cfg["requirements"].get("confirm_model"):
+            await self._await_model()
+            if self._cancel:
+                return
         if not self.items:
             await self._select(cfg["scenarios"]["select"])
             if self._cancel:
                 return
+        await self._await_reuse()
+        if self._cancel:
+            return
         self._log(f"В работу взято {'кейсов' if self.cases else 'сценариев'}: {len(self.items)}")
 
         # 3-6. Each scenario: author -> run -> verify -> publish
@@ -520,6 +564,62 @@ class Job:
         if not self.scenarios:
             self._log("Кейсы не найдены", "warn")
 
+    async def _await_model(self) -> None:
+        """Tests are generated only from a confirmed lifecycle of the system: entities, dependencies,
+        lifecycles, roles and their capabilities (knowledge.confirm). The run waits for a person; a
+        confirmation made anywhere (the job, "Проект → Тестовые данные", another instance) lets it go on."""
+        if knowledge.is_confirmed(self.project_id):
+            return
+        self.status = "awaiting_model"
+        state = knowledge.confirmation(knowledge.get(self.project_id))
+        self._log("Подтвердите жизненный цикл системы перед генерацией тестов: сущности, зависимости, статусы, роли "
+                  "и их возможности («Проект → Тестовые данные»)"
+                  + (" — модель изменилась после подтверждения" if state["state"] == "changed" else "")
+                  + (f". Не хватает: {'; '.join(state['missing'])}" if state["missing"] else ""), "warn")
+        while not self._cancel and not knowledge.is_confirmed(self.project_id):
+            self._wake.clear()
+            try:
+                await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
+            except asyncio.TimeoutError:
+                pass
+        if not self._cancel:
+            self.status = "running"
+            self._log("Жизненный цикл системы подтверждён: генерация тестов")
+
+    def _undecided(self) -> list[dict]:
+        return [it for it in self.items if it["status"] not in DONE_ITEMS and reuse.pending(it.get("match"))]
+
+    async def _await_reuse(self) -> None:
+        """A scenario similar to an earlier test or scenario waits for a person: create a new test, reuse
+        the earlier one or refine it. A decision made in the Requirements tab counts as well."""
+        if not self._undecided():
+            return
+        self.status = "awaiting_reuse"
+        self._log(f"Похожи на созданные ранее: {len(self._undecided())} — решите для каждого: создать новый тест, "
+                  "переиспользовать или доработать прежний", "warn")
+        while not self._cancel and self._undecided():
+            self._wake.clear()
+            try:
+                await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
+            except asyncio.TimeoutError:
+                self._decisions_from_analyses()
+        if not self._cancel:
+            self.status = "running"
+            self._log("Решения по похожим сценариям приняты: " + ", ".join(
+                f"«{it['title']}» — {reuse.DECISION_TITLES[it['match']['decision']]}"
+                for it in self.items if it.get("match") and it["match"].get("decision")))
+            self.save()
+
+    def _decisions_from_analyses(self) -> None:
+        if not self.given or len(self.given) != len(self.items):
+            return
+        for it, sc in zip(self.items, self.given):
+            if reuse.pending(it.get("match")) and sc.get("analysis_id"):
+                a = analyses.get(sc["analysis_id"]) or {}
+                s = next((x for x in a.get("scenarios") or [] if x["id"] == sc.get("scenario_id")), None)
+                if s and (s.get("match") or {}).get("decision"):
+                    it["match"]["decision"] = s["match"]["decision"]
+
     async def _select(self, mode: str) -> None:
         if mode == "manual":
             self.status = "awaiting_selection"
@@ -559,8 +659,22 @@ class Job:
         cfg = project["pipeline"]
         # A resumed item whose test is saved goes on with the stages it has not passed.
         test = storage.load(item["test_id"]) if item.get("test_id") else None
+        match = item.get("match") or {}
+        earlier = reuse.test_of(project["id"], match) if not test else None
         if test:
             item["session_id"] = None
+        elif match.get("decision") == "reuse" and match["kind"] == "scenario":
+            item["status"], item["summary"] = "done", f"Сценарий уже есть: «{match['title']}» — новый тест не создан"
+            self._log(f"«{sc['title']}»: {item['summary']}")
+            return
+        elif match.get("decision") == "reuse" and earlier:
+            test = earlier
+            item["test_id"], item["summary"] = test["id"], f"Переиспользован тест «{test['name']}»"
+            self._log(f"«{sc['title']}»: {item['summary']}")
+        elif match.get("decision") == "refine" and earlier:
+            test = await self._refine(project, item, sc, earlier)
+            if not test:
+                return
         else:
             test = await self._create_test(project, item, sc)
             if not test:
@@ -627,14 +741,46 @@ class Job:
         scenario = scenario_text(sc)
         if not self.url:
             raise ValueError("Не указан URL приложения (в запуске или в настройках проекта)")
-        # The role the scenario needs (the application model maps roles to project accounts).
-        account = knowledge.account_for(project["id"], f"{sc.get('preconditions', '')}\n{sc['instructions']}")
+        # The role the scenario acts as (the application model maps roles to project accounts).
+        account = (knowledge.account_for(project["id"], sc.get("role") or "")
+                   or knowledge.account_for(project["id"], f"{sc.get('preconditions', '')}\n{sc['instructions']}"))
         s = StudioSession(project, sc["title"], self.url, scenario, headless=a["headless"],
                           credentials=projects.account_credentials(project["id"], account) if account
                           else projects.app_credentials(project["id"]), account=account)
         self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
         outcome = await self._author(project, item, s)
         return await self._authored(project, item, sc, s, outcome)
+
+    async def _refine(self, project: dict, item: dict, sc: dict, test: dict) -> dict | None:
+        """The earlier test is replayed and extended to the new scenario; it keeps its id (a new version)."""
+        self.stage = item["status"] = "authoring"
+        a = project["pipeline"]["authoring"]
+        self._log(f"«{sc['title']}»: доработка теста «{test['name']}»")
+        s = StudioSession(project, test["name"], test["url"], test.get("scenario", ""), headless=a["headless"],
+                          credentials=storage.credentials(test), base_steps=test["steps"],
+                          task=reuse.REFINE_TASK.format(scenario=scenario_text(sc)))
+        s.test_id = test["id"]
+        outcome = await self._author(project, item, s)
+        steps = s.to_test()["steps"] if outcome == "done" else []
+        problem = ("" if outcome == "done" and s.finish_status == "passed" and has_assertion(steps)
+                   else "Агент не доработал тест — откройте сессию в Studio")
+        if problem:
+            item["status"], item["error"] = ("cancelled", "") if outcome == "cancelled" else ("needs_attention", problem)
+            item["bug"] = s.finish_status == "failed"
+            self._log(f"«{sc['title']}»: {problem}", "warn")
+            return None
+        scenario = f"{test.get('scenario', '')}\n\nДоработка: {sc['title']}\n{scenario_text(sc)}".strip()
+        test = storage.update(test["id"], lambda t: t.update(steps=steps, scenario=scenario))
+        if not test:
+            item["status"], item["error"] = "needs_attention", "Прежний тест удалён — откройте сессию в Studio"
+            return None
+        await s.close(discard=True)
+        self.sessions.pop(s.id, None)
+        item["session_id"], item["test_id"] = None, test["id"]
+        item["summary"] = f"Доработан тест «{test['name']}»"
+        self._log(f"«{sc['title']}»: {item['summary']}, шагов {len(steps)}")
+        self.save()
+        return test
 
     async def _authored(self, project: dict, item: dict, sc: dict, s: StudioSession, outcome: str) -> dict | None:
         item["summary"] = s.summary
@@ -732,14 +878,91 @@ class Job:
                 return "timeout"
 
 
+# A run in these states is working (or waiting for a person) in the instance that owns it.
+LIVE = ("running", "awaiting_model", "awaiting_selection", "awaiting_reuse")
+MODEL_POLL = 3      # seconds between checks of the application model while a run waits for its confirmation
 DONE_ITEMS = ("done", "needs_attention")     # a resumed run does not redo them
+
+
+def _saved_item(state: dict, sid: str, test: dict) -> bool:
+    """The item of a run whose authoring session a person saved as a test is done with that test (it no
+    longer needs a person); its scenario of a requirements analysis gets the test."""
+    given = state.get("given") or []
+    found = False
+    for i, item in enumerate(state.get("items") or []):
+        # Not an item the run still authors: the run itself saves what its session makes.
+        if sid and item.get("session_id") == sid and item.get("status") in ("needs_attention", "error", "cancelled",
+                                                                            "queued"):
+            item.update(status="done", test_id=test["id"], error="", bug=False,
+                        summary=f"Тест сохранён в Studio: «{test['name']}»")
+            found = True
+            sc = given[i] if len(given) == len(state["items"]) else {}
+            if sc.get("analysis_id"):
+                analyses.link_test(state["project_id"], sc["analysis_id"], sc["scenario_id"], test["id"])
+    return found
+
+
+def session_saved(pid: str, jid: str, sid: str, test: dict) -> None:
+    """A test saved from a session the pipeline started, of a run not in memory here (finished before a
+    restart, or on another instance): its item is done in the saved state of the run, so the "нужен
+    человек" block empties as people finish the sessions. A run in memory: Job.session_saved."""
+    if not re.fullmatch(r"[0-9a-f]{10}", jid or ""):
+        return
+    path = _jobs_dir(pid) / f"{jid}.json"
+    with fs.lock(path):
+        state = fs.read_json(path)
+        if state and state.get("project_id") == pid and _saved_item(state, sid, test):
+            state.setdefault("log", []).append({"at": time.time(), "level": "info",
+                                                "text": f"Тест «{test['name']}» сохранён в Studio: сценарий готов"})
+            fs.write_json(path, state, indent=1)
+
+
+def reconcile(jid: str, state: dict, sessions: dict) -> dict:
+    """Items that needed a person whose session has a saved test since (saved in Studio while nothing told
+    the run, e.g. before the studio knew to): done with that test. A refinement's session points at the
+    earlier test from the start, so it does not count."""
+    found = False
+    for item in state.get("items") or []:
+        sid = item.get("session_id") or ""
+        if (not sid or item.get("test_id") or item.get("status") not in ("needs_attention", "error", "cancelled")
+                or (item.get("match") or {}).get("decision") == "refine"):
+            continue
+        live = sessions.get(sid)
+        tid = live.test_id if live is not None else (agent.load_checkpoint(state["project_id"], sid) or {}).get("test_id")
+        test = storage.load(tid) if tid else None
+        if test and test.get("project_id") == state["project_id"]:
+            found = _saved_item(state, sid, test) or found
+    if found:
+        if jid in JOBS:
+            JOBS[jid].save()
+        else:
+            with fs.lock(_jobs_dir(state["project_id"]) / f"{jid}.json"):
+                saved = fs.read_json(_jobs_dir(state["project_id"]) / f"{jid}.json") or {}
+                fs.write_json(_jobs_dir(state["project_id"]) / f"{jid}.json", saved | {"items": state["items"]},
+                              indent=1)
+    return state
+
+
+def retryable(item: dict, explicit: bool = False) -> bool:
+    """An item whose authoring failed - an error of the agent, the agent stopped, gave up or was stopped:
+    "Перезапустить" generates it again. A possible defect (the agent saw the application differ from the
+    scenario) is retried only when a person names it."""
+    return (not item.get("test_id") and item.get("status") in ("error", "needs_attention", "cancelled")
+            and (explicit or not item.get("bug")))
 
 
 def scenario_text(sc: dict) -> str:
     """What the authoring agent is told of a designed scenario."""
     text = sc["instructions"]
+    data = [f"{d['entity']} «{d['name']}»" + (f" ({d['state']})" if d.get("state") else "")
+            + (f" — {d['details']}" if d.get("details") else "") for d in sc.get("test_data") or []
+            if isinstance(d, dict) and d.get("entity") and d.get("name")]
+    if data:
+        text = "Тестовые данные: " + "; ".join(data) + f"\n{text}"
     if sc.get("preconditions"):
         text = f"Предусловия: {sc['preconditions']}\n{text}"
+    if sc.get("role"):
+        text = f"Роль: {sc['role']}\n{text}"
     if sc.get("layer") == "api":
         text = ("Тест API (бэкенд): проверяй через запросы api_request — статус и поля ответа, без действий в "
                 f"интерфейсе.\n{text}")
@@ -760,7 +983,7 @@ def list_jobs(pid: str, limit: int = 30) -> list[dict]:
                 out[f.stem] = j = json.loads(text)
             except ValueError:
                 continue
-            if j.get("status") in ("running", "awaiting_selection") and not _job_elsewhere(f.stem):
+            if j.get("status") in LIVE and not _job_elsewhere(f.stem):
                 j["status"] = "error"          # interrupted by a restart, as get_job() says
     jobs = sorted(out.values(), key=lambda j: j["created"], reverse=True)[:limit]
     return [{k: j.get(k) for k in ("id", "status", "stage", "created", "finished", "links", "feature",
@@ -776,7 +999,7 @@ def get_job(jid: str) -> dict | None:
         return None
     for f in fs.glob(projects.ROOT, f"*/jobs/{jid}.json"):
         j = fs.read_json(f)
-        if j["status"] in ("running", "awaiting_selection") and not _job_elsewhere(jid):
+        if j["status"] in LIVE and not _job_elsewhere(jid):
             j["status"], j["error"] = "error", ("Студия была перезапущена во время работы конвейера: нажмите "
                                                 "«Продолжить», чтобы доделать запуск с места остановки")
         return j

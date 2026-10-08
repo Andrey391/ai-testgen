@@ -23,7 +23,8 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 MAX_SIZE = 50_000
 MAX_GROUP = 60
 # Pipeline settings that list skills -> the stage they belong to.
-SLOTS = {"requirements.skills": "requirements", "scenarios.skills": "scenarios", "authoring.skills": "authoring",
+SLOTS = {"requirements.skills": "requirements", "requirements.model_skills": "requirements",
+         "scenarios.skills": "scenarios", "authoring.skills": "authoring",
          "run.skills": "run", "publish.skills": "publish", "publish.run_skills": "publish"}
 
 

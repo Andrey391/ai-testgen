@@ -27,8 +27,8 @@ from pydantic import BaseModel
 
 from testgen import (access, analyses, audit, auth, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
-                     publisher, reports, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic, trackers,
-                     validation, vault, workqueue)
+                     publisher, reports, reuse, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
+                     trackers, validation, vault, workqueue)
 from testgen import worker as worker_mod
 from testgen import agent as agent_mod
 from testgen.agent import StudioSession
@@ -152,7 +152,7 @@ def _elsewhere(request: Request) -> str | None:
     if m and m.group(1) not in SESSIONS:
         url = workqueue.owner("session", m.group(1))
     else:
-        m = re.match(r"/api/jobs/([^/]+)/(select|cancel)$", request.url.path)
+        m = re.match(r"/api/jobs/([^/]+)/(select|cancel|reuse)$", request.url.path)
         url = workqueue.owner("job", m.group(1)) if m and m.group(1) not in pipeline.JOBS else None
     return url if url and url != INSTANCE_URL else None
 
@@ -206,6 +206,7 @@ AUDIT_ACTIONS = {
     ("PUT", "/api/projects/{pid}/skills/{name}/stages"): "skill.save",
     ("PUT", "/api/projects/{pid}/knowledge"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/extract"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/knowledge/confirm"): "knowledge.confirm",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
     ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
     ("POST", "/api/projects/{pid}/runs"): "suite.start",
@@ -216,6 +217,7 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/sessions/{sid}/save"): "test.save",
     ("DELETE", "/api/projects/{pid}/sessions/{sid}"): "studio.discard",
     ("POST", "/api/jobs/{jid}/resume"): "pipeline.resume",
+    ("POST", "/api/jobs/{jid}/retry"): "pipeline.retry",
     ("PUT", "/api/tests/{tid}"): "test.update",
     ("PUT", "/api/tests/{tid}/steps"): "test.update",
     ("POST", "/api/tests/{tid}/edit"): "studio.start",
@@ -567,6 +569,14 @@ def _require_model(p: dict) -> None:
     """Fail before starting a browser when the project has no model to drive it."""
     if not p["llm"]["model"]:
         raise HTTPException(400, "Модель не настроена: выберите её в «Проект → Модель».")
+
+
+def _require_lifecycle(p: dict) -> None:
+    """Tests from requirements are generated only after a person confirmed the lifecycle of the system
+    (the setting "requirements.confirm_model"; the pipeline waits for it instead)."""
+    if p["pipeline"]["requirements"].get("confirm_model") and not knowledge.is_confirmed(p["id"]):
+        raise HTTPException(409, "Сначала подтвердите жизненный цикл системы — сущности, статусы, роли и их "
+                                 "возможности — в «Проект → Тестовые данные»")
 
 
 class ProjectBody(BaseModel):
@@ -1253,6 +1263,8 @@ async def create_session(body: NewSession, request: Request):
     engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
     if body.scenario.strip() or body.autopilot:
         _require_model(p)
+    if body.analysis_id:
+        _require_lifecycle(p)
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
                       engine=engine, use_login_state=not body.fresh_login, account=account)
     request.state.project_id = p["id"]
@@ -1388,6 +1400,16 @@ class SaveBody(BaseModel):
     status: str = ""     # "" = keep (a new test: draft) | draft | review | ready
 
 
+def _job_session_saved(pid: str, origin: dict | None, sid: str, test: dict) -> None:
+    """A person saved the test of a pipeline session: the item of the run that needed them is done."""
+    jid = (origin or {}).get("job") or ""
+    job = pipeline.JOBS.get(jid)
+    if job is not None:
+        WORKER.call_soon_threadsafe(job.session_saved, sid, test)
+    else:
+        pipeline.session_saved(pid, jid, sid, test)
+
+
 @app.post("/api/sessions/{sid}/save")
 async def save_session(sid: str, body: SaveBody | None = None):
     s = sess(sid)
@@ -1396,6 +1418,7 @@ async def save_session(sid: str, body: SaveBody | None = None):
         tasks.link_test(s.task_id, t["id"])
     if sid in SESSION_SCENARIOS:
         analyses.link_test(*SESSION_SCENARIOS[sid], t["id"])
+    _job_session_saved(s.project_id, s.origin, sid, t)
     return t | {"warnings": warnings}
 
 
@@ -1462,6 +1485,7 @@ async def save_interrupted(pid: str, sid: str, body: SaveBody | None = None):
     t, warnings = agent_mod.save_checkpoint(p, cp, (body or SaveBody()).status)
     if cp.get("task_id"):
         tasks.link_test(cp["task_id"], t["id"])
+    _job_session_saved(pid, cp.get("origin"), sid, t)
     return t | {"warnings": warnings}
 
 
@@ -2262,7 +2286,7 @@ async def validate_requirements(body: ValidateBody):
 @app.get("/api/projects/{pid}/knowledge")
 async def get_knowledge(pid: str):
     project(pid)
-    return knowledge.get(pid)
+    return knowledge.view(pid)
 
 
 @app.put("/api/projects/{pid}/knowledge")
@@ -2288,9 +2312,24 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
     try:
-        return await call(knowledge.extract(p, text, request.state.user))
+        await call(knowledge.extract(p, text, request.state.user))
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
+    return knowledge.view(pid)
+
+
+@app.post("/api/projects/{pid}/knowledge/confirm")
+async def confirm_knowledge(pid: str, request: Request):
+    """A person confirms the lifecycle of the system: runs of the pipeline waiting for it go on."""
+    project(pid, "editor")
+    try:
+        doc = knowledge.confirm(pid, request.state.user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    for job in list(pipeline.JOBS.values()):
+        if job.project_id == pid and job.status == "awaiting_model":
+            WORKER.call_soon_threadsafe(job.model_confirmed)
+    return doc
 
 
 @app.get("/api/projects/{pid}/analyses")
@@ -2322,7 +2361,10 @@ async def delete_analysis(aid: str):
 class ScenarioPatch(BaseModel):
     title: str | None = None
     type: str | None = None
+    layer: str | None = None
     priority: str | None = None
+    role: str | None = None
+    decision: str | None = None     # a scenario similar to an earlier one: new | reuse | refine (reuse.py)
     preconditions: str | None = None
     instructions: str | None = None
     expected_result: str | None = None
@@ -2388,7 +2430,7 @@ async def requirements_file(file: UploadFile):
 
 # ---------- Pipeline jobs ----------
 
-ScenarioIn = scenarios.Scenario
+ScenarioIn = scenarios.DesignedScenario
 
 
 class JobBody(BaseModel):
@@ -2427,7 +2469,10 @@ async def start_job(pid: str, body: JobBody, request: Request):
         if empty:
             raise HTTPException(400, "Заполните название и шаги сценариев: " + ", ".join(f"«{t}»" for t in empty))
         # The tests made by the run are linked back to their scenarios.
-        ready = [{k: s[k] for k in analyses.FIELDS} | {"analysis_id": a["id"], "scenario_id": s["id"]} for s in chosen]
+        ready = [{k: s.get(k) or "" for k in analyses.FIELDS} | {"test_data": s.get("test_data") or [],
+                                                                   "match": s.get("match"),
+                                                                   "analysis_id": a["id"], "scenario_id": s["id"]}
+                 for s in chosen]
         feature = feature or a["feature"]
         if not ready:
             raise HTTPException(400, "В анализе нет готовых сценариев")
@@ -2476,12 +2521,64 @@ async def resume_job(jid: str, request: Request):
     return {"id": job.id}
 
 
+class RetryBody(BaseModel):
+    indices: list[int] | None = None    # items to generate again; None = every one that failed (pipeline.retryable)
+
+
+@app.post("/api/jobs/{jid}/retry")
+async def retry_job(jid: str, body: RetryBody, request: Request):
+    """Generate again, in one go, the scenarios whose authoring failed (an error of the agent, the agent
+    stopped or gave up): each starts a fresh session; the rest of the run goes on as with "Продолжить"."""
+    j = pipeline.get_job(jid)
+    if not j:
+        raise HTTPException(404, "Запуск не найден")
+    running = pipeline.JOBS.get(jid)
+    if (running and not running.finished) or j["status"] in pipeline.LIVE:
+        raise HTTPException(409, "Запуск ещё идёт")
+    items = j.get("items") or []
+    indices = [i for i in (range(len(items)) if body.indices is None else body.indices)
+               if 0 <= i < len(items) and pipeline.retryable(items[i], explicit=body.indices is not None)]
+    if not indices:
+        raise HTTPException(400, "Нет сценариев с ошибкой генерации")
+    p = project(j["project_id"])
+    _require_model(p)
+    for i in indices:       # the failed sessions go: the scenario starts over
+        sid = items[i].get("session_id") or ""
+        if sid in SESSIONS:
+            await call(SESSIONS.pop(sid).close(discard=True))
+        elif sid:
+            agent_mod.drop_checkpoint(p["id"], sid)
+    job = pipeline.Job.retried(p, j, SESSIONS, indices, user=request.state.user or "")
+    pipeline.JOBS[job.id] = job
+    job.save()
+    if INSTANCE_URL:
+        workqueue.set_owner("job", job.id, INSTANCE_URL)
+    submit(job.run())
+    return {"id": job.id, "retried": len(indices)}
+
+
+class ReuseBody(BaseModel):
+    decisions: dict[int, str]       # item index -> new | reuse | refine (reuse.DECISIONS)
+
+
+@app.post("/api/jobs/{jid}/reuse")
+async def decide_reuse(jid: str, body: ReuseBody):
+    """A person decides what to do with scenarios similar to earlier ones: a new test, reuse or refine."""
+    job = pipeline.JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Запуск не найден")
+    if any(d not in reuse.DECISIONS for d in body.decisions.values()):
+        raise HTTPException(400, "Решение: new, reuse или refine")
+    WORKER.call_soon_threadsafe(job.decide, dict(body.decisions))
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{jid}")
 async def get_job(jid: str):
     j = pipeline.get_job(jid)
     if not j:
         raise HTTPException(404, "Запуск не найден")
-    return j
+    return pipeline.reconcile(jid, j, SESSIONS)
 
 
 class SelectBody(BaseModel):
