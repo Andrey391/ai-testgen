@@ -109,8 +109,10 @@ MODEL = "test-model"
 @pytest.fixture(autouse=True)
 def lifecycle_confirmed(monkeypatch):
     """Tests of the pipeline do not wait for a person to confirm the application model; the tests of that
-    confirmation switch it on in their project ("requirements.confirm_model")."""
+    confirmation switch it on in their project ("requirements.confirm_model"), and so do the tests of the
+    check before a test ("requirements.preflight")."""
     monkeypatch.setitem(projects.DEFAULT_PIPELINE["requirements"], "confirm_model", False)
+    monkeypatch.setitem(projects.DEFAULT_PIPELINE["requirements"], "preflight", False)
 
 
 @pytest.fixture

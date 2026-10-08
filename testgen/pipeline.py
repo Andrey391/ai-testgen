@@ -748,12 +748,26 @@ class Job:
         if not self.url:
             raise ValueError("Не указан URL приложения (в запуске или в настройках проекта)")
         # The role the scenario acts as (the application model maps roles to project accounts).
-        account = (knowledge.account_for(project["id"], sc.get("role") or "")
-                   or knowledge.account_for(project["id"], f"{sc.get('preconditions', '')}\n{sc['instructions']}"))
+        guest = False
+        if cfg["requirements"].get("preflight"):
+            # Before the test: the role has an account, the scenario keeps to the restrictions and lifecycles.
+            item["status"] = "preflight"
+            check = await knowledge.preflight(project, sc)
+            item["preflight"] = check["problems"]
+            if not check["ok"]:
+                item["status"], item["error"] = "needs_attention", knowledge.preflight_text(check)
+                self._log(f"«{sc['title']}»: {item['error']}", "warn")
+                self.save()
+                return None
+            item["status"] = "authoring"
+            account, guest = check["account"], check["guest"]
+        else:
+            account = (knowledge.account_for(project["id"], sc.get("role") or "")
+                       or knowledge.account_for(project["id"], f"{sc.get('preconditions', '')}\n{sc['instructions']}"))
         s = StudioSession(project, sc["title"], self.url, scenario, headless=a["headless"],
-                          credentials=projects.account_credentials(project["id"], account) if account
-                          else projects.app_credentials(project["id"]), account=account,
-                          engine="api" if sc.get("layer") == "api" else "")
+                          credentials={} if guest else projects.account_credentials(project["id"], account),
+                          account=account, engine="api" if sc.get("layer") == "api" else "",
+                          use_login_state=not guest)
         self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
         outcome = await self._author(project, item, s)
         return await self._authored(project, item, sc, s, outcome)
