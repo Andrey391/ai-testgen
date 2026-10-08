@@ -2339,6 +2339,13 @@ async def list_analyses(pid: str):
     return analyses.list_analyses(pid)
 
 
+@app.get("/api/projects/{pid}/scenarios")
+async def list_project_scenarios(pid: str):
+    """Every scenario of the analyses history: the pipeline is started on a choice of them."""
+    project(pid)
+    return analyses.all_scenarios(pid)
+
+
 def _analysis(aid: str) -> dict:
     a = analyses.get(aid)
     if not a:
@@ -2433,6 +2440,11 @@ async def requirements_file(file: UploadFile):
 ScenarioIn = scenarios.DesignedScenario
 
 
+class ScenarioPick(BaseModel):
+    analysis_id: str
+    scenario_id: str
+
+
 class JobBody(BaseModel):
     links: list[str] = []
     text: str = ""
@@ -2444,6 +2456,7 @@ class JobBody(BaseModel):
     feature: str = ""
     analysis_id: str = ""               # or scenarios of a requirements analysis (all, or `scenario_ids`)
     scenario_ids: list[str] = []
+    picks: list[ScenarioPick] = []      # or scenarios of several analyses (the pipeline's common list)
     types: list[str] | None = None      # this run's kinds of checks, layers, techniques (None = the project's)
     layers: list[str] | None = None
     techniques: list[str] | None = None
@@ -2459,23 +2472,31 @@ async def start_job(pid: str, body: JobBody, request: Request):
         cases = {"connection": body.case_connection, "ids": publisher.parse_ids(body.case_ids)}
     ready = [s.model_dump() for s in body.scenarios if s.title.strip() and s.instructions.strip()]
     feature = body.feature
+    wanted: dict[str, list[str]] = {}       # analysis -> its chosen scenarios (empty: all of them)
     if body.analysis_id:
-        a = analyses.get(body.analysis_id)
+        wanted[body.analysis_id] = list(body.scenario_ids)
+    for pick in body.picks:
+        wanted.setdefault(pick.analysis_id, []).append(pick.scenario_id)
+    features = []
+    for aid, ids in wanted.items():
+        a = analyses.get(aid)
         if not a or a["project_id"] != p["id"]:
             raise HTTPException(404, "Анализ не найден")
-        chosen = [s for s in a["scenarios"] if not s.get("pending")
-                  and (not body.scenario_ids or s["id"] in body.scenario_ids)]
+        chosen = [s for s in a["scenarios"] if not s.get("pending") and (not ids or s["id"] in ids)]
         empty = [s["title"] or "без названия" for s in chosen if not s["title"].strip() or not s["instructions"].strip()]
         if empty:
             raise HTTPException(400, "Заполните название и шаги сценариев: " + ", ".join(f"«{t}»" for t in empty))
         # The tests made by the run are linked back to their scenarios.
-        ready = [{k: s.get(k) or "" for k in analyses.FIELDS} | {"test_data": s.get("test_data") or [],
-                                                                   "match": s.get("match"),
-                                                                   "analysis_id": a["id"], "scenario_id": s["id"]}
-                 for s in chosen]
-        feature = feature or a["feature"]
+        ready += [{k: s.get(k) or "" for k in analyses.FIELDS} | {"test_data": s.get("test_data") or [],
+                                                                    "match": s.get("match"),
+                                                                    "analysis_id": a["id"], "scenario_id": s["id"]}
+                  for s in chosen]
+        if a["feature"] and a["feature"] not in features:
+            features.append(a["feature"])
+    if wanted:
+        feature = feature or "; ".join(features)[:300]
         if not ready:
-            raise HTTPException(400, "В анализе нет готовых сценариев")
+            raise HTTPException(400, "Нет готовых сценариев" if body.picks else "В анализе нет готовых сценариев")
     if body.scenarios and not ready:
         raise HTTPException(400, "У сценариев нет названия или шагов")
     if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases \
