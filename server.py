@@ -238,6 +238,7 @@ AUDIT_ACTIONS = {
     ("POST", "/api/runs/{rid}/defect"): "defect.create",
     ("POST", "/api/runs/{rid}/baseline/{step_id}"): "baseline.accept",
     ("POST", "/api/runs/{rid}/retry"): "run.start",
+    ("POST", "/api/runs/{rid}/fix"): "studio.start",
     ("POST", "/api/suites/{sid}/retry"): "suite.start",
 }
 # Frequent and harmless: polling the Studio, the agent's steps, the pipeline's choices.
@@ -1852,6 +1853,36 @@ async def retry_run(rid: str, request: Request):
         raise HTTPException(404, "Тест прогона удалён")
     request.state.project_id = t["project_id"]
     return {"id": _run_request(t, None, request, r.get("browser") or "", r.get("device"))["id"]}
+
+
+class FixBody(BaseModel):
+    step_id: str = ""              # the failed step to fix (by default the first failed one)
+    headless: bool = True
+
+
+@app.post("/api/runs/{rid}/fix")
+async def fix_run(rid: str, body: FixBody, request: Request):
+    """A Studio session that replays the test up to its failed step and asks the agent to fix the step
+    and record the rest; the person confirms each step and saves into the same test."""
+    r = run_or_404(rid)
+    t = storage.load(r["test_id"])
+    if not t:
+        raise HTTPException(404, "Тест прогона удалён")
+    p = project(t["project_id"], "editor")
+    _require_model(p)
+    ids = [s["id"] for s in t["steps"]]
+    failed = [x for x in r.get("results") or [] if x.get("status") != "passed" and x.get("id") in ids]
+    res = next((x for x in failed if x["id"] == body.step_id), None) if body.step_id else (failed or [None])[0]
+    if not res:
+        raise HTTPException(400, "В прогоне нет упавшего шага, который есть в текущей версии теста")
+    i = ids.index(res["id"])
+    s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=body.headless,
+                      credentials=storage.credentials(t), base_steps=t["steps"][:i],
+                      task=agent_mod.fix_task(t["steps"], i, res, r.get("analysis")), account=t.get("account") or "")
+    s.test_id = t["id"]
+    request.state.project_id = p["id"]
+    _start_session(s, autopilot=False)
+    return {"id": s.id}
 
 
 @app.get("/api/runs/{rid}/files/{name}")
