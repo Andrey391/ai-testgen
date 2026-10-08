@@ -258,7 +258,7 @@ def list_tests(project_id: str, tag: str = "") -> list[dict]:
         hist = histories.get(t["id"]) or []
         out.append({k: t.get(k) for k in ("id", "project_id", "name", "url", "scenario", "updated",
                                           "last_run", "external", "engine", "quarantine", "verify",
-                                          "authoring_usage", "account")}
+                                          "authoring_usage", "account", "layer")}
                    | {"steps": len(t.get("steps", [])), "tags": t.get("tags") or [], "role": t.get("role") or "",
                       "status": status(t), "comments": len(t.get("comments") or []),
                       "data_steps": len(t.get("before") or []) + len(t.get("after") or []),

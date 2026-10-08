@@ -53,7 +53,8 @@ def new(project: dict, tests: list[dict], tags: list[str] | None = None, trigger
                     "test_name": t["name"], "browser": b, "device": d, "tags": t.get("tags") or [],
                     "quarantined": bool((t.get("quarantine") or {}).get("on")),
                     "status": "queued", "run_id": None, "error": "", "failed_step": "", "duration": None}
-                   for t in tests for b, d in combos]}
+                   # an API test has no browser: it runs once, not per browser and device
+                   for t in tests for b, d in (combos[:1] if t.get("layer") == "api" else combos)]}
     LIVE[s["id"]] = s
     save(s)
     return s

@@ -385,9 +385,19 @@ async def run_test(test: dict, headless: bool = True, on_progress=None,
               "before": [], "after": []}
     if run_dir:
         run_dir.mkdir(parents=True, exist_ok=True)
-    bs = await BrowserSession.launch(headless=headless, browser=browser, engine=engine, device=device,
-                                     locale=cfg.get("locale", ""), timezone=cfg.get("timezone", ""),
-                                     storage_state=storage_state)
+    api = test.get("layer") == "api"
+    if api:
+        # An API test: no browser, the requests go to the project's API with its authorization.
+        from . import projects
+        from .apiclient import ApiClient
+        bs = await ApiClient.launch(projects.get(project_id) or {"id": project_id, "base_url": test.get("url", "")},
+                                    credentials, storage_state)
+        report.update(browser="api", device="")
+        base_url = bs.url
+    else:
+        bs = await BrowserSession.launch(headless=headless, browser=browser, engine=engine, device=device,
+                                         locale=cfg.get("locale", ""), timezone=cfg.get("timezone", ""),
+                                         storage_state=storage_state)
     bs.credentials = credentials or {}
     bs.options = {"project_id": project_id, "test_id": test.get("id", ""), "run_dir": run_dir,
                   "attempt_prefix": prefix, "a11y_impact": cfg.get("a11y_impact", "serious"),
@@ -395,7 +405,8 @@ async def run_test(test: dict, headless: bool = True, on_progress=None,
                   "base_url": base_url or origin(test.get("url", "")), "own_vars": []}
     # A test that switches tabs itself is replayed exactly; older tests follow new tabs.
     bs.follow_new_tabs = not any(s["action"] == "switch_tab" for s in steps)
-    trace = cfg.get("trace", "failed") if run_dir else "off"
+    trace = cfg.get("trace", "failed") if run_dir and not api else "off"
+    capture_state = capture_state and not api
     try:
         if trace != "off":
             await bs.context.tracing.start(screenshots=True, snapshots=True)

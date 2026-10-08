@@ -25,7 +25,7 @@ from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Re
                                StreamingResponse)
 from pydantic import BaseModel
 
-from testgen import (access, analyses, audit, auth, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
+from testgen import (access, analyses, apiclient, audit, auth, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
                      publisher, reports, reuse, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
@@ -190,6 +190,7 @@ AUDIT_ACTIONS = {
     ("DELETE", "/api/projects/{pid}/accounts/{aid}"): "account.delete",
     ("PUT", "/api/projects/{pid}/mailbox"): "project.mailbox",
     ("PUT", "/api/projects/{pid}/llm"): "project.llm",
+    ("PUT", "/api/projects/{pid}/api"): "project.api",
     ("DELETE", "/api/projects/{pid}/llm/key"): "project.llm",
     ("PUT", "/api/projects/{pid}/notify"): "project.notify",
     ("GET", "/api/projects/{pid}/export"): "project.export",
@@ -556,6 +557,8 @@ def _project_view(p: dict) -> dict:
                 "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p),
                 "llm": p["llm"] | {"key_set": bool(projects.llm_key(p["id"])),
                                    "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))},
+                "api": projects.api_settings(p) | {"token_set": bool(projects.api_token(p["id"])),
+                                                   "effective_url": projects.api_base(p)},
                 "catalog": CATALOG}
 
 
@@ -640,6 +643,47 @@ async def delete_project(pid: str, request: Request):
     require_admin(request)
     project(pid)
     return {"ok": projects.delete(pid)}
+
+
+# ---------- The application's API: address, authorization, endpoints (API tests) ----------
+
+class ApiBody(BaseModel):
+    base_url: str | None = None
+    auth: str | None = None          # cookies | none | bearer | header | login
+    header: str | None = None
+    login: dict | None = None        # method, path, body, token (JSON path), header
+    token: str = ""                  # empty = keep the saved one
+    clear_token: bool = False
+
+
+@app.get("/api/projects/{pid}/api")
+async def get_api(pid: str):
+    """The API settings (the token only as "set") and the endpoints the project has seen."""
+    p = project(pid)
+    return {"settings": _project_view(p)["api"], "endpoints": traffic.catalog(pid)}
+
+
+@app.put("/api/projects/{pid}/api")
+async def update_api(pid: str, body: ApiBody):
+    project(pid, "editor")
+    try:
+        p = projects.update_api(pid, body.model_dump(exclude_none=True, exclude={"token", "clear_token"}),
+                                body.token, body.clear_token)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _project_view(p)
+
+
+@app.post("/api/projects/{pid}/api/test")
+async def test_api(pid: str):
+    """Sign in the way API tests do and call the API address."""
+    p = project(pid, "editor")
+    try:
+        return await call(asyncio.wait_for(apiclient.check(p), 90))
+    except asyncio.TimeoutError:
+        raise HTTPException(400, "API не ответил за 90 секунд")
+    except Exception as e:
+        raise HTTPException(400, str(e).splitlines()[0][:300] if str(e) else type(e).__name__)
 
 
 # ---------- The project's model connection ----------
@@ -1228,7 +1272,7 @@ class NewSession(BaseModel):
     scenario: str
     autopilot: bool = False
     headless: bool = True
-    engine: str = ""       # builtin | playwright-mcp; empty = project setting
+    engine: str = ""       # builtin | playwright-mcp | api (an API test, no browser); empty = project setting
     username: str = ""     # login for the app under test; empty = the project account
     password: str = ""
     account: str = ""      # the project account to log in with; empty = the default one
@@ -1263,11 +1307,18 @@ async def create_session(body: NewSession, request: Request):
             raise HTTPException(400, "Учётная запись не найдена")
         account = body.account
         creds = projects.account_credentials(p["id"], account)
-    engine = body.engine if body.engine in ("builtin", "playwright-mcp") else ""
+    engine = body.engine if body.engine in ("builtin", "playwright-mcp", "api") else ""
     if body.scenario.strip() or body.autopilot:
         _require_model(p)
     if body.analysis_id:
         _require_lifecycle(p)
+    a = analyses.get(body.analysis_id) if body.analysis_id else None
+    if a and a["project_id"] != p["id"]:
+        a = None
+    # A scenario of the API layer is written without a browser.
+    sc = next((x for x in (a or {}).get("scenarios") or [] if x.get("id") == body.scenario_id), None)
+    if sc and sc.get("layer") == "api":
+        engine = "api"
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
                       engine=engine, use_login_state=not body.fresh_login, account=account)
     request.state.project_id = p["id"]
@@ -1275,8 +1326,7 @@ async def create_session(body: NewSession, request: Request):
     t = tasks.load(body.task_id)
     if t and t["project_id"] == p["id"]:
         s.task_id = t["id"]
-    a = analyses.get(body.analysis_id) if body.analysis_id else None
-    if a and a["project_id"] == p["id"] and body.scenario_id:
+    if a and body.scenario_id:
         SESSION_SCENARIOS[s.id] = (p["id"], a["id"], body.scenario_id)
     return {"id": s.id}
 
@@ -1556,7 +1606,7 @@ async def edit_in_studio(tid: str, body: EditBody, request: Request):
     p = project(t["project_id"], "editor")
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=body.headless,
                       credentials=storage.credentials(t), base_steps=t["steps"], task=agent_mod.EDIT_TASK,
-                      account=t.get("account") or "")
+                      account=t.get("account") or "", engine=agent_mod.test_engine(t))
     s.test_id = tid
     request.state.project_id = p["id"]
     _start_session(s, autopilot=False)
@@ -1878,7 +1928,8 @@ async def fix_run(rid: str, body: FixBody, request: Request):
     i = ids.index(res["id"])
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=body.headless,
                       credentials=storage.credentials(t), base_steps=t["steps"][:i],
-                      task=agent_mod.fix_task(t["steps"], i, res, r.get("analysis")), account=t.get("account") or "")
+                      task=agent_mod.fix_task(t["steps"], i, res, r.get("analysis")), account=t.get("account") or "",
+                      engine=agent_mod.test_engine(t))
     s.test_id = t["id"]
     request.state.project_id = p["id"]
     _start_session(s, autopilot=False)
@@ -2001,7 +2052,8 @@ async def strengthen(tid: str, request: Request):
     p = project(t["project_id"])
     _require_model(p)
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=True,
-                      credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v))
+                      credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v),
+                      engine=agent_mod.test_engine(t))
     s.test_id = tid
     _start_session(s, autopilot=False)
     return {"id": s.id}

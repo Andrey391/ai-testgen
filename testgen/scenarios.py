@@ -27,7 +27,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from . import knowledge, llm, projects, reuse, skills
+from . import knowledge, llm, projects, reuse, skills, traffic
 from .catalog import DEFAULT_TECHNIQUES, DEFAULT_TYPES, LAYERS, TECHNIQUES, TYPES
 
 ScenarioType = Literal[tuple(TYPES)]
@@ -111,7 +111,7 @@ PLAN_PAGE = 15     # planned scenarios per answer
 PLAN_PAGES = 60    # a guard against a model that always answers `more`
 
 
-def _context(requirements: str, url: str, cfg: dict, model: str = "", earlier: str = "") -> str:
+def _context(requirements: str, url: str, cfg: dict, model: str = "", earlier: str = "", api: str = "") -> str:
     text = f"Requirements:\n{requirements}\n\n"
     if model:
         text += f"{model}\n\n"
@@ -125,6 +125,10 @@ def _context(requirements: str, url: str, cfg: dict, model: str = "", earlier: s
                  + "".join(f"- {t}: {TYPES[t][1]}\n" for t in types))
     layers = [x for x in cfg.get("layers") or [] if x in LAYERS] or ["ui"]
     text += f"Layers: {', '.join(layers)}. Do not produce scenarios of other layers.\n"
+    if "api" in layers and api:
+        text += ("Known endpoints of the application's API (seen in the traffic of its UI tests and the site map; "
+                 "{id} is an object id). API scenarios use these paths, methods and fields; an endpoint the "
+                 "requirements need but the list lacks may be named as the requirements describe it:\n" + api + "\n")
     techniques = [t for t in cfg.get("techniques") or [] if t in TECHNIQUES]
     if techniques:
         text += ("Test design techniques to apply when deriving the scenarios:\n"
@@ -247,7 +251,9 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
                                                          if project else "")
     pid = project["id"] if project else ""
     earlier = reuse.candidates(pid) if project else []
-    context = _context(requirements, url, cfg, knowledge.prompt(pid) if project else "", reuse.listing(earlier))
+    layers = cfg.get("layers") or []
+    api = traffic.catalog_text(traffic.catalog(pid)) if project and "api" in layers else ""
+    context = _context(requirements, url, cfg, knowledge.prompt(pid) if project else "", reuse.listing(earlier), api)
 
     if progress:
         say(f"Анализ требований ({len(requirements)} символов) и план покрытия…")

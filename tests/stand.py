@@ -4,8 +4,9 @@ Static pages from tests/site/<variant>/ (falling back to v1), so switching
 `variant` to "v2" changes the layout under the same URLs - the case for fallback
 locators and self-healing. A small JSON API keeps state in memory:
 
-    POST /api/login      {"username", "password"} -> {"ok": bool}   (demo / s3cret-pass!); sets the "auth" cookie
-    GET  /api/me         {"user"} with a valid "auth" cookie, else 401 (account.html: login-once)
+    POST /api/login      {"username", "password"} -> {"ok": bool, "token"}   (demo / s3cret-pass!); sets the "auth" cookie
+    GET  /api/me         {"user"} with a valid "auth" cookie or "Authorization: Bearer <token>", else 401
+                         (account.html: login-once; API tests)
     POST /api/otp        {"code"} -> {"ok"}: the TOTP code of TOTP_SECRET (login-2fa.html)
     POST /api/send-code  {"email"}: "sends" a letter with a code to the fake Mailpit below
     POST /api/check-code {"email", "code"} -> {"ok"}
@@ -100,7 +101,7 @@ class Stand:
                     stand.variant = path.rsplit("/", 1)[1] if (SITE / path.rsplit("/", 1)[1]).is_dir() else "v1"
                     return self._json({"variant": stand.variant})
                 if path == "/api/me":
-                    token = self._cookie("auth")
+                    token = self._cookie("auth") or (self.headers.get("Authorization") or "").removeprefix("Bearer ")
                     return self._json({"user": USERNAME}) if token in stand.tokens else self._json({"error": "auth"}, 401)
                 if path == "/api/orders":
                     return self._json(stand.orders)
@@ -145,7 +146,7 @@ class Stand:
                     token = uuid.uuid4().hex
                     if ok:
                         stand.tokens.add(token)
-                    return self._json({"ok": ok}, cookies=[f"auth={token}; Path=/; HttpOnly"] if ok else [])
+                    return self._json({"ok": ok} | ({"token": token} if ok else {}), cookies=[f"auth={token}; Path=/; HttpOnly"] if ok else [])
                 if path == "/api/otp":
                     return self._json({"ok": _totp_ok(data.get("code", ""))})
                 if path == "/api/send-code":

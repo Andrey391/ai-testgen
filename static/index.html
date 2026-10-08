@@ -137,6 +137,11 @@ ul.ready li.bad .ck{color:var(--bad)}
 #lightbox .x:hover{background:var(--soft)}
 #lightbox .msg{color:#fff;font-size:14px;max-width:480px;text-align:center}
 .imgs img,img.shot,a.shot-link{cursor:zoom-in}
+/* Live View of an API test: the requests of the session and their responses */
+.api-live{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:8px;max-height:70vh;overflow:auto}
+.api-call{padding:6px 0;border-bottom:1px solid var(--line)}
+.api-call:last-child{border-bottom:0}
+.api-call pre{margin:4px 0 0;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px}
 /* pipeline run: what needs a person - yellow, possible defects - red */
 .job-sum{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .job-sum .k{border:1px solid var(--line);border-radius:8px;padding:6px 10px;min-width:110px}
@@ -579,6 +584,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
       <div class="urlbar" id="urlbar"></div>
       <div class="live" id="live"><img id="shot" alt=""><span class="size hidden" id="shotSize" title="Размер окна браузера и масштаб, в котором он показан"></span></div>
+      <div class="api-live hidden" id="apiLive"></div>
       <div class="muted" style="font-size:12px;margin-top:6px" id="modeHint">Выберите Element Picker или Record &amp; Play, чтобы добавлять шаги кликом по экрану.</div>
     </div>
 
@@ -833,6 +839,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <button data-sub="model">Модель</button>
       <button data-sub="access">Участники и доступ</button>
       <button data-sub="conns">Подключения (MCP)</button>
+      <button data-sub="api">API приложения</button>
       <button data-sub="ide">Доступ из IDE (MCP)</button>
       <div class="subnav-group">Генерация тестов</div>
       <button data-sub="reqs">Требования</button>
@@ -943,6 +950,44 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
       <!-- Model -->
       <div data-subpanel="model" class="hidden"><div id="modelBox"></div></div>
+
+      <!-- The application's API: API tests without a browser -->
+      <div data-subpanel="api" class="hidden">
+        <div class="card">
+          <h3>API приложения</h3>
+          <div class="muted">API-сценарии (слой «API — бэкенд») записываются и прогоняются без браузера: каждый шаг — запрос к API. Здесь — куда идут запросы и как тесты авторизуются. Токен хранится на сервере зашифрованным и не попадает в модель, шаги, отчёты и экспорт.</div>
+          <label>Адрес API</label><input id="apiBase" placeholder="пусто — URL приложения проекта">
+          <div class="hint" id="apiEffective"></div>
+          <label>Авторизация</label>
+          <select id="apiAuth">
+            <option value="cookies">Cookies теста входа проекта (как UI-тесты)</option>
+            <option value="none">Без авторизации</option>
+            <option value="bearer">Bearer-токен (Authorization: Bearer …)</option>
+            <option value="header">API-ключ в заголовке</option>
+            <option value="login">Запрос входа с учётной записью → токен</option>
+          </select>
+          <div data-api-auth="header"><label>Заголовок</label><input id="apiHeader" placeholder="X-API-Key"></div>
+          <div data-api-auth="bearer header"><label>Токен <span class="muted" id="apiTokenSet"></span></label>
+            <div class="row"><input id="apiToken" type="password" autocomplete="new-password" class="grow" placeholder="пусто — оставить сохранённый">
+              <button class="btn small" id="apiTokenClear">Удалить токен</button></div></div>
+          <div data-api-auth="login">
+            <div class="hint">Тест сначала выполняет этот запрос под учётной записью теста (по умолчанию — проекта) и берёт токен из ответа. В теле пишите <code>{{username}}</code> и <code>{{password}}</code>.</div>
+            <div class="row"><div><label>Метод</label><select id="apiLoginMethod"><option>POST</option><option>PUT</option><option>GET</option></select></div>
+              <div class="grow"><label>Путь</label><input id="apiLoginPath" placeholder="/api/auth/login"></div></div>
+            <label>Тело (JSON)</label><textarea id="apiLoginBody" rows="3" class="mono" placeholder='{"login": "{{username}}", "password": "{{password}}"}'></textarea>
+            <div class="row"><div class="grow"><label>Токен в ответе (JSON-путь)</label><input id="apiLoginToken" placeholder="$.token"></div>
+              <div class="grow"><label>Заголовок для токена</label><input id="apiLoginHeader" placeholder="Authorization"></div></div>
+          </div>
+          <div class="row" style="margin-top:10px"><span class="muted grow" id="apiMsg"></span>
+            <button class="btn" id="apiCheck" title="Авторизоваться так, как это делают API-тесты, и обратиться к адресу API">Проверить</button>
+            <button class="btn primary" id="apiSave">Сохранить</button></div>
+        </div>
+        <div class="card">
+          <h3>Эндпоинты</h3>
+          <div class="muted">Запросы, которые приложение делает в UI-тестах (запись трафика при генерации) и при обходе Planner, сгруппированные по методу и пути (<code>{id}</code> — идентификатор объекта). Их получают генерация API-сценариев и агент, который пишет API-тест. Значения полей не хранятся — только их названия и статусы ответов.</div>
+          <div id="apiEndpoints" style="margin-top:8px"></div>
+        </div>
+      </div>
       <!-- Members and access -->
       <div data-subpanel="access" class="hidden">
         <div class="card">
@@ -1667,7 +1712,7 @@ function showTab(t) {
 let SID = null, STATE = null, TEST_ID = null, pollTimer = null, shotBusy = false, editing = false;
 const STATUS = {starting: 'Запуск браузера…', thinking: 'Агент думает…', executing: 'Выполняется шаг…',
   awaiting_approval: 'Ожидает подтверждения', idle: 'Ожидает вас', done: 'Готово', error: 'Ошибка', closed: 'Закрыта'};
-const ENGINES = {'builtin': 'Playwright', 'playwright-mcp': 'Playwright MCP'};
+const ENGINES = {'builtin': 'Playwright', 'playwright-mcp': 'Playwright MCP', 'api': 'API — без браузера'};
 
 $('#startBtn').onclick = async () => {
   const url = $('#fUrl').value.trim(), scenario = $('#fScenario').value.trim();
@@ -1696,7 +1741,7 @@ function openSession(sid) {
 async function poll() {
   clearTimeout(pollTimer);
   if (!SID) return;
-  try { STATE = await api('GET', `/api/sessions/${SID}`); render(); refreshShot(); }
+  try { STATE = await api('GET', `/api/sessions/${SID}`); render(); if (STATE.engine !== 'api') refreshShot(); }
   catch (e) { if (/not found/i.test(e.message)) { sessionLost(SID); return; } }
   pollTimer = setTimeout(poll, 900);
 }
@@ -1739,6 +1784,14 @@ async function discardInterrupted(sid) {
   loadInterrupted();
 }
 
+// an API test has no page: Live View shows the requests of the session and their responses
+function renderApiLive(log) {
+  $('#apiLive').innerHTML = log.length ? [...log].reverse().map(x => `<div class="api-call">
+      <div class="row"><b class="loc grow">${esc(x.request)}</b>${x.status != null ? `<span class="badge ${x.status >= 400 || x.error ? 'bad' : 'ok'}">${x.status}</span>` : ''}</div>
+      ${x.error ? `<div class="err">${esc(x.error)}</div>` : ''}
+      ${x.body ? `<pre class="mono">${esc(x.body)}</pre>` : ''}</div>`).join('')
+    : '<div class="hint">Запросов ещё не было. Агент отправляет их к API проекта («Проект → API приложения»), каждый запрос — шаг теста.</div>';
+}
 function refreshShot() {
   if (shotBusy) return;
   shotBusy = true;
@@ -1771,10 +1824,13 @@ function render() {
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
-  const mcp = s.engine !== 'builtin';
+  const mcp = s.engine !== 'builtin', apiTest = s.engine === 'api';
   $('#mode').disabled = $('#pickAction').disabled = mcp;
   if (mcp) { $('#mode').value = 'off'; $('#live').classList.remove('picking');
-    $('#modeHint').textContent = 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Element Picker доступен со встроенным движком.'; }
+    $('#modeHint').textContent = apiTest ? 'API-тест: браузера нет, каждый шаг — запрос к API. Здесь — запросы сессии и ответы на них.'
+      : 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Element Picker доступен со встроенным движком.'; }
+  $('#live').classList.toggle('hidden', apiTest); $('#apiLive').classList.toggle('hidden', !apiTest);
+  if (apiTest) renderApiLive(s.api_log || []);
   if (s.test_id && !TEST_ID) showSaved(s.test_id);
   $('#expApi').classList.toggle('hidden', !TEST_ID || !s.traffic);
 
@@ -2099,7 +2155,7 @@ async function loadTests() {
   $('#zipTestit').href = `/api/projects/${PID}/export?testit=1${tag ? '&tag=' + encodeURIComponent(tag) : ''}`;
   $('#testsBody').innerHTML = TESTS.map(t => {
     const lr = t.last_run, z = t.external?.[tmsKey(pc)], q = t.quarantine?.on;
-    return `<tr><td><a href="#" onclick="openTest('${t.id}');return false"><b>${esc(t.name)}</b></a>${t.engine === 'playwright-mcp' ? ' <span class="badge off">MCP</span>' : ''}
+    return `<tr><td><a href="#" onclick="openTest('${t.id}');return false"><b>${esc(t.name)}</b></a>${t.engine === 'playwright-mcp' ? ' <span class="badge off">MCP</span>' : ''}${t.layer === 'api' ? ' <span class="badge" title="API-тест: запросы к API без браузера">API</span>' : ''}
         ${t.role === 'login' ? '<span class="badge ok" title="Выполняется один раз перед остальными тестами, они начинаются с сохранённым входом">тест входа</span>' : t.role === 'module' ? '<span class="badge" title="Используется другими тестами как один шаг">модуль</span>' : ''}
         ${t.data_steps ? `<span class="badge off" title="Запросы подготовки и очистки данных">данные: ${t.data_steps}</span>` : ''}
         ${t.status === 'draft' ? '<span class="badge warn" title="Записан агентом, ещё не проверен человеком: в регрессионный набор не входит">черновик</span>' : t.status === 'review' ? '<span class="badge warn" title="Ждёт ревью: в регрессионный набор не входит">на ревью</span>' : ''}
@@ -2375,7 +2431,8 @@ function renderRun(r, t) {
   if (r.flaky) html += '<div class="hint">Упал в первой попытке и прошёл при перезапуске — нестабильный тест.</div>';
   else if (attempts.length > 1) html += '<div class="hint">Упал и при повторном запуске.</div>';
   if (r.status === 'running' && r.attempt > 1) html += '<div class="hint">Повторный запуск…</div>';
-  if (r.browser && (r.browser !== 'chromium' || r.device)) html += `<div class="hint">Браузер: ${esc(r.browser)}${r.device ? ' · устройство: ' + esc(r.device) : ''}</div>`;
+  if (r.browser === 'api') html += '<div class="hint">API-тест: запросы к API без браузера.</div>';
+  else if (r.browser && (r.browser !== 'chromium' || r.device)) html += `<div class="hint">Браузер: ${esc(r.browser)}${r.device ? ' · устройство: ' + esc(r.device) : ''}</div>`;
   if (r.relogin) html += '<div class="hint">Сохранённый вход устарел — тест входа выполнен заново.</div>';
   if (r.status !== 'running') html += failedStepsHtml(r, t);
   html += dataResultsHtml('До теста', r.before);
@@ -3907,8 +3964,60 @@ function showSub(sub, sec) {
   if (sub === 'ide') loadTokens();
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
+  if (sub === 'api') loadApi();
   if (sub === 'data') { store.set('tg_kn_sec', sec); showKnSec(sec); loadKnowledge(); }
 }
+
+// the application's API: address, authorization and the endpoints seen in the traffic (API tests)
+const API_AUTH_SHOWN = () => $$('[data-api-auth]').forEach(el =>
+  el.classList.toggle('hidden', !el.dataset.apiAuth.split(' ').includes($('#apiAuth').value)));
+$('#apiAuth').onchange = API_AUTH_SHOWN;
+async function loadApi() {
+  let d;
+  try { d = await api('GET', `/api/projects/${PID}/api`); } catch (e) { $('#apiMsg').textContent = e.message; return; }
+  const s = d.settings;
+  $('#apiBase').value = s.base_url;
+  $('#apiEffective').textContent = s.effective_url ? `Запросы пойдут на ${s.effective_url}` : 'Адрес не задан: укажите его здесь или URL приложения в «Общие».';
+  $('#apiAuth').value = s.auth; $('#apiHeader').value = s.header; $('#apiToken').value = '';
+  $('#apiTokenSet').textContent = s.token_set ? '(задан)' : '(не задан)';
+  $('#apiLoginMethod').value = s.login.method; $('#apiLoginPath').value = s.login.path; $('#apiLoginBody').value = s.login.body;
+  $('#apiLoginToken').value = s.login.token; $('#apiLoginHeader').value = s.login.header;
+  API_AUTH_SHOWN();
+  const can = canRole('editor');
+  $$('[data-subpanel="api"] input, [data-subpanel="api"] select, [data-subpanel="api"] textarea, #apiSave, #apiCheck, #apiTokenClear').forEach(x => x.disabled = !can);
+  $('#apiMsg').textContent = can ? '' : 'Настройки API меняют редакторы проекта.';
+  const eps = d.endpoints;
+  $('#apiEndpoints').innerHTML = eps.length ? `<table><thead><tr><th>Запрос</th><th>Ответы</th><th>Поля запроса</th><th>Поля ответа</th></tr></thead><tbody>` +
+    eps.map(e => `<tr><td class="loc"><b>${esc(e.method)}</b> ${esc(e.path)}${e.query.length ? `<span class="muted">?${esc(e.query.join('&'))}</span>` : ''}</td>
+      <td>${e.statuses.map(x => `<span class="badge ${x >= 400 ? 'bad' : 'ok'}">${x}</span>`).join(' ')}</td>
+      <td class="muted">${esc(e.request.join(', '))}</td><td class="muted">${esc(e.response.join(', '))}</td></tr>`).join('') + '</tbody></table>'
+    : '<div class="hint">Пока пусто: эндпоинты появятся, когда агент запишет UI-тест (встроенный движок) или Planner исследует сайт.</div>';
+}
+function apiBody() {
+  return {base_url: $('#apiBase').value.trim(), auth: $('#apiAuth').value, header: $('#apiHeader').value.trim(), token: $('#apiToken').value,
+    login: {method: $('#apiLoginMethod').value, path: $('#apiLoginPath').value.trim(), body: $('#apiLoginBody').value.trim(),
+            token: $('#apiLoginToken').value.trim(), header: $('#apiLoginHeader').value.trim()}};
+}
+$('#apiSave').onclick = async () => {
+  try { PROJ = await api('PUT', `/api/projects/${PID}/api`, apiBody()); await loadApi(); $('#apiMsg').textContent = 'Сохранено'; }
+  catch (e) { $('#apiMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+};
+$('#apiTokenClear').onclick = async () => {
+  if (!confirm('Удалить сохранённый токен API?')) return;
+  try { PROJ = await api('PUT', `/api/projects/${PID}/api`, {clear_token: true}); await loadApi(); $('#apiMsg').textContent = 'Токен удалён'; }
+  catch (e) { $('#apiMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+};
+$('#apiCheck').onclick = async () => {
+  $('#apiCheck').disabled = true; $('#apiMsg').textContent = 'Сохраняю и проверяю…';
+  try {
+    PROJ = await api('PUT', `/api/projects/${PID}/api`, apiBody());
+    const r = await api('POST', `/api/projects/${PID}/api/test`);
+    $('#apiMsg').innerHTML = `<span class="${r.status < 500 && r.status !== 401 && r.status !== 403 ? 'ok' : 'err'}">${esc(r.url)} ответил ${r.status}</span>` +
+      (r.status === 401 || r.status === 403 ? ' — авторизация не принята' : r.auth === 'login' ? ' — вход выполнен, токен получен' : '');
+    await loadApi();
+  } catch (e) { $('#apiMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  $('#apiCheck').disabled = false;
+};
 
 // members and roles
 let ACCESS = null;

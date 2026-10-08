@@ -11,6 +11,8 @@ a mutant - and must FAIL on each one:
                   is hidden, the text removed, the value / checkbox / enabled
                   state flipped, one list item removed, the URL changed
     api_500       every XHR/fetch request of the page answers 500
+    api_field     (API tests) the response of a checking request has the checked field changed
+    api_status    (API tests) a checking request is answered with 500
 
 A mutant the test survives means weak assertions ("слабые проверки"): the
 pipeline's verify stage then asks the authoring agent to add checks (see
@@ -18,11 +20,13 @@ agent.StudioSession `base_steps`) and verifies again. The share of killed
 mutants is shown on the test card. Mutation runs use no LLM and no self-healing.
 
 Mutants only ever touch the page inside the test's own browser (DOM changes and
-request interception); nothing is sent to the application that the recorded
+request interception) or the response an API test received; nothing is sent to the application that the recorded
 test would not send itself.
 """
 from __future__ import annotations
 
+import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -38,9 +42,10 @@ RUN_CFG = {"self_heal": False, "analyze_failures": False, "trace": "off"}
 
 @dataclass
 class Mutant:
-    kind: str                   # noop_action | assertion | api_500
+    kind: str                   # noop_action | assertion | api_500 | api_field | api_status
     step: int                   # index of the step it is applied at (-1: from the start)
     description: str
+    target: str = ""            # api_field: the JSON path of the changed field
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:6])
 
 
@@ -65,8 +70,30 @@ def _assertion_mutant(i: int, s: dict) -> Mutant | None:
     return Mutant("assertion", i, f"Перед шагом {i + 1} {_q(s['description'])}: {what}")
 
 
+def _api_mutants(steps: list[dict]) -> list[Mutant]:
+    """API tests: the requests that check their response, from the last one. A checked field gets
+    another value in the response, a checked status becomes 500."""
+    out = []
+    for i in range(len(steps) - 1, -1, -1):
+        s = steps[i]
+        if s["action"] != "api_request":
+            continue
+        try:
+            spec = json.loads(s.get("value") or "{}")
+        except ValueError:
+            continue
+        for path in list((spec.get("expect") if isinstance(spec, dict) else None) or {})[:1]:
+            out.append(Mutant("api_field", i, f"Ответ шага {i + 1} {_q(s['description'])}: поле {path} изменено",
+                              target=path))
+        if isinstance(spec, dict) and (spec.get("expect_status") or spec.get("expect")):
+            out.append(Mutant("api_status", i, f"Шаг {i + 1} {_q(s['description'])}: сервер ответил 500"))
+    return out
+
+
 def plan(test: dict, limit: int = 5, uses_api: bool = True) -> list[Mutant]:
     steps = test["steps"]
+    if test.get("layer") == "api":
+        return _api_mutants(steps)[:limit]
     checks = [i for i, s in enumerate(steps)
               if s["action"] in ASSERTIONS and s["action"] not in AUXILIARY_ASSERTIONS]
     first: list[Mutant] = []
@@ -118,6 +145,8 @@ class ApiProbe:
         self.requests = 0
 
     async def setup(self, bs) -> None:
+        if not hasattr(bs.context, "on"):
+            return              # an API test: no page
         def seen(request):
             if request.resource_type in ("xhr", "fetch"):
                 self.requests += 1
@@ -134,6 +163,7 @@ class Hooks:
         self.m = mutant
         self.applied = False
         self.error = ""
+        self._step_id = ""
 
     async def setup(self, bs) -> None:
         if self.m.kind != "api_500":
@@ -150,6 +180,10 @@ class Hooks:
 
     async def before_step(self, bs, i: int, step: dict, loc) -> None:
         if i != self.m.step or self.m.kind == "api_500":
+            return
+        if self.m.kind in ("api_field", "api_status"):
+            self._step_id = step["id"]
+            bs.options["mutate_response"] = self._response
             return
         try:
             await (self._noop if self.m.kind == "noop_action" else self._break)(bs, step, loc)
@@ -170,6 +204,26 @@ class Hooks:
             self.applied = True
         except Exception as e:
             self.error = str(e).splitlines()[0][:200]
+
+    def _response(self, step: dict, status: int, text: str) -> tuple[int, str]:
+        """steps.run_api: the response of the mutated step as the test sees it."""
+        if step.get("id") != self._step_id:
+            return status, text
+        self.applied = True
+        if self.m.kind == "api_status":
+            return 500, '{"error": "mutant"}'
+        try:
+            data = json.loads(text)
+            cur, parts = data, [int(p[1:-1]) if p.startswith("[") else p
+                                for p in re.findall(r"[^.\[\]]+|\[\d+\]", re.sub(r"^\$\.?", "", self.m.target))]
+            for p in parts[:-1]:
+                cur = cur[p]
+            cur[parts[-1]] = f"{cur[parts[-1]]}~mutant" if cur[parts[-1]] is not None else "mutant"
+            return status, json.dumps(data, ensure_ascii=False)
+        except Exception:
+            self.applied = False
+            self.error = f"в ответе нет поля {self.m.target}"
+            return status, text
 
     async def _noop(self, bs, step: dict, loc) -> None:
         a = step["action"]
