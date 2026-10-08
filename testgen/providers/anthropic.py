@@ -34,7 +34,18 @@ def _dump(block) -> dict:
     return {k: v for k, v in vars(block).items() if v is not None}
 
 
-NO_KEY = "API ИИ: неверный или не заданный API-ключ (укажите его в «Проект → Модель»)."
+def _lenient(data: dict) -> dict:
+    """A gateway or a server of its own may answer with blocks the strict BetaMessage rejects,
+    e.g. a thinking block with "signature": null: they are fixed before validation."""
+    content = []
+    for b in data.get("content") or []:
+        if isinstance(b, dict) and b.get("type") == "thinking":
+            b = {**b, "thinking": b.get("thinking") or "", "signature": b.get("signature") or ""}
+        content.append(b)
+    return {**data, "content": content}
+
+
+NO_KEY ="API ИИ: неверный или не заданный API-ключ (укажите его в «Проект → Модель»)."
 NO_CREDITS = ("API ИИ: на балансе аккаунта, к которому относится API-ключ проекта, закончились кредиты. "
               "Пополните баланс в консоли Anthropic (Plans & Billing) или укажите ключ другого аккаунта "
               "в «Проект → Модель».")
@@ -175,7 +186,7 @@ class AnthropicProvider:
             if raw_api is None:
                 return await api.parse(**kw)
             raw = await raw_api.parse(**kw)
-            msg = BetaMessage.model_validate(raw.http_response.json())
+            msg = BetaMessage.model_validate(_lenient(raw.http_response.json()))
             try:
                 return parse_beta_response(response=msg, output_format=schema)
             except pydantic.ValidationError:
