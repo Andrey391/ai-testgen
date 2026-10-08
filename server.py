@@ -191,6 +191,8 @@ AUDIT_ACTIONS = {
     ("PUT", "/api/projects/{pid}/mailbox"): "project.mailbox",
     ("PUT", "/api/projects/{pid}/llm"): "project.llm",
     ("PUT", "/api/projects/{pid}/api"): "project.api",
+    ("POST", "/api/projects/{pid}/api/endpoints"): "project.api_endpoint",
+    ("DELETE", "/api/projects/{pid}/api/endpoints"): "project.api_endpoint",
     ("DELETE", "/api/projects/{pid}/llm/key"): "project.llm",
     ("PUT", "/api/projects/{pid}/notify"): "project.notify",
     ("GET", "/api/projects/{pid}/export"): "project.export",
@@ -672,6 +674,37 @@ async def update_api(pid: str, body: ApiBody):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _project_view(p)
+
+
+class EndpointBody(BaseModel):
+    method: str
+    path: str
+    query: list[str] | str = []
+    request: list[str] | str = []
+    response: list[str] | str = []
+    statuses: list[int | str] | str = []
+    note: str = ""
+    old: str = ""                    # "METHOD /path" of the endpoint being edited; empty = a new one
+
+
+@app.post("/api/projects/{pid}/api/endpoints")
+async def save_endpoint(pid: str, body: EndpointBody):
+    """Add an endpoint to the catalog or edit one (a recorded endpoint gets the person's version)."""
+    project(pid, "editor")
+    try:
+        traffic.save_endpoint(pid, body.model_dump(exclude={"old"}), body.old.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return traffic.catalog(pid)
+
+
+@app.delete("/api/projects/{pid}/api/endpoints")
+async def delete_endpoint(pid: str, key: str = ""):
+    """Remove an endpoint ("METHOD /path"); a recorded one does not come back from new traffic."""
+    project(pid, "editor")
+    if not traffic.delete_endpoint(pid, key.strip()):
+        raise HTTPException(404, "Эндпоинт не найден")
+    return traffic.catalog(pid)
 
 
 @app.post("/api/projects/{pid}/api/test")

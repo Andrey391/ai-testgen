@@ -153,3 +153,34 @@ def test_api_test_without_authorization_gets_401(stand, project):
 
     rep = arun(runner.run_test(test, credentials=CREDS))
     assert not rep["passed"] and "ответил 401" in rep["results"][0]["error"]
+
+
+def test_people_add_edit_and_remove_endpoints(monkeypatch):
+    pid = _new_project()["id"]
+    seen = [{"method": "GET", "path": "/api/orders", "count": 3, "statuses": [200], "query": [], "request": [],
+             "response": ["id"]},
+            {"method": "GET", "path": "/api/internal", "count": 1, "statuses": [200], "query": [], "request": [],
+             "response": []}]
+    monkeypatch.setattr(traffic, "recorded", lambda p: [dict(x) for x in seen])
+
+    traffic.save_endpoint(pid, {"method": "post", "path": "/api/orders", "request": "product, qty", "statuses": "201",
+                                "note": "Создаёт заказ"})
+    traffic.save_endpoint(pid, {"method": "GET", "path": "/api/orders", "response": ["id", "status"], "statuses": [200]},
+                          old="GET /api/orders")
+    assert traffic.delete_endpoint(pid, "GET /api/internal")
+    cat = {f"{e['method']} {e['path']}": e for e in traffic.catalog(pid)}
+
+    assert set(cat) == {"GET /api/orders", "POST /api/orders"}               # removed: not back from the traffic
+    assert cat["GET /api/orders"]["source"] == "edited" and cat["GET /api/orders"]["count"] == 3
+    assert cat["GET /api/orders"]["response"] == ["id", "status"]
+    assert cat["POST /api/orders"]["source"] == "manual" and cat["POST /api/orders"]["request"] == ["product", "qty"]
+    assert "POST /api/orders -> 201; request fields: product, qty — Создаёт заказ" in traffic.catalog_text(list(cat.values()))
+
+    traffic.save_endpoint(pid, {"method": "GET", "path": "/api/v2/orders"}, old="GET /api/orders")      # renamed
+    keys = {f"{e['method']} {e['path']}" for e in traffic.catalog(pid)}
+    assert keys == {"GET /api/v2/orders", "POST /api/orders"}
+    for bad in ({"method": "POST", "path": "/api/orders"}, {"method": "FETCH", "path": "/x"},
+                {"method": "GET", "path": "api/x"}, {"method": "GET", "path": "/x", "statuses": "abc"}):
+        with pytest.raises(ValueError):
+            traffic.save_endpoint(pid, bad)
+    assert traffic.delete_endpoint(pid, "POST /api/orders") and not traffic.delete_endpoint(pid, "POST /api/orders")

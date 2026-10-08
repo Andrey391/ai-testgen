@@ -248,7 +248,7 @@ def merge(*lists: list[dict]) -> list[dict]:
     return sorted(out.values(), key=lambda x: (x["path"], x["method"]))[:MAX_ENDPOINTS]
 
 
-def catalog(pid: str) -> list[dict]:
+def recorded(pid: str) -> list[dict]:
     """The application's API as the project has seen it: requests recorded while its tests were
     authored and while the Planner explored the site."""
     from . import explorer
@@ -259,6 +259,91 @@ def catalog(pid: str) -> list[dict]:
         if har:
             entries += from_har(har)
     return merge(endpoints(entries, p.get("base_url", "")), (explorer.latest(pid) or {}).get("api") or [])
+
+
+# People edit the catalog: their endpoints (new ones, or a recorded one corrected) win over the recorded
+# ones with the same method and path; a removed recorded endpoint stays removed when it is seen again.
+METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+
+
+def _edits_file(pid: str):
+    return projects.path(pid) / "api-endpoints.json"
+
+
+def _edits(pid: str) -> dict:
+    d = fs.read_json(_edits_file(pid)) or {}
+    return {"manual": d.get("manual") or [], "removed": d.get("removed") or []}
+
+
+def _key(ep: dict) -> str:
+    return f"{ep['method']} {ep['path']}"
+
+
+def clean_endpoint(ep: dict) -> dict:
+    """An endpoint typed by a person: a method, a path from "/", names of fields, statuses, a note."""
+    def names(v) -> list[str]:
+        items = v if isinstance(v, list) else str(v or "").replace("\n", ",").split(",")
+        return list(dict.fromkeys(str(x).strip()[:100] for x in items if str(x).strip()))[:50]
+    method = str(ep.get("method") or "").strip().upper()
+    if method not in METHODS:
+        raise ValueError(f"Метод должен быть одним из: {', '.join(METHODS)}")
+    path = urlparse(str(ep.get("path") or "").strip()).path if "://" in str(ep.get("path") or "") \
+        else str(ep.get("path") or "").strip().split("?")[0]
+    if not path.startswith("/") or len(path) > 300 or re.search(r"\s", path):
+        raise ValueError("Путь должен начинаться с «/» и быть без пробелов, например /api/orders/{id}")
+    statuses = []
+    for s in names(ep.get("statuses")):
+        if not s.isdigit() or not 100 <= int(s) <= 599:
+            raise ValueError(f"Статус ответа «{s}» — не код HTTP (100–599)")
+        statuses.append(int(s))
+    return {"method": method, "path": path, "count": 0, "statuses": statuses, "query": names(ep.get("query")),
+            "request": names(ep.get("request")), "response": names(ep.get("response")),
+            "note": str(ep.get("note") or "").strip()[:500], "source": "manual"}
+
+
+def catalog(pid: str) -> list[dict]:
+    """The API catalog: the recorded endpoints with the edits of people applied."""
+    edits = _edits(pid)
+    manual = {_key(ep): ep for ep in edits["manual"]}
+    removed = set(edits["removed"])
+    out = []
+    for ep in recorded(pid):
+        if _key(ep) in removed:
+            continue
+        own = manual.pop(_key(ep), None)
+        out.append(ep | {"source": "recorded"} if own is None else own | {"source": "edited", "count": ep["count"]})
+    out += manual.values()
+    return sorted(out, key=lambda x: (x["path"], x["method"]))
+
+
+def save_endpoint(pid: str, ep: dict, old: str = "") -> dict:
+    """Add an endpoint, or replace `old` ("METHOD /path") with it."""
+    ep = clean_endpoint(ep)
+    with fs.lock(_edits_file(pid)):
+        edits = _edits(pid)
+        if _key(ep) != old and any(_key(x) == _key(ep) for x in catalog(pid)):
+            raise ValueError(f"Эндпоинт {_key(ep)} уже есть в каталоге")
+        recorded_keys = {_key(x) for x in recorded(pid)}
+        edits["manual"] = [x for x in edits["manual"] if _key(x) not in (old, _key(ep))] + [ep]
+        if old and old != _key(ep) and old in recorded_keys:
+            edits["removed"].append(old)          # a recorded endpoint renamed: the old one is gone
+        edits["removed"] = [k for k in dict.fromkeys(edits["removed"]) if k != _key(ep)]
+        fs.write_json(_edits_file(pid), edits, indent=1)
+    return ep
+
+
+def delete_endpoint(pid: str, key: str) -> bool:
+    with fs.lock(_edits_file(pid)):
+        edits = _edits(pid)
+        manual = [x for x in edits["manual"] if _key(x) != key]
+        found = len(manual) != len(edits["manual"])
+        edits["manual"] = manual
+        if key in {_key(x) for x in recorded(pid)}:
+            edits["removed"] = list(dict.fromkeys(edits["removed"] + [key]))
+            found = True
+        if found:
+            fs.write_json(_edits_file(pid), edits, indent=1)
+    return found
 
 
 def catalog_text(eps: list[dict], limit: int = 80) -> str:
@@ -273,6 +358,8 @@ def catalog_text(eps: list[dict], limit: int = 80) -> str:
             line += f"; request fields: {', '.join(ep['request'])}"
         if ep["response"]:
             line += f"; response fields: {', '.join(ep['response'])}"
+        if ep.get("note"):
+            line += f" — {ep['note']}"
         lines.append(line)
     if len(eps) > limit:
         lines.append(f"(and {len(eps) - limit} more)")

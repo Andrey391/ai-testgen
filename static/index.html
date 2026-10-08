@@ -989,7 +989,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <input id="apiFilter" class="grow" placeholder="Поиск по пути и полям: orders, status, {id}…">
             <select id="apiFilterMethod" style="width:auto"><option value="">все методы</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
             <select id="apiFilterStatus" style="width:auto"><option value="">все ответы</option><option value="ok">успешные (2xx/3xx)</option><option value="err">с ошибками (4xx/5xx)</option></select>
-            <span class="muted" id="apiFilterCount" style="font-size:12px"></span></div>
+            <span class="muted" id="apiFilterCount" style="font-size:12px"></span>
+            <button class="btn small" id="apiEpAdd" onclick="apiEpEdit('')">+ эндпоинт</button></div>
+          <div id="apiEpForm"></div>
           <div id="apiEndpoints" style="margin-top:8px"></div>
         </div>
       </div>
@@ -4001,16 +4003,55 @@ function renderApiEndpoints() {
   const q = $('#apiFilter').value.trim().toLowerCase(), method = $('#apiFilterMethod').value, st = $('#apiFilterStatus').value;
   const eps = API_EPS.filter(e => (!method || e.method === method)
     && (!st || (st === 'err' ? e.statuses.some(x => x >= 400) : e.statuses.some(x => x < 400)))
-    && (!q || [e.path, ...e.query, ...e.request, ...e.response].some(x => String(x).toLowerCase().includes(q))));
+    && (!q || [e.path, e.note || '', ...e.query, ...e.request, ...e.response].some(x => String(x).toLowerCase().includes(q))));
   $('#apiFilterCount').textContent = API_EPS.length ? `показано ${eps.length} из ${API_EPS.length}` : '';
-  $$('#apiFilter, #apiFilterMethod, #apiFilterStatus').forEach(x => x.closest('.row').classList.toggle('hidden', !API_EPS.length));
+  const can = canRole('editor');
+  $('#apiEpAdd').classList.toggle('hidden', !can);
+  const key = e => `${e.method} ${e.path}`;
+  const source = {manual: ['вручную', ''], edited: ['изменён', 'warn']};
   $('#apiEndpoints').innerHTML = !API_EPS.length
-    ? '<div class="hint">Пока пусто: эндпоинты появятся, когда агент запишет UI-тест (встроенный движок) или Planner исследует сайт.</div>'
+    ? '<div class="hint">Пока пусто: эндпоинты появятся, когда агент запишет UI-тест (встроенный движок) или Planner исследует сайт; их можно добавить и вручную.</div>'
     : !eps.length ? '<div class="hint">Под фильтр ничего не подходит.</div>'
-    : `<table><thead><tr><th>Запрос</th><th>Ответы</th><th>Поля запроса</th><th>Поля ответа</th></tr></thead><tbody>` +
-      eps.map(e => `<tr><td class="loc"><b>${esc(e.method)}</b> ${esc(e.path)}${e.query.length ? `<span class="muted">?${esc(e.query.join('&'))}</span>` : ''}</td>
+    : `<table><thead><tr><th>Запрос</th><th>Ответы</th><th>Поля запроса</th><th>Поля ответа</th><th></th></tr></thead><tbody>` +
+      eps.map(e => `<tr><td class="loc"><b>${esc(e.method)}</b> ${esc(e.path)}${e.query.length ? `<span class="muted">?${esc(e.query.join('&'))}</span>` : ''}
+          ${source[e.source] ? ` <span class="badge ${source[e.source][1]}">${source[e.source][0]}</span>` : ''}
+          ${e.note ? `<div class="muted" style="font-family:inherit">${esc(e.note)}</div>` : ''}</td>
         <td>${e.statuses.map(x => `<span class="badge ${x >= 400 ? 'bad' : 'ok'}">${x}</span>`).join(' ')}</td>
-        <td class="muted">${esc(e.request.join(', '))}</td><td class="muted">${esc(e.response.join(', '))}</td></tr>`).join('') + '</tbody></table>';
+        <td class="muted">${esc(e.request.join(', '))}</td><td class="muted">${esc(e.response.join(', '))}</td>
+        <td style="white-space:nowrap">${can ? `<button class="btn small" title="Изменить" onclick="apiEpEdit(${esc(JSON.stringify(key(e)))})">✎</button>
+          <button class="btn small" title="Удалить из каталога" onclick="apiEpDelete(${esc(JSON.stringify(key(e)))})">✕</button>` : ''}</td></tr>`).join('') + '</tbody></table>';
+}
+// add or edit an endpoint of the catalog (an edited recorded one keeps the person's version)
+function apiEpEdit(key) {
+  const e = API_EPS.find(x => `${x.method} ${x.path}` === key) || {method: 'GET', path: '/api/', query: [], request: [], response: [], statuses: [], note: ''};
+  const list = v => esc((v || []).join(', '));
+  $('#apiEpForm').innerHTML = `<div class="card" style="margin-top:8px;background:var(--bg)">
+    <b>${key ? `Изменить ${esc(key)}` : 'Новый эндпоинт'}</b>
+    <div class="row"><div><label>Метод</label><select id="epMethod">${['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(m => `<option ${m === e.method ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
+      <div class="grow"><label>Путь (<code>{id}</code> — идентификатор объекта)</label><input id="epPath" value="${esc(e.path)}"></div></div>
+    <div class="grid2"><div><label>Параметры запроса (через запятую)</label><input id="epQuery" value="${list(e.query)}"></div>
+      <div><label>Статусы ответа</label><input id="epStatuses" value="${list(e.statuses)}" placeholder="200, 404"></div>
+      <div><label>Поля запроса</label><input id="epRequest" value="${list(e.request)}" placeholder="name, price"></div>
+      <div><label>Поля ответа</label><input id="epResponse" value="${list(e.response)}" placeholder="id, status, [].name"></div></div>
+    <label>Назначение (для модели и людей)</label><input id="epNote" value="${esc(e.note || '')}" placeholder="Создаёт заказ покупателя; без авторизации — 401">
+    <div class="row" style="margin-top:8px"><span class="err grow" id="epMsg"></span>
+      <button class="btn small" onclick="$('#apiEpForm').innerHTML=''">Отмена</button>
+      <button class="btn primary small" id="epSave">Сохранить</button></div></div>`;
+  $('#epSave').onclick = async () => {
+    const v = id => $(id).value;
+    try {
+      API_EPS = await api('POST', `/api/projects/${PID}/api/endpoints`, {old: key, method: v('#epMethod'), path: v('#epPath').trim(),
+        query: v('#epQuery'), statuses: v('#epStatuses'), request: v('#epRequest'), response: v('#epResponse'), note: v('#epNote')});
+      $('#apiEpForm').innerHTML = ''; renderApiEndpoints();
+    } catch (err) { $('#epMsg').textContent = err.message; }
+  };
+  $('#epPath').focus();
+}
+async function apiEpDelete(key) {
+  const e = API_EPS.find(x => `${x.method} ${x.path}` === key);
+  if (!confirm(`Удалить ${key} из каталога?` + (e?.source !== 'manual' ? ' Найденный в трафике эндпоинт не вернётся при новой записи.' : ''))) return;
+  try { API_EPS = await api('DELETE', `/api/projects/${PID}/api/endpoints?key=${encodeURIComponent(key)}`); renderApiEndpoints(); }
+  catch (err) { alert(err.message); }
 }
 $('#apiFilter').oninput = $('#apiFilterMethod').onchange = $('#apiFilterStatus').onchange = renderApiEndpoints;
 function apiBody() {
