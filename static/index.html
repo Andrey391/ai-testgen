@@ -205,6 +205,36 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .subnav{display:flex;flex-direction:column;gap:2px;position:sticky;top:10px}
 .subnav button{text-align:left;background:none;border:0;color:var(--muted);font:inherit;padding:8px 10px;border-radius:6px;cursor:pointer}
 .subnav button.on{background:var(--soft);color:var(--ink);font-weight:600}
+.subnav button:hover{color:var(--ink)}
+.subnav-group{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:10px 10px 2px;opacity:.8}
+.subnav-group:first-child{padding-top:0}
+.subnav .caret{display:inline-block;width:12px;font-size:10px;transition:transform .15s}
+.subnav button.open .caret{transform:rotate(90deg)}
+.subtree{display:none;flex-direction:column;gap:1px;margin:0 0 4px 16px;border-left:1px solid var(--line);padding-left:4px}
+.subtree.open{display:flex}
+.subtree button{padding:5px 10px;font-size:13px}
+.subnav .nb:empty{display:none}
+.subnav .nb{display:inline-block;min-width:16px;padding:0 5px;border-radius:9px;font-size:11px;line-height:16px;text-align:center;background:var(--line);color:var(--ink);font-weight:400;margin-left:4px}
+.subnav .nb.warn{background:var(--warn);color:#fff}
+.kn-bar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:10px 0 6px}
+.kn-bar input,.kn-bar select{width:auto;padding:4px 8px;font-size:13px;margin:0}
+.kn-bar input[type=search]{flex:1;min-width:180px}
+.kn-bar label{margin:0;font-size:12px;color:var(--muted);display:flex;gap:4px;align-items:center}
+.kn-table{width:100%}
+.kn-table td{vertical-align:top}
+.kn-table td.cut{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kn-table tr.kn-edit>td{background:var(--bg)}
+.kn-table tr.sel>td{background:var(--soft)}
+.kn-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:10px 0 4px}
+.kn-tile{border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;background:none;text-align:left;font:inherit;color:inherit}
+.kn-tile:hover{border-color:var(--accent)}
+.kn-tile b{display:block;font-size:20px}
+.kn-tile span{font-size:12px;color:var(--muted)}
+.kn-tile.warn{border-color:var(--warn)}.kn-tile.warn b{color:var(--warn)}
+.kn-card{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px}
+.kn-card .diff td{font-size:13px}
+.kn-card .diff .old{color:var(--muted)}
+.kn-card .diff .new{color:var(--ok)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:0 14px}
 .checks{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:4px}
@@ -306,6 +336,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
 @media (max-width:1100px){.studio{grid-template-columns:1fr;height:auto}.chat,.steps{max-height:360px}
   .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
+  .subnav-group{width:100%}.subtree.open{flex-direction:row;flex-wrap:wrap;width:100%;margin-left:0}
   .skills-layout > .card{position:static}#skList{max-height:50vh}#skEditor{max-height:none}
   .grid2,.grid3{grid-template-columns:1fr}}
 </style>
@@ -796,17 +827,28 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 <!-- ============ PROJECT SETTINGS ============ -->
 <section id="tab-proj" class="hidden">
   <div class="settings">
-    <div class="subnav">
+    <div class="subnav" role="tree">
+      <div class="subnav-group">Проект</div>
       <button data-sub="general" class="on">Общие</button>
       <button data-sub="model">Модель</button>
       <button data-sub="access">Участники и доступ</button>
       <button data-sub="conns">Подключения (MCP)</button>
+      <button data-sub="ide">Доступ из IDE (MCP)</button>
+      <div class="subnav-group">Генерация тестов</div>
       <button data-sub="reqs">Требования</button>
       <button data-sub="scen">Сценарии</button>
-      <button data-sub="data">Тестовые данные</button>
+      <button data-sub="data" class="has-tree"><span class="caret">▸</span>Тестовые данные <span class="nb" id="knNavAlert"></span></button>
+      <div class="subtree" id="knTree">
+        <button data-sub="data" data-sec="overview">Обзор и подтверждение</button>
+        <button data-sub="data" data-sec="pending">Обновления <span class="nb" data-kn-count="pending"></span></button>
+        <button data-sub="data" data-sec="dups">Дубли <span class="nb" data-kn-count="dups"></span></button>
+        <button data-sub="data" data-sec="entities">Сущности <span class="nb" data-kn-count="entities"></span></button>
+        <button data-sub="data" data-sec="roles">Роли <span class="nb" data-kn-count="roles"></span></button>
+        <button data-sub="data" data-sec="data">Данные стенда <span class="nb" data-kn-count="data"></span></button>
+        <button data-sub="data" data-sec="memory">Память <span class="nb" data-kn-count="memory"></span></button>
+      </div>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
-      <button data-sub="ide">Доступ из IDE (MCP)</button>
     </div>
     <div>
       <!-- General -->
@@ -1052,45 +1094,77 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
       <!-- Application model and test data -->
       <div data-subpanel="data" class="hidden">
-        <div class="card">
-          <h3>Модель приложения и тестовые данные</h3>
-          <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Пример: для оформления заказа нужен товар в наличии и покупатель с адресом доставки, а товар создаёт менеджер магазина в категории каталога. Модель строится сама: из требований при их анализе, из карты сайта при «Исследовать сайт» (Planner) и при записи тестов — агент заносит найденные и созданные данные (инструмент <code>test_data</code>), а следующие тесты их переиспользуют. Модель получают ИИ при проектировании сценариев (предусловия), агент при записи теста (готовит недостающие данные или останавливается) и анализ падений (отсутствие данных — проблема окружения, а не дефект).</div>
-          <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Интернет-магазин: каталог, категории, товары, корзина, заказы, оплата, доставка, покупатели"></textarea>
-          <details class="opt" style="margin-top:8px"><summary>Построить из требований (ИИ дополнит модель, ваши записи не меняются)</summary>
-            <textarea id="knReq" rows="5" placeholder="Вставьте текст требований или оставьте пустым — возьмётся последний анализ требований"></textarea>
-            <div class="row" style="margin-top:6px"><span class="muted grow" id="knExtractMsg"></span><button class="btn" id="knExtract">Построить</button></div>
-          </details>
+        <div data-kn-sec="overview">
+          <div class="card">
+            <h3>Модель приложения и тестовые данные</h3>
+            <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Модель строится сама: из требований, из карты сайта (Planner) и при записи тестов (инструмент агента <code>test_data</code>). Запись, которая уже есть (то же или похожее имя), не дублируется и не меняется молча: обновление ждёт подтверждения в разделе «Обновления».</div>
+            <div class="kn-tiles" id="knTiles"></div>
+            <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Интернет-магазин: каталог, категории, товары, корзина, заказы, оплата, доставка, покупатели"></textarea>
+            <details class="opt" style="margin-top:8px"><summary>Построить из требований (ИИ дополнит модель; изменения существующих записей придут на подтверждение)</summary>
+              <textarea id="knReq" rows="5" placeholder="Вставьте текст требований или оставьте пустым — возьмётся последний анализ требований"></textarea>
+              <div class="row" style="margin-top:6px"><span class="muted grow" id="knExtractMsg"></span><button class="btn" id="knExtract">Построить</button></div>
+            </details>
+          </div>
+          <div class="card" id="knConfirmBox">
+            <h3>Подтверждение жизненного цикла системы</h3>
+            <div class="hint">Перед генерацией тестов человек проверяет и подтверждает модель: сущности и их зависимости, статусы и переходы (кто их выполняет), роли с возможностями и ограничениями. Без подтверждения конвейер ждёт, а «Тест в Studio» из сценария не запускается. Изменение сущностей, жизненного цикла или ролей требует нового подтверждения; данные стенда и память меняются свободно.</div>
+            <div class="row" style="margin-top:8px"><span class="grow" id="knConfirmState"></span><button class="btn primary" id="knConfirm">Подтвердить жизненный цикл</button></div>
+          </div>
         </div>
-        <div class="card" id="knConfirmBox">
-          <h3>Подтверждение жизненного цикла системы</h3>
-          <div class="hint">Перед генерацией тестов человек проверяет и подтверждает модель: сущности и их зависимости, статусы и переходы (кто их выполняет), роли с возможностями и ограничениями. Без подтверждения конвейер ждёт, а «Тест в Studio» из сценария не запускается. Изменение сущностей, жизненного цикла или ролей требует нового подтверждения; данные стенда и память меняются свободно.</div>
-          <div class="row" style="margin-top:8px"><span class="grow" id="knConfirmState"></span><button class="btn primary" id="knConfirm">Подтвердить жизненный цикл</button></div>
+        <div data-kn-sec="pending" class="hidden">
+          <div class="card">
+            <h3>Обновления существующих записей</h3>
+            <div class="hint">Анализ требований, Planner, тест в Studio или человек нашли запись, которая уже есть в модели (то же или похожее имя). Чтобы не плодить дубли, новая запись не добавляется, а предлагает обновить существующую: проверьте каждое изменение («было → станет») и обновите или отклоните его — по одному или все сразу. «Добавить отдельно» — если похожее имя означает другой объект.</div>
+            <div class="kn-bar" id="knBar-pending"></div>
+            <div id="knList-pending" data-nopage></div>
+          </div>
         </div>
-        <div class="card">
-          <h3>Сущности, зависимости и жизненный цикл</h3>
-          <div class="hint">«Требует» — сущности (и их настройки), которые должны существовать до создания этой; жизненный цикл — статусы и разрешённые переходы.</div>
-          <div id="knEntities"></div>
-          <button class="btn small" style="margin-top:6px" onclick="knAdd('entities')">+ Сущность</button>
+        <div data-kn-sec="dups" class="hidden">
+          <div class="card">
+            <h3>Проверка на дубли</h3>
+            <div class="hint">Сущности, роли и данные стенда с одинаковыми или похожими названиями («Заказ» — «Заказы», «Менеджер» — «Менеджер магазина»). Выберите, какую запись оставить: она получит недостающие поля и зависимости остальных, остальные удаляются, ссылки на их названия (зависимости, сущность и роль данных) переходят на оставленную. «Не дубли» — группа больше не предлагается.</div>
+            <div class="row" style="margin-top:8px"><span class="muted grow" id="knDupsMsg"></span><button class="btn primary" id="knDupsCheck">Проверить на дубли</button></div>
+            <div class="kn-bar" id="knBar-dups"></div>
+            <div id="knList-dups" data-nopage></div>
+          </div>
         </div>
-        <div class="card">
-          <h3>Роли и учётные записи</h3>
-          <div class="hint">Что роль может и чего не может — из этого строятся сценарии на права доступа; каждый сценарий выполняется от одной роли. Учётная запись — под ней конвейер выполняет сценарии роли.</div>
-          <div id="knRoles"></div>
-          <button class="btn small" style="margin-top:6px" onclick="knAdd('roles')">+ Роль</button>
+        <div data-kn-sec="entities" class="hidden">
+          <div class="card">
+            <h3>Сущности, зависимости и жизненный цикл</h3>
+            <div class="hint">«Требует» — сущности (и их настройки), которые должны существовать до создания этой; жизненный цикл — статусы и разрешённые переходы.</div>
+            <div class="kn-bar" id="knBar-entities"></div>
+            <div id="knList-entities" data-nopage></div>
+            <button class="btn small" style="margin-top:6px" onclick="knAdd('entities')">+ Сущность</button>
+          </div>
         </div>
-        <div class="card">
-          <h3>Тестовые данные стенда</h3>
-          <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio): такие записи обновляются новыми находками; очистите поле, чтобы запись больше не менялась. «Нужны сценариям» — данные, которые назвали сценарии, но ещё никто не видел на стенде: первый тест, который их найдёт или подготовит, переведёт запись в «на стенде», следующие тесты переиспользуют её.</div>
-          <div id="knData"></div>
-          <button class="btn small" style="margin-top:6px" onclick="knAdd('data')">+ Запись</button>
+        <div data-kn-sec="roles" class="hidden">
+          <div class="card">
+            <h3>Роли и учётные записи</h3>
+            <div class="hint">Что роль может и чего не может — из этого строятся сценарии на права доступа; каждый сценарий выполняется от одной роли. Учётная запись — под ней конвейер выполняет сценарии роли.</div>
+            <div class="kn-bar" id="knBar-roles"></div>
+            <div id="knList-roles" data-nopage></div>
+            <button class="btn small" style="margin-top:6px" onclick="knAdd('roles')">+ Роль</button>
+          </div>
         </div>
-        <div class="card">
-          <h3>Память проекта</h3>
-          <div class="hint">Факты и события, которые запомнил агент при записи тестов (инструмент <code>remember</code>) или добавили люди. Пароли сюда не попадают.</div>
-          <div id="knMemory"></div>
-          <div class="row" style="margin-top:6px"><input id="knFact" class="grow" placeholder="Новый факт: «Оплаченный заказ покупатель отменить не может»"><button class="btn small" onclick="knAddFact()">Добавить</button></div>
+        <div data-kn-sec="data" class="hidden">
+          <div class="card">
+            <h3>Тестовые данные стенда</h3>
+            <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio). «Нужны сценариям» — данные, которые назвали сценарии, но ещё никто не видел на стенде: когда тест их найдёт или подготовит, придёт обновление «на стенде».</div>
+            <div class="kn-bar" id="knBar-data"></div>
+            <div id="knList-data" data-nopage></div>
+            <button class="btn small" style="margin-top:6px" onclick="knAdd('data')">+ Запись</button>
+          </div>
         </div>
-        <div class="card row" style="position:sticky;bottom:10px">
+        <div data-kn-sec="memory" class="hidden">
+          <div class="card">
+            <h3>Память проекта</h3>
+            <div class="hint">Факты и события, которые запомнил агент при записи тестов (инструмент <code>remember</code>) или добавили люди. Пароли сюда не попадают.</div>
+            <div class="row" style="margin-top:6px"><input id="knFact" class="grow" placeholder="Новый факт: «Оплаченный заказ покупатель отменить не может»"><button class="btn small" onclick="knAddFact()">Добавить</button></div>
+            <div class="kn-bar" id="knBar-memory"></div>
+            <div id="knList-memory" data-nopage></div>
+          </div>
+        </div>
+        <div class="card row" id="knSaveBar" style="position:sticky;bottom:10px">
           <span class="muted grow" id="knMsg"></span>
           <button class="btn primary" id="knSave">Сохранить</button>
         </div>
@@ -1583,7 +1657,10 @@ function showTab(t) {
   if (t === 'tasks') loadTasks();
   if (t === 'req') loadAnalyses();
   if (t === 'pipe') loadPipe();
-  if (t === 'proj') loadSettings();
+  if (t === 'proj') {
+    loadSettings();
+    if (!$('#tab-proj').dataset.opened) { $('#tab-proj').dataset.opened = '1'; showSub(store.get('tg_settings_sub') || 'general'); }
+  }
 }
 
 // ---- studio
@@ -3468,7 +3545,7 @@ function renderJob() {
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
   if (j.status === 'awaiting_model') {
     html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите жизненный цикл системы — сущности, статусы и переходы, роли и их возможности. Тесты генерируются только по подтверждённой модели.</span>
-      <button class="btn" onclick="openSettings('data')">Открыть модель</button>
+      <button class="btn" onclick="openSettings('data', 'overview')">Открыть модель</button>
       <button class="btn primary" onclick="confirmModelFromJob()">Подтвердить</button></div></div>`;
   }
   if (j.status === 'awaiting_reuse') {
@@ -3539,7 +3616,7 @@ async function applyReuse() {
 }
 async function confirmModelFromJob() {
   try { await api('POST', `/api/projects/${PID}/knowledge/confirm`); openJob(JOB.id); }
-  catch (e) { if (confirm(e.message + '\n\nОткрыть «Проект → Тестовые данные»?')) openSettings('data'); }
+  catch (e) { if (confirm(e.message + '\n\nОткрыть «Проект → Тестовые данные»?')) openSettings('data', 'overview'); }
 }
 async function selectScenarios() {
   const indices = [...JOB_PICK.sel];
@@ -3744,15 +3821,20 @@ $('#wzFinish').onclick = async () => {
 };
 
 // ---- project settings
-function openSettings(sub) { showTab('proj'); showSub(sub); }
-$$('.subnav button').forEach(b => b.onclick = () => showSub(b.dataset.sub));
-function showSub(sub) {
-  $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub));
+function openSettings(sub, sec) { showTab('proj'); showSub(sub, sec); }
+$$('.subnav button').forEach(b => b.onclick = () => showSub(b.dataset.sub, b.dataset.sec));
+// the settings tree: a section with blocks (Тестовые данные) opens its subtree; the last place is remembered
+function showSub(sub, sec) {
+  if (sub === 'data') sec = sec || store.get('tg_kn_sec') || 'overview';
+  $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub && (b.dataset.sec || '') === (b.dataset.sec ? sec : '') && !(b.classList.contains('has-tree') && sec)));
+  $$('.subnav .has-tree').forEach(b => b.classList.toggle('open', b.dataset.sub === sub));
+  $('#knTree').classList.toggle('open', sub === 'data');
   $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
+  store.set('tg_settings_sub', sub);
   if (sub === 'ide') loadTokens();
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
-  if (sub === 'data') loadKnowledge();
+  if (sub === 'data') { store.set('tg_kn_sec', sec); showKnSec(sec); loadKnowledge(); }
 }
 
 // members and roles
@@ -3794,7 +3876,8 @@ const AUDIT_TITLES = {'auth.login': 'Вход', 'project.access': 'Участн�
   'test.delete': 'Тест удалён', 'test.restore': 'Откат версии', 'test.data': 'Подготовка данных', 'test.export': 'Экспорт теста',
   'heal.accept': 'Самолечение принято', 'heal.reject': 'Самолечение отклонено', 'heal.auto': 'Самолечение без ревью',
   'run.start': 'Прогон теста', 'suite.start': 'Прогон набора', 'pipeline.start': 'Конвейер', 'studio.start': 'Сессия Studio',
-  'project.export': 'Экспорт проекта', 'defect.create': 'Дефект в трекер', 'test.publish': 'Публикация'};
+  'project.export': 'Экспорт проекта', 'defect.create': 'Дефект в трекер', 'test.publish': 'Публикация',
+  'knowledge.save': 'Тестовые данные', 'knowledge.confirm': 'Жизненный цикл подтверждён'};
 async function loadAudit() {
   const q = new URLSearchParams({user: $('#auUser').value.trim(), action: $('#auAction').value, limit: 300});
   try {
@@ -3849,6 +3932,7 @@ function loadSettings() {
   if (!canRole('owner')) $('#pMsg').textContent = `Настройки проекта меняет владелец; ваша роль — ${roleTitle(PROJ.role)}.`;
   $('#dangerBox').classList.toggle('hidden', !ME.is_admin);
   renderModel(); renderConnections(); fillProcess(); renderSkillList(); loadUsage();
+  loadKnowledge();      // the settings tree shows the updates and duplicates waiting for a person
 }
 $('#pSave').onclick = async () => {
   try {
@@ -4546,8 +4630,10 @@ $('#skDelete').onclick = async () => {
   refreshSkillBoxes();
 };
 
-// application model and test data: entities with dependencies and lifecycles, roles -> accounts, stand data, memory
-let KN = null;
+// application model and test data: entities with dependencies and lifecycles, roles -> accounts, stand data, memory;
+// every block is a node of the settings tree, lists have a search, filters and pages; a record found again
+// (the same or a similar name) waits in «Обновления» for a person; «Дубли» merges similar records
+let KN = null, KN_PID = null, KN_DIRTY = false, KN_SEC = 'overview', KN_DUPS = null;
 const KN_FIELDS = {
   entities: [['name', 'Сущность', 'Заказ'], ['description', 'Что это', ''], ['depends_on', 'Требует (через запятую)', 'Товар (в наличии), Покупатель (с адресом)'],
              ['lifecycle', 'Жизненный цикл', 'новый → оплачен → отправлен → доставлен; новый → отменён'], ['create', 'Кто и как создаёт', 'покупатель: корзина → оформление заказа'],
@@ -4557,76 +4643,353 @@ const KN_FIELDS = {
   data: [['entity', 'Сущность', 'Товар'], ['name', 'Объект', 'Тестовый товар А'], ['details', 'Подробности', 'категория «Категория 1», цена 1000'],
          ['state', 'Состояние', 'в наличии'], ['role', 'Роль', 'Менеджер магазина'], ['account', 'Учётная запись', ''],
          ['status', 'Где', ''], ['source', 'Найдено', '']],
+  memory: [['text', 'Факт', ''], ['source', 'Источник', ''], ['at', 'Когда', '']],
 };
+const KN_KIND = {entities: 'Сущность', roles: 'Роль', data: 'Данные'};
+const KN_KINDS = {entities: 'Сущности', roles: 'Роли', data: 'Данные стенда'};
+const KN_STATUS = {'': 'на стенде', needed: 'нужны сценариям'};
 const KN_CONFIRM = {none: ['не подтверждён', 'warn'], changed: ['изменён после подтверждения', 'warn'], confirmed: ['подтверждён', 'ok']};
+const KN_UI = {};      // list -> {q, f: {filter: value}, page, size, open: ids being edited, sel: group -> record to keep}
+const knUi = list => KN_UI[list] ||= {q: '', f: {}, page: 0, size: +store.get('pageSize') || 25, open: new Set(), sel: {}};
+const knNewId = () => Math.random().toString(16).slice(2, 10);
+const knLabel = (kind, x) => kind === 'data' ? `${x.entity || 'данные'} «${x.name || '—'}»` : `«${x.name || '—'}»`;
+const knColLabel = (kind, k) => (KN_FIELDS[kind].find(f => f[0] === k)?.[1] || k).replace(/ \(.*\)$/, '');
+const knSourceKind = s => (s || '').split(':')[0].trim();
+function knText(k, v) {
+  if (Array.isArray(v)) return v.join(', ');
+  if (k === 'status') return KN_STATUS[v || ''];
+  if (k === 'account') return (PROJ.accounts || []).find(a => a.id === v)?.name || '';
+  if (k === 'at') return fmtTime(v);
+  return v || '';
+}
+const yesNo = (yes, no) => [['', 'все'], ['yes', yes], ['no', no]];
+const KN_LISTS = {
+  entities: {cols: ['name', 'depends_on', 'lifecycle'], filters: () => [
+    ['lc', 'Жизненный цикл', yesNo('описан', 'не описан'), (x, v) => !!x.lifecycle === (v === 'yes')],
+    ['dep', 'Зависимости', yesNo('есть', 'нет'), (x, v) => !!x.depends_on?.length === (v === 'yes')]]},
+  roles: {cols: ['name', 'capabilities', 'account'], filters: () => [
+    ['acc', 'Учётная запись', yesNo('привязана', 'не привязана'), (x, v) => !!x.account === (v === 'yes')],
+    ['cap', 'Возможности', yesNo('описаны', 'не описаны'), (x, v) => !!x.capabilities === (v === 'yes')]]},
+  data: {cols: ['entity', 'name', 'state', 'status', 'source'], filters: () => [
+    ['entity', 'Сущность', [['', 'все'], ...[...new Set(KN.data.map(d => d.entity).filter(Boolean))].sort().map(e => [e, e])], (x, v) => x.entity === v],
+    ['status', 'Где', [['', 'все'], ['stand', 'на стенде'], ['needed', 'нужны сценариям']], (x, v) => (x.status === 'needed') === (v === 'needed')],
+    ['src', 'Источник', [['', 'все'], ['manual', 'вручную'], ['auto', 'найдено автоматически']], (x, v) => !!x.source === (v === 'auto')]]},
+  memory: {cols: ['text', 'source', 'at'], filters: () => [
+    ['src', 'Источник', [['', 'все'], ...[...new Set(KN.memory.map(m => knSourceKind(m.source)).filter(Boolean))].sort().map(s => [s, s])],
+     (x, v) => knSourceKind(x.source) === v]]},
+  pending: {filters: () => [
+    ['kind', 'Раздел', [['', 'все'], ...Object.entries(KN_KINDS)], (p, v) => p.kind === v],
+    ['match', 'Совпадение', [['', 'все'], ['same', 'то же имя'], ['similar', 'похожее имя']], (p, v) => p.match === v],
+    ['src', 'Кто нашёл', [['', 'все'], ...[...new Set(KN.pending.map(p => knSourceKind(p.source)).filter(Boolean))].sort().map(s => [s, s])],
+     (p, v) => knSourceKind(p.source) === v]]},
+  dups: {filters: () => [['kind', 'Раздел', [['', 'все'], ...Object.entries(KN_KINDS)], (g, v) => g.kind === v]]},
+};
+
 function knStatusSelect(i, value) {
   return `<select data-kn="data" data-i="${i}" data-k="status"><option value="">на стенде</option><option value="needed" ${value === 'needed' ? 'selected' : ''}>нужны сценариям</option></select>`;
+}
+function knAccountSelect(kind, i, value) {
+  const accs = PROJ.accounts || [];
+  return `<select data-kn="${kind}" data-i="${i}" data-k="account"><option value="">—</option>${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
 }
 function renderKnConfirm() {
   const c = KN.confirmation || {state: 'none', missing: []};
   const [label, cls] = KN_CONFIRM[c.state];
   $('#knConfirmState').innerHTML = `<span class="badge ${cls}">Жизненный цикл ${label}</span>` +
     (c.at ? ` <span class="muted" style="font-size:12px">${fmtTime(c.at)}${c.by ? ' · ' + esc(c.by) : ''}</span>` : '') +
-    (c.missing?.length ? `<div class="hint">Не хватает: ${c.missing.map(esc).join('; ')}</div>` : '');
+    (c.missing?.length ? `<div class="hint">Не хватает: ${c.missing.map(esc).join('; ')}</div>` : '') +
+    (KN.pending.some(p => p.kind !== 'data') ? `<div class="hint">Есть обновления сущностей и ролей, ожидающие решения: <a href="#" onclick="showSub('data', 'pending'); return false">рассмотрите их</a> до подтверждения.</div>` : '');
   $('#knConfirm').textContent = c.state === 'confirmed' ? 'Подтвердить заново' : 'Подтвердить жизненный цикл';
 }
+
+function showKnSec(sec) {
+  KN_SEC = sec;
+  $$('[data-kn-sec]').forEach(p => p.classList.toggle('hidden', p.dataset.knSec !== sec));
+  $('#knSaveBar').classList.toggle('hidden', ['pending', 'dups'].includes(sec));
+  if (sec === 'dups' && KN && KN_PID === PID) knCheckDups();
+}
 async function loadKnowledge() {
-  try { KN = await api('GET', `/api/projects/${PID}/knowledge`); } catch (e) { $('#knMsg').textContent = e.message; return; }
+  if (!PID) return;
+  if (KN && KN_PID === PID && KN_DIRTY) { renderKnowledge(); return; }   // what was typed stays until it is saved
+  let doc;
+  try { doc = await api('GET', `/api/projects/${PID}/knowledge`); } catch (e) { $('#knMsg').textContent = e.message; return; }
+  if (KN_PID !== PID) Object.keys(KN_UI).forEach(k => delete KN_UI[k]);
+  KN = doc; KN_PID = PID; KN_DIRTY = false; KN_DUPS = null;
   renderKnowledge();
+  if (KN_SEC === 'dups' && !$('[data-subpanel="data"]').classList.contains('hidden')) knCheckDups();
 }
-function knAccountSelect(kind, i, value) {
-  const accs = PROJ.accounts || [];
-  return `<select data-kn="${kind}" data-i="${i}" data-k="account"><option value="">—</option>${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
+function knSetDirty() { KN_DIRTY = true; $('#knMsg').textContent = 'Есть несохранённые изменения'; }
+$('[data-subpanel="data"]').addEventListener('input', e => { if (e.target.matches('[data-kn], #knSummary')) knSetDirty(); });
+$('[data-subpanel="data"]').addEventListener('change', e => { if (e.target.matches('[data-kn]')) knSetDirty(); });
+async function knSaveFirst() {        // server actions work on the saved model: what was typed is saved first
+  if (!KN_DIRTY) return;
+  readKnowledge();
+  KN = await api('PUT', `/api/projects/${PID}/knowledge`, KN);
+  KN_DIRTY = false;
 }
+
 function renderKnowledge() {
   $('#knSummary').value = KN.summary || '';
-  const ents = KN.entities.map(e => e.name).filter(Boolean);
-  for (const kind of ['entities', 'roles', 'data']) {
-    const box = $({entities: '#knEntities', roles: '#knRoles', data: '#knData'}[kind]);
-    box.innerHTML = KN[kind].map((item, i) => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
-      <div class="grid3">${KN_FIELDS[kind].map(([k, label, ph]) => `<div><label>${label}</label>${k === 'account' ? knAccountSelect(kind, i, item.account)
-        : k === 'status' ? knStatusSelect(i, item.status)
-        : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : k === 'role' ? 'list="knRoleNames"' : ''} placeholder="${esc(ph)}" value="${esc(k === 'depends_on' ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
-      ${kind === 'data' && item.needed_by?.length ? `<div class="hint">Нужны сценариям: ${item.needed_by.map(t => '«' + esc(t) + '»').join(', ')}</div>` : ''}
-      <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small" onclick="knDel('${kind}', ${i})">Удалить</button></div></div>`).join('')
-      || '<div class="hint">Пока пусто.</div>';
-  }
-  if (!$('#knEnts')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knEnts"></datalist>');
-  $('#knEnts').innerHTML = ents.map(n => `<option value="${esc(n)}">`).join('');
-  if (!$('#knRoleNames')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knRoleNames"></datalist>');
+  if (!$('#knEnts')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knEnts"></datalist><datalist id="knRoleNames"></datalist>');
+  $('#knEnts').innerHTML = KN.entities.map(e => e.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
   $('#knRoleNames').innerHTML = KN.roles.map(r => r.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
-  renderKnConfirm();
-  $('#knMemory').innerHTML = KN.memory.slice().reverse().map(m => `<div class="row" style="margin:3px 0"><span class="grow">${esc(m.text)}
-      <span class="muted" style="font-size:12px"> · ${esc(m.source || '')} ${fmtTime(m.at)}</span></span>
-      <button class="linkbtn" onclick="knDelFact('${m.id}')">удалить</button></div>`).join('') || '<div class="hint">Пока пусто.</div>';
-  $('#knMsg').textContent = KN.updated ? `Изменено ${fmtTime(KN.updated)}${KN.updated_by ? ' · ' + KN.updated_by : ''}` : '';
+  for (const list of ['entities', 'roles', 'data', 'memory', 'pending', 'dups']) { knBar(list); knRenderList(list); }
+  renderKnConfirm(); knCounts();
+  if (!KN_DIRTY) $('#knMsg').textContent = KN.updated ? `Изменено ${fmtTime(KN.updated)}${KN.updated_by ? ' · ' + KN.updated_by : ''}` : '';
+}
+function knCounts() {
+  if (!KN) return;
+  const c = {pending: KN.pending.length, dups: KN_DUPS ? KN_DUPS.length : KN.duplicates || 0, entities: KN.entities.length,
+             roles: KN.roles.length, data: KN.data.length, memory: KN.memory.length};
+  $$('[data-kn-count]').forEach(b => {
+    const k = b.dataset.knCount;
+    b.textContent = c[k] || ''; b.classList.toggle('warn', ['pending', 'dups'].includes(k) && c[k] > 0);
+  });
+  const alert = c.pending + c.dups;
+  $('#knNavAlert').textContent = alert || ''; $('#knNavAlert').classList.toggle('warn', alert > 0);
+  $('#knNavAlert').title = alert ? `Ожидают решения: обновлений ${c.pending}, групп дублей ${c.dups}` : '';
+  const needed = KN.data.filter(d => d.status === 'needed').length;
+  const tiles = [['pending', 'Обновления', c.pending, 'ждут подтверждения', true], ['dups', 'Дубли', c.dups, 'групп похожих записей', true],
+    ['entities', 'Сущности', c.entities, `без жизненного цикла: ${KN.entities.filter(e => !e.lifecycle).length}`],
+    ['roles', 'Роли', c.roles, `без учётной записи: ${KN.roles.filter(r => !r.account).length}`],
+    ['data', 'Данные стенда', c.data, needed ? `нужны сценариям: ${needed}` : 'все на стенде'], ['memory', 'Память', c.memory, 'фактов']];
+  $('#knTiles').innerHTML = tiles.map(([sec, title, n, sub, warn]) => `<button class="kn-tile ${warn && n ? 'warn' : ''}" onclick="showSub('data', '${sec}')">
+    <b>${n}</b>${title}<span style="display:block">${sub}</span></button>`).join('');
+}
+
+// a list: search, filters, pages and the number of records on a page
+function knBar(list) {
+  const st = knUi(list), defs = KN_LISTS[list].filters(), bar = $('#knBar-' + list);
+  for (const [k, , opts] of defs) if (st.f[k] && !opts.some(([v]) => v === st.f[k])) delete st.f[k];
+  bar.innerHTML = `<input type="search" placeholder="Поиск" value="${esc(st.q)}" data-q>` + defs.map(([k, label, opts]) =>
+    `<label>${label} <select data-f="${k}">${opts.map(([v, t]) => `<option value="${esc(v)}" ${(st.f[k] || '') === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`).join('') +
+    `<button class="linkbtn" data-reset>сбросить</button>`;
+  bar.querySelector('[data-q]').oninput = e => { readKnowledge(); st.q = e.target.value; st.page = 0; knRenderList(list); };
+  bar.querySelectorAll('[data-f]').forEach(s => s.onchange = () => { readKnowledge(); st.f[s.dataset.f] = s.value; st.page = 0; knRenderList(list); });
+  bar.querySelector('[data-reset]').onclick = () => { readKnowledge(); st.q = ''; st.f = {}; st.page = 0; knBar(list); knRenderList(list); };
+}
+function knFiltered(list, rows) {
+  const st = knUi(list), q = st.q.trim().toLowerCase(), defs = KN_LISTS[list].filters();
+  return rows.filter(([x]) => (!q || JSON.stringify(x).toLowerCase().includes(q)) && defs.every(([k, , , test]) => !st.f[k] || test(x, st.f[k])));
+}
+const knIsFiltered = list => !!(knUi(list).q.trim() || Object.values(knUi(list).f).some(Boolean));
+function knPage(list, rows) {
+  const st = knUi(list), pages = Math.max(1, Math.ceil(rows.length / st.size));
+  st.page = Math.max(0, Math.min(st.page, pages - 1));
+  const from = rows.length ? st.page * st.size + 1 : 0, to = Math.min(rows.length, (st.page + 1) * st.size);
+  const go = (p, label, title, on) => `<button class="btn small" data-pg="${p}" ${on ? '' : 'disabled'} title="${title}">${label}</button>`;
+  const pager = `<div class="pager"><span>${from}–${to} из ${rows.length}</span>
+    ${go(0, '«', 'Первая страница', st.page > 0)}${go(st.page - 1, '‹', 'Предыдущая страница', st.page > 0)}
+    <span>стр. ${st.page + 1} из ${pages}</span>
+    ${go(st.page + 1, '›', 'Следующая страница', st.page < pages - 1)}${go(pages - 1, '»', 'Последняя страница', st.page < pages - 1)}
+    <label class="inline" style="font-size:12px;color:var(--muted)">по <select data-size>${PAGE_SIZES.map(n => `<option ${n === st.size ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>`;
+  return [rows.slice(st.page * st.size, (st.page + 1) * st.size), pager];
+}
+function knWirePager(list) {
+  const st = knUi(list), box = $('#knList-' + list);
+  box.querySelectorAll('[data-pg]').forEach(b => b.onclick = () => { readKnowledge(); st.page = +b.dataset.pg; knRenderList(list); });
+  const size = box.querySelector('[data-size]');
+  if (size) size.onchange = () => { readKnowledge(); st.size = +size.value; st.page = 0; store.set('pageSize', st.size); knRenderList(list); };
+}
+const KN_EMPTY = '<div class="hint">Пока пусто.</div>', KN_NOTHING = '<div class="hint">Ничего не найдено — измените поиск или фильтры.</div>';
+
+function knRenderList(list) {
+  if (list === 'pending') return knRenderPending();
+  if (list === 'dups') return knRenderDups();
+  if (list === 'memory') return knRenderMemory();
+  const st = knUi(list), cols = KN_LISTS[list].cols, box = $('#knList-' + list);
+  const rows = knFiltered(list, KN[list].map((x, i) => [x, i]));
+  const [shown, pager] = knPage(list, rows);
+  const pend = new Set(KN.pending.filter(p => p.kind === list).map(p => p.target));
+  box.innerHTML = !KN[list].length ? KN_EMPTY : !rows.length ? KN_NOTHING :
+    `<table class="kn-table"><thead><tr>${cols.map(k => `<th>${knColLabel(list, k)}</th>`).join('')}<th></th></tr></thead><tbody>` +
+    shown.map(([x, i]) => {
+      const open = st.open.has(x.id);
+      return `<tr class="${open ? 'sel' : ''}">${cols.map(k => `<td class="cut" title="${esc(knText(k, x[k]))}">${k !== 'name' ? esc(knText(k, x[k]))
+          : `<a href="#" onclick="knToggle('${list}', '${x.id}'); return false">${esc(knText(k, x[k]) || '(без названия)')}</a>`}</td>`).join('')}
+        <td style="white-space:nowrap;text-align:right">${pend.has(x.id) ? `<a href="#" class="badge warn" onclick="knGoPending('${list}', '${x.id}'); return false" title="Есть обновление, ожидающее подтверждения">обновление</a>` : ''}
+          <button class="linkbtn" onclick="knToggle('${list}', '${x.id}')">${open ? 'свернуть' : 'изменить'}</button>
+          <button class="linkbtn" onclick="knDel('${list}', ${i})">удалить</button></td></tr>` +
+        (open ? `<tr class="kn-edit"><td colspan="${cols.length + 1}">${knEditor(list, x, i)}</td></tr>` : '');
+    }).join('') + '</tbody></table>' + pager;
+  knWirePager(list);
+}
+function knEditor(kind, item, i) {
+  return `<div class="grid3">${KN_FIELDS[kind].map(([k, label, ph]) => `<div><label>${label}</label>${k === 'account' ? knAccountSelect(kind, i, item.account)
+      : k === 'status' ? knStatusSelect(i, item.status)
+      : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : k === 'role' ? 'list="knRoleNames"' : ''} placeholder="${esc(ph)}" value="${esc(k === 'depends_on' ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
+    ${kind === 'data' && item.needed_by?.length ? `<div class="hint">Нужны сценариям: ${item.needed_by.map(t => '«' + esc(t) + '»').join(', ')}</div>` : ''}`;
+}
+function knRenderMemory() {
+  const box = $('#knList-memory');
+  const rows = knFiltered('memory', KN.memory.map((x, i) => [x, i]).reverse());
+  const [shown, pager] = knPage('memory', rows);
+  box.innerHTML = !KN.memory.length ? KN_EMPTY : !rows.length ? KN_NOTHING :
+    `<table class="kn-table"><thead><tr><th>Факт</th><th>Источник</th><th>Когда</th><th></th></tr></thead><tbody>${shown.map(([m]) =>
+      `<tr><td>${esc(m.text)}</td><td class="muted">${esc(m.source || '')}</td><td class="muted" style="white-space:nowrap">${fmtTime(m.at)}</td>
+       <td><button class="linkbtn" onclick="knDelFact('${esc(m.id)}')">удалить</button></td></tr>`).join('')}</tbody></table>` + pager;
+  knWirePager('memory');
 }
 function readKnowledge() {
+  if (!KN) return;
   KN.summary = $('#knSummary').value;
   $$('[data-kn]').forEach(el => {
     const item = KN[el.dataset.kn][+el.dataset.i];
-    item[el.dataset.k] = el.dataset.k === 'depends_on' ? el.value.split(',').map(x => x.trim()).filter(Boolean) : el.value;
+    if (item) item[el.dataset.k] = el.dataset.k === 'depends_on' ? el.value.split(',').map(x => x.trim()).filter(Boolean) : el.value;
   });
 }
-function knAdd(kind) { readKnowledge(); KN[kind].push({}); renderKnowledge(); }
-function knDel(kind, i) { readKnowledge(); KN[kind].splice(i, 1); renderKnowledge(); }
+function knToggle(list, id) { readKnowledge(); const o = knUi(list).open; o.has(id) ? o.delete(id) : o.add(id); knRenderList(list); }
+function knAdd(kind) {
+  readKnowledge();
+  const item = {id: knNewId()}, st = knUi(kind);
+  KN[kind].push(item);
+  st.q = ''; st.f = {}; st.open.add(item.id); st.page = Math.floor((KN[kind].length - 1) / st.size);
+  knSetDirty(); knBar(kind); knRenderList(kind); knCounts();
+  $(`[data-kn="${kind}"][data-i="${KN[kind].length - 1}"]`)?.focus();
+}
+function knDel(kind, i) { readKnowledge(); KN[kind].splice(i, 1); knSetDirty(); knRenderList(kind); knCounts(); }
 function knAddFact() {
   const text = $('#knFact').value.trim(); if (!text) return;
-  readKnowledge(); KN.memory.push({text, source: ME.user, at: Date.now() / 1000}); $('#knFact').value = ''; renderKnowledge();
+  readKnowledge(); KN.memory.push({id: knNewId(), text, source: ME.user, at: Date.now() / 1000}); $('#knFact').value = '';
+  knSetDirty(); knBar('memory'); knRenderList('memory'); knCounts();
 }
-function knDelFact(id) { readKnowledge(); KN.memory = KN.memory.filter(m => m.id !== id); renderKnowledge(); }
+function knDelFact(id) { readKnowledge(); KN.memory = KN.memory.filter(m => m.id !== id); knSetDirty(); knRenderList('memory'); knCounts(); }
+
+// updates of existing records: each one or all of them (all those the filters show)
+function knGoPending(kind, id) {
+  const st = knUi('pending'), x = KN[kind].find(r => r.id === id);
+  st.f = {kind}; st.q = x?.name || ''; st.page = 0;
+  showSub('data', 'pending');
+}
+function knRenderPending() {
+  const box = $('#knList-pending');
+  const rows = knFiltered('pending', KN.pending.map((p, i) => [p, i]).reverse());
+  const [shown, pager] = knPage('pending', rows);
+  if (!KN.pending.length) { box.innerHTML = '<div class="hint">Обновлений, ожидающих подтверждения, нет.</div>'; return; }
+  if (!rows.length) { box.innerHTML = KN_NOTHING; return; }
+  const some = knIsFiltered('pending'), ids = some ? JSON.stringify(rows.map(([p]) => p.id)) : 'null';
+  box.innerHTML = `<div class="row" style="gap:6px;margin-top:6px"><span class="muted grow">${some ? `Отобрано ${rows.length} из ${KN.pending.length}` : `Ожидают решения: ${KN.pending.length}`}</span>
+      <button class="btn small" onclick='knResolve("reject", ${ids})'>Отклонить ${some ? 'отобранные' : 'все'} (${rows.length})</button>
+      <button class="btn small primary" onclick='knResolve("accept", ${ids})'>Обновить ${some ? 'отобранные' : 'все'} (${rows.length})</button></div>` +
+    shown.map(([p]) => {
+      const t = KN[p.kind].find(x => x.id === p.target);
+      return `<div class="kn-card"><div class="row" style="gap:6px;flex-wrap:wrap"><b>${KN_KIND[p.kind]} ${esc(knLabel(p.kind, t || p.item))}</b>
+          ${p.match === 'similar' ? `<span class="badge warn" title="Найдена запись с похожим, но не тем же именем">похожее имя: ${esc(knLabel(p.kind, p.item))}</span>` : '<span class="badge">то же имя</span>'}
+          ${t ? '' : '<span class="badge bad" title="Запись удалили после находки: «Обновить» добавит её заново">запись удалена</span>'}
+          <span class="muted grow" style="font-size:12px;text-align:right">${esc(p.source || '')} · ${fmtTime(p.at)}</span></div>
+        <table class="diff"><thead><tr><th>Поле</th><th>Сейчас</th><th>Станет</th></tr></thead><tbody>${Object.entries(p.changes).map(([k, v]) =>
+          `<tr><td>${knColLabel(p.kind, k)}</td><td class="old">${esc(knText(k, t ? t[k] : p.before?.[k]) || '—')}</td><td class="new">${esc(knText(k, v) || '—')}</td></tr>`).join('')}</tbody></table>
+        <div class="row" style="margin-top:6px;gap:6px"><span class="grow"></span>
+          ${p.match === 'similar' ? `<button class="btn small" onclick="knResolve('separate', ['${p.id}'])" title="Похожее имя означает другой объект: добавить его новой записью">Добавить отдельно</button>` : ''}
+          <button class="btn small" onclick="knResolve('reject', ['${p.id}'])">Отклонить</button>
+          <button class="btn small primary" onclick="knResolve('accept', ['${p.id}'])">Обновить</button></div></div>`;
+    }).join('') + pager;
+  knWirePager('pending');
+}
+async function knResolve(action, ids) {
+  const n = ids ? ids.length : KN.pending.length;
+  const verb = {accept: 'Обновить', reject: 'Отклонить', separate: 'Добавить отдельно'}[action];
+  const lifecycle = action !== 'reject' && KN.confirmation?.state === 'confirmed' &&
+    KN.pending.some(p => (!ids || ids.includes(p.id)) && p.kind !== 'data');
+  if ((n > 1 || lifecycle) && !confirm(`${verb}: ${n}?` + (lifecycle ? '\n\nИзменятся сущности или роли — жизненный цикл нужно будет подтвердить заново.' : ''))) return;
+  try {
+    await knSaveFirst();
+    KN = await api('POST', `/api/projects/${PID}/knowledge/pending`, ids ? {action, ids} : {action, all: true});
+    renderKnowledge();
+    $('#knMsg').textContent = `${{accept: 'Обновлено', reject: 'Отклонено', separate: 'Добавлено отдельно'}[action]}: ${n}`;
+  } catch (e) { alert(e.message); }
+}
+
+// the duplicate check: groups of similar records, the record to keep, merge one group or all of them
+async function knCheckDups() {
+  const msg = $('#knDupsMsg');
+  msg.textContent = 'Проверка…';
+  try {
+    await knSaveFirst();
+    KN_DUPS = await api('GET', `/api/projects/${PID}/knowledge/duplicates`);
+    KN.duplicates = KN_DUPS.length;
+    const by = Object.entries(KN_KINDS).map(([k, t]) => [t, KN_DUPS.filter(g => g.kind === k).length]).filter(([, n]) => n);
+    msg.textContent = KN_DUPS.length ? `Групп похожих записей: ${KN_DUPS.length} (${by.map(([t, n]) => `${t.toLowerCase()} — ${n}`).join(', ')})` : 'Дублей не найдено';
+  } catch (e) { msg.textContent = e.message; }
+  knRenderDups(); knCounts();
+}
+$('#knDupsCheck').onclick = knCheckDups;
+function knMergedPreview(g, keepId) {          // what the kept record gets from the others (knowledge._merged)
+  const keep = g.items.find(x => x.id === keepId), out = [];
+  for (const [k] of KN_FIELDS[g.kind]) {
+    if (['source', 'status', 'needed_by'].includes(k)) continue;
+    if (k === 'depends_on') {
+      const add = [...new Set(g.items.flatMap(x => x.depends_on || []))].filter(v => !(keep.depends_on || []).includes(v));
+      if (add.length) out.push(`${knColLabel(g.kind, k)}: + ${add.join(', ')}`);
+    } else if (!keep[k]) {
+      const v = g.items.find(x => x[k])?.[k];
+      if (v) out.push(`${knColLabel(g.kind, k)}: ${knText(k, v)}`);
+    }
+  }
+  return out;
+}
+function knRenderDups() {
+  const box = $('#knList-dups');
+  if (!KN_DUPS) { box.innerHTML = KN.duplicates ? `<div class="hint">Найдено групп похожих записей: ${KN.duplicates}. Нажмите «Проверить на дубли», чтобы их просмотреть.</div>` : ''; return; }
+  if (!KN_DUPS.length) { box.innerHTML = '<div class="hint">Дублей нет.</div>'; return; }
+  const rows = knFiltered('dups', KN_DUPS.map((g, i) => [g, i]));
+  if (!rows.length) { box.innerHTML = KN_NOTHING; return; }
+  const [shown, pager] = knPage('dups', rows), sel = knUi('dups').sel;
+  const some = knIsFiltered('dups'), ids = some ? JSON.stringify(rows.map(([g]) => g.id)) : 'null';
+  box.innerHTML = `<div class="row" style="gap:6px;margin-top:6px"><span class="muted grow">${some ? `Отобрано групп: ${rows.length} из ${KN_DUPS.length}` : `Групп: ${KN_DUPS.length}`}</span>
+      <button class="btn small primary" onclick='knMergeDups(${ids})'>Объединить ${some ? 'отобранные' : 'все'} (${rows.length})</button></div>` +
+    shown.map(([g]) => {
+      const keep = sel[g.id] || g.keep, cols = KN_LISTS[g.kind].cols, gets = knMergedPreview(g, keep);
+      return `<div class="kn-card"><div class="row" style="gap:6px"><b>${KN_KINDS[g.kind]}: похожих записей ${g.items.length}</b><span class="grow"></span>
+          <button class="btn small" onclick="knDismissDup('${g.id}')" title="Это разные объекты — больше не предлагать">Не дубли</button>
+          <button class="btn small primary" onclick="knMergeDups(['${g.id}'])">Объединить</button></div>
+        <table class="kn-table"><thead><tr><th>Оставить</th>${cols.map(k => `<th>${knColLabel(g.kind, k)}</th>`).join('')}</tr></thead><tbody>
+        ${g.items.map(x => `<tr class="${x.id === keep ? 'sel' : ''}"><td><input type="radio" name="dup-${g.id}" ${x.id === keep ? 'checked' : ''}
+            onchange="knUi('dups').sel['${g.id}'] = '${x.id}'; knRenderDups()"></td>${cols.map(k => `<td class="cut" title="${esc(knText(k, x[k]))}">${esc(knText(k, x[k]))}</td>`).join('')}</tr>`).join('')}
+        </tbody></table>
+        <div class="hint">Останется ${esc(knLabel(g.kind, g.items.find(x => x.id === keep)))}${gets.length ? '; получит от остальных — ' + gets.map(esc).join('; ') : ''}.</div></div>`;
+    }).join('') + pager;
+  knWirePager('dups');
+}
+async function knMergeDups(gids) {
+  const sel = knUi('dups').sel;
+  const chosen = (gids ? KN_DUPS.filter(g => gids.includes(g.id)) : KN_DUPS);
+  const groups = chosen.map(g => ({kind: g.kind, ids: g.items.map(x => x.id), keep: sel[g.id] || g.keep}));
+  const lifecycle = KN.confirmation?.state === 'confirmed' && groups.some(g => g.kind !== 'data');
+  if (!confirm(`Объединить групп дублей: ${groups.length}? Записей будет удалено: ${groups.reduce((n, g) => n + g.ids.length - 1, 0)}.` +
+               (lifecycle ? '\n\nИзменятся сущности или роли — жизненный цикл нужно будет подтвердить заново.' : ''))) return;
+  try {
+    await knSaveFirst();
+    const r = await api('POST', `/api/projects/${PID}/knowledge/duplicates`, {groups});
+    KN = r; KN_DUPS = null; renderKnowledge(); await knCheckDups();
+    $('#knDupsMsg').textContent = `Объединено групп: ${r.merged}. ` + $('#knDupsMsg').textContent;
+  } catch (e) { alert(e.message); }
+}
+async function knDismissDup(id) {
+  try {
+    KN = await api('POST', `/api/projects/${PID}/knowledge/duplicates`, {dismiss: [id]});
+    KN_DUPS = KN_DUPS.filter(g => g.id !== id); KN.duplicates = KN_DUPS.length;
+    renderKnowledge();
+  } catch (e) { alert(e.message); }
+}
+
 $('#knConfirm').onclick = async () => {
   readKnowledge();
   try {
     await api('PUT', `/api/projects/${PID}/knowledge`, KN);      // what is on the screen is what gets confirmed
+    KN_DIRTY = false;
     KN = await api('POST', `/api/projects/${PID}/knowledge/confirm`);
     renderKnowledge(); $('#knMsg').textContent = 'Жизненный цикл подтверждён: тесты генерируются по этой модели';
   } catch (e) { $('#knMsg').textContent = e.message; KN = await api('GET', `/api/projects/${PID}/knowledge`).catch(() => KN); renderKnConfirm(); }
 };
 $('#knSave').onclick = async () => {
   readKnowledge();
-  try { KN = await api('PUT', `/api/projects/${PID}/knowledge`, KN); renderKnowledge(); $('#knMsg').textContent = 'Сохранено'; }
-  catch (e) { $('#knMsg').textContent = e.message; }
+  const before = new Set(KN.pending.map(p => p.id));
+  try {
+    KN = await api('PUT', `/api/projects/${PID}/knowledge`, KN); KN_DIRTY = false; renderKnowledge();
+    const fresh = KN.pending.filter(p => !before.has(p.id)).length;
+    $('#knMsg').innerHTML = fresh ? `Сохранено. Добавленные записи уже есть в модели (${fresh}): <a href="#" onclick="showSub('data', 'pending'); return false">подтвердите обновления</a>` : 'Сохранено';
+  } catch (e) { $('#knMsg').textContent = e.message; }
 };
 $('#knExtract').onclick = async () => {
   const btn = $('#knExtract'), msg = $('#knExtractMsg');
@@ -4639,10 +5002,14 @@ $('#knExtract').onclick = async () => {
   } else msg.textContent = 'Анализ требований…';
   btn.disabled = true;
   try {
-    readKnowledge();
-    await api('PUT', `/api/projects/${PID}/knowledge`, KN);       // what was typed is kept, the model only adds
+    await knSaveFirst();                                         // what was typed is kept, the model only adds
+    const before = KN.pending.length;
     KN = await api('POST', `/api/projects/${PID}/knowledge/extract`, body);
-    renderKnowledge(); msg.textContent = `Готово: сущностей ${KN.entities.length}, ролей ${KN.roles.length}, тестовых данных ${KN.data.length}. Проверьте и привяжите роли к учётным записям.`;
+    renderKnowledge();
+    const fresh = KN.pending.length - before;
+    msg.innerHTML = `Готово: сущностей ${KN.entities.length}, ролей ${KN.roles.length}, тестовых данных ${KN.data.length}.` +
+      (fresh > 0 ? ` Изменения существующих записей ждут подтверждения: ${fresh} — <a href="#" onclick="showSub('data', 'pending'); return false">«Обновления»</a>.` : '') +
+      ' Проверьте и привяжите роли к учётным записям.';
   } catch (e) { msg.textContent = e.message; }
   finally { btn.disabled = false; }
 };

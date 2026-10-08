@@ -987,12 +987,17 @@ class StudioSession:
                 item = {k: v.replace(secret, "***") for k, v in item.items()}
             item["depends_on"] = [x.strip() for x in str(inp.get("depends_on") or "").split(",") if x.strip()]
             try:
-                knowledge.record(self.project_id, item, source=f"Studio: {self.name}")
+                doc = knowledge.record(self.project_id, item, source=f"Studio: {self.name}")
             except ValueError as e:
                 return str(e)
+            waits = any(p["kind"] == "data" and p["item"]["name"] == " ".join(item["name"].split())
+                        for p in doc["pending"])
             self._say("system", f"🗂 Тестовые данные: {item['entity']} «{item['name']}»"
-                                + (f" — {item['state']}" if item["state"] else ""))
-            return "Recorded in the application model of the project."
+                                + (f" — {item['state']}" if item["state"] else "")
+                                + (" (запись уже есть: обновление ждёт подтверждения в «Проект → Тестовые данные»)"
+                                   if waits else ""))
+            return ("Recorded. The record already existed: the update awaits a person's confirmation." if waits
+                    else "Recorded in the application model of the project.")
         if name == "find_elements":
             if not isinstance(self.bs, BrowserSession):
                 return "find_elements works with the built-in browser engine only."

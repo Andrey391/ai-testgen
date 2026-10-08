@@ -14,6 +14,9 @@ data/projects/<id>/knowledge.json:
                the scenarios need that nobody has seen on the stand yet (`needed_by` - the scenarios):
                the first test that prepares or finds it records it, and the next ones reuse it
     memory     facts learned while working: the agent's `remember` tool, people, events
+    pending    updates of existing records waiting for a person (merge()): a record found again (the same
+               or a similar name - a duplicate) is not changed silently, the update is proposed and a
+               person accepts or rejects each one or all of them at once (resolve())
     confirmed  who confirmed the lifecycle of the system (entities, dependencies, lifecycles, roles
                and their capabilities) and its signature: tests are generated only from a confirmed
                model (the setting "requirements.confirm_model", the pipeline waits for it); a change
@@ -30,8 +33,10 @@ analysis tells a missing precondition from a product bug.
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
+import re
 import time
 import uuid
 
@@ -40,6 +45,7 @@ from pydantic import BaseModel
 from . import fs, llm, projects, skills
 
 MAX_MEMORY = 300
+MAX_PENDING = 500
 MAX_TEXT = 4000
 LIMITS = {"entities": 200, "roles": 50, "data": 300}
 FIELDS = {
@@ -62,8 +68,8 @@ def _id() -> str:
 
 
 def empty() -> dict:
-    return {"summary": "", "entities": [], "roles": [], "data": [], "memory": [], "updated": None, "updated_by": "",
-            "confirmed": None}
+    return {"summary": "", "entities": [], "roles": [], "data": [], "memory": [], "pending": [], "distinct": [],
+            "updated": None, "updated_by": "", "confirmed": None}
 
 
 def get(pid: str) -> dict:
@@ -96,15 +102,43 @@ def normalize(doc: dict) -> dict:
                       "source": str(m.get("source") or "")[:200], "at": m.get("at") or time.time()}
                      for m in doc.get("memory") or [] if isinstance(m, dict) and str(m.get("text") or "").strip()]
     out["memory"] = out["memory"][-MAX_MEMORY:]
+    out["pending"] = [p for p in (_clean_pending(x) for x in doc.get("pending") or [] if isinstance(x, dict)) if p]
+    out["pending"] = out["pending"][-MAX_PENDING:]
+    out["distinct"] = [str(x)[:16] for x in doc.get("distinct") or [] if x][-MAX_PENDING:]
     c = doc.get("confirmed")
     out["confirmed"] = {k: c.get(k) for k in ("at", "by", "sig")} if isinstance(c, dict) and c.get("sig") else None
     return out
 
 
+def _clean_pending(p: dict) -> dict | None:
+    kind = p.get("kind")
+    if kind not in FIELDS or not isinstance(p.get("changes"), dict):
+        return None
+    item = _clean_item(kind, p.get("item") or {})
+    changes = {f: v for f, v in p["changes"].items() if f in FIELDS[kind]}
+    if not item or not changes:
+        return None
+    return {"id": str(p.get("id") or _id())[:16], "kind": kind, "target": str(p.get("target") or "")[:16],
+            "match": "similar" if p.get("match") == "similar" else "same", "item": item, "changes": changes,
+            "before": {f: v for f, v in (p.get("before") or {}).items() if f in changes},
+            "source": str(p.get("source") or "")[:200], "at": p.get("at") or time.time()}
+
+
 def save(pid: str, doc: dict, user: str = "") -> dict:
-    """What people wrote; the confirmation stays the stored one (confirm() gives it)."""
+    """What people wrote; the confirmation and the pending updates stay the stored ones (confirm() and
+    resolve() change them). A record people added that repeats a stored one (the same or a similar
+    name) is not added twice: it becomes an update of the stored record that the person confirms."""
     with fs.lock(_path(pid)):
-        out = normalize(doc | {"confirmed": get(pid)["confirmed"]}) | {"updated": time.time(), "updated_by": user}
+        stored = get(pid)
+        out = normalize(doc | {k: stored[k] for k in ("confirmed", "pending", "distinct")})
+        for kind in ("entities", "roles", "data"):
+            known = {x["id"] for x in stored[kind]}
+            fresh = [x for x in out[kind] if x["id"] not in known]
+            out[kind] = [x for x in out[kind] if x["id"] in known]
+            added: set = set()
+            for item in fresh:
+                _join(out, kind, item, f"вручную: {user}" if user else "вручную", added)
+        out |= {"updated": time.time(), "updated_by": user}
         fs.write_json(_path(pid), out, indent=1)
     return view(pid)
 
@@ -141,7 +175,7 @@ def confirmation(doc: dict) -> dict:
 
 def view(pid: str) -> dict:
     doc = get(pid)
-    return doc | {"confirmation": confirmation(doc)}
+    return doc | {"confirmation": confirmation(doc), "duplicates": len(duplicates(doc))}
 
 
 def is_confirmed(pid: str) -> bool:
@@ -229,6 +263,11 @@ def prompt(pid: str, limit: int = 12000) -> str:
         lines.append("Test data the scenarios need that nobody has seen on the stand yet (find it or prepare it, "
                      "then record it with `test_data` so later tests reuse it):")
         lines += [data_line(d) for d in needed]
+    reported = [p["item"] for p in doc["pending"] if p["kind"] == "data"]
+    if reported:
+        lines.append("Test data reported again by tests or analyses, the update awaits a person's confirmation "
+                     "(until then the record above stays as it is):")
+        lines += [data_line(d) for d in reported[-20:]]
     if doc["memory"]:
         lines.append("Remembered facts (newest last):")
         lines += [f"- {m['text']}" for m in doc["memory"][-40:]]
@@ -308,7 +347,7 @@ async def extract(project: dict, requirements: str, user: str = "", source: str 
         raise RuntimeError("Модель не смогла выделить сущности из требований")
     found = reply.parsed.model_dump()
     found["data"] = [d | {"source": label} for d in found.get("data") or []]
-    return merge(pid, found, user)
+    return merge(pid, found, user, source=label)
 
 
 def record(pid: str, item: dict, source: str) -> dict:
@@ -323,63 +362,261 @@ def record(pid: str, item: dict, source: str) -> dict:
                        "state": item.get("state") or "", "role": item.get("role") or "", "source": source}],
              "entities": [{"name": entity, "depends_on": depends if isinstance(depends, list) else str(depends).split(","),
                            "lifecycle": item.get("lifecycle") or "", "create": item.get("create") or ""}]}
-    return merge(pid, found)
+    return merge(pid, found, source=source)
 
 
-def _data_key(d: dict) -> tuple[str, str]:
-    return d["entity"].strip().lower(), d["name"].strip().lower()
+def norm(text: str) -> str:
+    """A name to compare: case, «ё», quotes, punctuation and spaces do not matter."""
+    text = str(text or "").lower().replace("ё", "е")
+    return " ".join(re.sub(r"[^\w\s]", " ", text).split())
 
 
-def merge(pid: str, found: dict, user: str = "") -> dict:
-    """Entities, roles and stand data found automatically join the model: new ones are added, known
-    ones (by name; data by entity and name) get the fields they lacked and new dependencies. What
-    people wrote is never overwritten; a data record found automatically (it has a `source`) is
-    refreshed by a newer finding: the state of an object changes."""
+def similar(a: str, b: str, loose: bool = False) -> bool:
+    """The same name written differently: «Заказ» - «заказы», «Тестовый товар А» - «тестовый товар "А"».
+    Numbers must be the same: «Заказ 1» and «Заказ 2» are different objects. `loose` (the duplicate
+    check people run) also takes a name contained in another one: «Менеджер» - «Менеджер магазина»."""
+    na, nb = norm(a), norm(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    if re.findall(r"\d+", na) != re.findall(r"\d+", nb):
+        return False
+    wa, wb = set(na.split()), set(nb.split())
+    if wa == wb or loose and min(len(na), len(nb)) >= 4 and (wa <= wb or wb <= wa):
+        return True
+    m = difflib.SequenceMatcher(None, na, nb)
+    return min(len(na), len(nb)) >= 4 and m.quick_ratio() >= 0.85 and m.ratio() >= 0.85
+
+
+def _same(kind: str, a: dict, b: dict, loose: bool = False) -> bool:
+    if kind == "data":
+        return similar(a["entity"], b["entity"]) and similar(a["name"], b["name"], loose)
+    return similar(a["name"], b["name"], loose)
+
+
+def _key(kind: str, x: dict) -> tuple:
+    return (norm(x["entity"]), norm(x["name"])) if kind == "data" else (norm(x["name"]),)
+
+
+def _find(doc: dict, kind: str, item: dict) -> tuple[dict | None, str]:
+    """The stored record an incoming one repeats: the same name first, then a similar one."""
+    key = _key(kind, item)
+    for x in doc[kind]:
+        if _key(kind, x) == key:
+            return x, "same"
+    for x in doc[kind]:
+        if _same(kind, x, item):
+            return x, "similar"
+    return None, ""
+
+
+def _changes(kind: str, old: dict, new: dict) -> dict:
+    """What an incoming record would change in a stored one: new dependencies, filled or different
+    fields, the data found on the stand. Nothing when it says nothing new."""
+    out = {}
+    for f in FIELDS[kind]:
+        if f in ("name", "entity", "account", "source", "status", "needed_by"):
+            continue
+        if f in LISTS:
+            have = {norm(v) for v in old[f]}
+            add = [v for v in new[f] if norm(v) not in have]
+            if add:
+                out[f] = old[f] + add
+        elif new[f] and norm(new[f]) not in norm(old[f]):
+            out[f] = new[f]
+    if kind == "data" and old["status"] == "needed" and new["status"] != "needed":
+        out["status"] = ""                  # a test found or prepared it: it is on the stand now
+    if kind == "data" and out and new["source"] and (old["source"] or old["status"] == "needed"):
+        out["source"] = new["source"]       # who found it last; a record people wrote stays theirs
+    return out
+
+
+def _apply(item: dict, changes: dict) -> None:
+    for f, v in changes.items():
+        item[f] = list(dict.fromkeys(item[f] + list(v or [])))[:20] if f in LISTS else v
+
+
+def _join(doc: dict, kind: str, item: dict, source: str, added: set) -> None:
+    """An incoming record joins the model: a new one is added; one that repeats a stored record (the
+    same or a similar name) proposes an update of it, and a person confirms it (resolve()). Which
+    scenarios need a data record is noted at once: it changes nothing in the record itself."""
+    old, match = _find(doc, kind, item)
+    if old is None:
+        doc[kind].append(item)
+        added.add(item["id"])
+        return
+    if kind == "data":
+        old["needed_by"] = list(dict.fromkeys(old["needed_by"] + item["needed_by"]))[:20]
+        if item["status"] == "needed":      # one more scenario needs it: what the record says is kept
+            if old["id"] in added:
+                _apply(old, {f: item[f] for f in ("details", "state", "role") if item[f] and not old[f]})
+            return
+    changes = _changes(kind, old, item)
+    if not changes:
+        return
+    if old["id"] in added:                  # repeated within one finding: nobody has seen it yet
+        _apply(old, changes)
+        return
+    prev = next((p for p in doc["pending"] if p["kind"] == kind and p["target"] == old["id"]), None)
+    if prev:                                # one proposal per record: the newer finding joins it
+        doc["pending"].remove(prev)
+        joined = prev["changes"] | changes
+        for f in LISTS:
+            if f in prev["changes"] and f in changes:
+                joined[f] = list(dict.fromkeys(prev["changes"][f] + changes[f]))
+        changes = joined
+        match = "same" if prev["match"] == match == "same" else "similar"
+    doc["pending"].append({"id": _id(), "kind": kind, "target": old["id"], "match": match, "item": item,
+                           "changes": changes, "before": {f: old[f] for f in changes},
+                           "source": source or item.get("source") or "", "at": time.time()})
+    doc["pending"] = doc["pending"][-MAX_PENDING:]
+
+
+def merge(pid: str, found: dict, user: str = "", source: str = "") -> dict:
+    """Entities, roles and stand data found automatically join the model: new ones are added; a record
+    that is already there (by name, data by entity and name; the same or a similar one - a duplicate)
+    is not changed silently: its update waits in `pending` for a person (resolve()). `source` - who found
+    them (requirements, Planner, a test in Studio)."""
     with fs.lock(_path(pid)):
         doc = get(pid)
         if found.get("summary") and not doc["summary"]:
             doc["summary"] = found["summary"]
-        for kind in ("entities", "roles"):
-            known = {x["name"].strip().lower(): x for x in doc[kind]}
+        added: set = set()
+        for kind in ("entities", "roles", "data"):
             for item in found.get(kind) or []:
                 item = _clean_item(kind, item)
-                if not item:
-                    continue
-                old = known.get(item["name"].lower())
-                if old is None:
-                    doc[kind].append(item)
-                    known[item["name"].lower()] = item
-                    continue
-                for f in FIELDS[kind]:
-                    if f in LISTS:
-                        old[f] = list(dict.fromkeys(old.get(f, []) + item[f]))
-                    elif not old.get(f) and item.get(f):
-                        old[f] = item[f]
-        known = {_data_key(x): x for x in doc["data"]}
-        for item in found.get("data") or []:
-            item = _clean_item("data", item)
-            if not item or not item["name"]:
-                continue
-            old = known.get(_data_key(item))
-            if old is None:
-                doc["data"].append(item)
-                known[_data_key(item)] = item
-                continue
-            old["needed_by"] = list(dict.fromkeys(old["needed_by"] + item["needed_by"]))[:20]
-            if item["status"] == "needed":      # one more scenario needs it: what it has is kept
-                for f in ("details", "state", "role"):
-                    old[f] = old[f] or item[f]
-                continue
-            if old["status"] == "needed":       # a test found or prepared it: it is on the stand now
-                old["status"], old["source"] = "", item["source"] or "тест"
-            if old["source"]:
-                old["source"] = item["source"] or old["source"]
-            for f in ("details", "state", "role"):
-                if item[f] and (old["source"] or not old[f]):
-                    old[f] = item[f]
+                if item and item["name"]:
+                    _join(doc, kind, item, item.get("source") or source or user, added)
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)
     return out
+
+
+def resolve(pid: str, ids: list[str] | None, action: str, user: str = "") -> dict:
+    """A person decides on pending updates (`ids`; None - all of them): accept - the stored record is
+    updated, reject - the update is dropped, separate - the incoming record is added as a new one (it
+    only looked like the stored one)."""
+    if action not in ("accept", "reject", "separate"):
+        raise ValueError("Неизвестное действие")
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        for p in [p for p in doc["pending"] if ids is None or p["id"] in ids]:
+            doc["pending"].remove(p)
+            if action == "reject":
+                continue
+            target = next((x for x in doc[p["kind"]] if x["id"] == p["target"]), None)
+            if action == "separate" or target is None:      # the record was deleted meanwhile: it comes back
+                doc[p["kind"]].append(p["item"] | {"id": _id()})
+            else:
+                _apply(target, p["changes"])
+        out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
+        fs.write_json(_path(pid), out, indent=1)
+    return view(pid)
+
+
+# ---------- duplicates people check ----------
+
+def duplicates(doc: dict) -> list[dict]:
+    """Groups of records of one kind that name the same thing (similar names, loosely), the record to
+    keep - the one people wrote, else the fullest - and what the merged record would be."""
+    groups = []
+    for kind in ("entities", "roles", "data"):
+        items = doc[kind]
+        parent = list(range(len(items)))
+
+        def root(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                if root(i) != root(j) and _same(kind, items[i], items[j], loose=True):
+                    parent[root(j)] = root(i)
+        by_root: dict[int, list[dict]] = {}
+        for i, x in enumerate(items):
+            by_root.setdefault(root(i), []).append(x)
+        for members in (m for m in by_root.values() if len(m) > 1):
+            gid = group_id(members)
+            if gid in doc.get("distinct", []):
+                continue                    # a person said these are different things
+            keep = max(members, key=lambda x: (not x.get("source"), x.get("status") != "needed",
+                                               sum(1 for v in x.values() if v)))
+            groups.append({"id": gid, "kind": kind, "keep": keep["id"], "items": members,
+                           "merged": _merged(kind, keep, members)})
+    return groups
+
+
+def group_id(members: list[dict]) -> str:
+    return hashlib.sha1("|".join(sorted(x["id"] for x in members)).encode()).hexdigest()[:12]
+
+
+def dismiss_duplicates(pid: str, group_ids: list[str], user: str = "") -> dict:
+    """A person says the records of these groups are different things: the check no longer shows them
+    (until the group changes)."""
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        doc["distinct"] = list(dict.fromkeys(doc["distinct"] + [str(g)[:16] for g in group_ids if g]))
+        out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
+        fs.write_json(_path(pid), out, indent=1)
+    return view(pid)
+
+
+def _merged(kind: str, keep: dict, members: list[dict]) -> dict:
+    out = json.loads(json.dumps(keep))
+    for x in members:
+        if x["id"] == keep["id"]:
+            continue
+        for f in FIELDS[kind]:
+            if f in LISTS:
+                out[f] = list(dict.fromkeys(out[f] + x[f]))[:20]
+            elif f == "status":
+                out[f] = "" if "" in (out[f], x[f]) else out[f]
+            elif not out[f] and x[f]:
+                out[f] = x[f]
+    return out
+
+
+def merge_duplicates(pid: str, groups: list[dict] | None, user: str = "") -> dict:
+    """Merges groups of duplicates ({kind, ids, keep}; None - every group found): the kept record gets
+    what the others had, the others are removed, references to their names (dependencies, the entity
+    and the role of data) point to the kept one, their pending updates - to it too."""
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        if groups is None:
+            groups = [{"kind": g["kind"], "ids": [x["id"] for x in g["items"]], "keep": g["keep"]}
+                      for g in duplicates(doc)]
+        merged = 0
+        for g in groups:
+            kind = g.get("kind")
+            if kind not in ("entities", "roles", "data"):
+                continue
+            ids = set(g.get("ids") or [])
+            members = [x for x in doc[kind] if x["id"] in ids]
+            keep = next((x for x in members if x["id"] == g.get("keep")), members[0] if members else None)
+            if keep is None or len(members) < 2:
+                continue
+            result = _merged(kind, keep, members)
+            gone = {x["id"] for x in members} - {keep["id"]}
+            names = {norm(x["name"]) for x in members if x["id"] in gone} - {norm(result["name"])}
+            doc[kind] = [result if x["id"] == keep["id"] else x for x in doc[kind] if x["id"] not in gone]
+            for p in doc["pending"]:
+                if p["kind"] == kind and p["target"] in gone:
+                    p["target"] = keep["id"]
+            if kind == "entities":
+                for e in doc["entities"]:
+                    e["depends_on"] = list(dict.fromkeys(result["name"] if norm(v) in names else v
+                                                         for v in e["depends_on"]))
+            for d in doc["data"]:
+                if kind == "entities" and norm(d["entity"]) in names:
+                    d["entity"] = result["name"]
+                if kind == "roles" and norm(d["role"]) in names:
+                    d["role"] = result["name"]
+            merged += 1
+        out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
+        fs.write_json(_path(pid), out, indent=1)
+    return view(pid) | {"merged": merged}
 
 
 def need(pid: str, scenarios: list[dict]) -> dict:
@@ -395,4 +632,4 @@ def need(pid: str, scenarios: list[dict]) -> dict:
                             | {"status": "needed", "needed_by": [title] if title else []})
         if str(sc.get("role") or "").strip():
             roles.append({"name": sc["role"]})
-    return merge(pid, {"data": data, "roles": roles})
+    return merge(pid, {"data": data, "roles": roles}, source="сценарии")
