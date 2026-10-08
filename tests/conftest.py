@@ -106,6 +106,13 @@ def stand(_stand):
 MODEL = "test-model"
 
 
+@pytest.fixture(autouse=True)
+def lifecycle_confirmed(monkeypatch):
+    """Tests of the pipeline do not wait for a person to confirm the application model; the tests of that
+    confirmation switch it on in their project ("requirements.confirm_model")."""
+    monkeypatch.setitem(projects.DEFAULT_PIPELINE["requirements"], "confirm_model", False)
+
+
 @pytest.fixture
 def fake_llm(monkeypatch):
     client = FakeClient()

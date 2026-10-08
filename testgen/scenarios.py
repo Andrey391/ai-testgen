@@ -12,7 +12,11 @@ What to design is chosen for every generation (or taken from the project's "scen
 the kinds of checks (TYPES: positive, negative, boundary... by the principles of testing), the
 layers (UI tests in the browser, API tests of the backend) and the test design techniques
 (TECHNIQUES). The project's application model (knowledge.py: entities, their dependencies and
-lifecycles, test data) turns into preconditions the scenarios state explicitly.
+lifecycles, roles with their capabilities, test data) turns into preconditions the scenarios state
+explicitly: every scenario names the role it acts as and the test data it needs (`test_data`), and
+that need is recorded in the model (knowledge.need) so the tests reuse one set of data. The plan is
+compared with the scenarios and tests the project already has (reuse.py): a scenario that repeats or
+extends an earlier one carries a `match`, and a person decides to reuse, refine or create a new one.
 """
 from __future__ import annotations
 
@@ -23,7 +27,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from . import knowledge, llm, projects, skills
+from . import knowledge, llm, projects, reuse, skills
 from .catalog import DEFAULT_TECHNIQUES, DEFAULT_TYPES, LAYERS, TECHNIQUES, TYPES
 
 ScenarioType = Literal[tuple(TYPES)]
@@ -34,21 +38,35 @@ BATCH = 3          # scenarios detailed per request: short answers
 PARALLEL = 4       # detail requests in flight
 
 
+class DataNeed(BaseModel):
+    entity: str              # Product, Order, Customer…
+    name: str                # a reusable name: «Test product A», «a customer with a delivery address»
+    details: str             # what matters: price, settings, links to other objects
+    state: str               # the state of its lifecycle the scenario needs: in stock, paid…
+    role: str                # the role whose object it is
+
+
 class Scenario(BaseModel):
     title: str
     type: ScenarioType
     layer: Layer = "ui"
     priority: Priority
+    role: str = ""           # the role of the application model the test acts as ("" - no login)
     preconditions: str
     instructions: str        # plain-language scenario to hand to the authoring agent
     expected_result: str
     gherkin: str
+    test_data: list[DataNeed] = []
+
+
+class DesignedScenario(Scenario):
+    match: dict | None = None    # an earlier test or scenario it repeats or extends (reuse.py); not asked of the model
 
 
 class ScenarioSet(BaseModel):
     feature: str
     assumptions: list[str]
-    scenarios: list[Scenario]
+    scenarios: list[DesignedScenario]
 
 
 class PlannedScenario(BaseModel):
@@ -56,7 +74,10 @@ class PlannedScenario(BaseModel):
     type: ScenarioType
     layer: Layer = "ui"
     priority: Priority
+    role: str = ""
     covers: str              # which requirement / rule this checks, one line
+    existing: str = ""       # the ref of an earlier test (T…) or scenario (S…) it repeats or extends
+    relation: Literal["", "same", "refine"] = ""
 
 
 class ScenarioPlan(BaseModel):
@@ -74,10 +95,12 @@ SYSTEM = """You are a senior QA analyst. From the requirements you are given, de
 
 Every scenario has a `layer`: "ui" - a test in the browser, as a user; "api" - a test of the backend API of the same application (HTTP requests and their responses: status, fields, rules), without the user interface. Design a scenario at the layer that checks its rule most directly, and only at the layers you are asked for.
 
-For each scenario, `instructions` is what a test automation agent will be told, so write concrete, self-contained steps ending with what must be verified: for "ui", the steps a user takes on the site; for "api", the requests (method, path, body) and the expected status and response fields. `preconditions` lists what must exist before the test - data, accounts with their roles, states of objects - taken from the application model when it has them; a scenario never silently relies on data it does not name. `gherkin` is the scenario in Given/When/Then form (just the Scenario block). List any assumption you had to make about unclear requirements. Write in the language of the requirements; write its letters as they are, never as \\u escapes."""
+For each scenario, `instructions` is what a test automation agent will be told, so write concrete, self-contained steps ending with what must be verified: for "ui", the steps a user takes on the site; for "api", the requests (method, path, body) and the expected status and response fields. `preconditions` lists what must exist before the test - data, accounts with their roles, states of objects - taken from the application model when it has them; a scenario never silently relies on data it does not name.
+
+Roles and the lifecycle of the system decide the scenarios. `role` is the role the test acts as - a role of the application model by its exact name ("" only when the application has no login). A scenario acts as a role that may do what it checks (its capabilities); checks of rights ("roles", "security") act as a role that may not, and expect a refusal. An action available to several roles with different rules is a scenario per role that behaves differently. Objects are taken in the state of their lifecycle the scenario needs, and that state is reached by the transitions the lifecycle allows (a "shipped" order needs a paid one first). `test_data` lists every object the test needs before its first step: entity, a reusable name (an object of the model's test data when there is one - its exact name - otherwise a descriptive one such as "a customer with a delivery address"), the details that matter, the state of its lifecycle and the role whose object it is. Scenarios that need the same data name it the same way: the studio records it in the project's test data and the tests reuse one set of data. `gherkin` is the scenario in Given/When/Then form (just the Scenario block). List any assumption you had to make about unclear requirements. Write in the language of the requirements; write its letters as they are, never as \\u escapes."""
 
 PLAN_TASK = ("First step: plan the complete list of scenarios. For each give only the title, type, "
-             "priority and a one-line note of what it covers. Order them by importance. "
+             "priority, the role it acts as and a one-line note of what it covers. Order them by importance. "
              "Give at most {page} scenarios in this answer; if the plan needs more, set `more` to true "
              "and you will be asked for the rest.")
 PLAN_NEXT = ("Already planned (titles):\n{listing}\n\nContinue the plan: give the next scenarios (at most {page}) "
@@ -88,10 +111,12 @@ PLAN_PAGE = 15     # planned scenarios per answer
 PLAN_PAGES = 60    # a guard against a model that always answers `more`
 
 
-def _context(requirements: str, url: str, cfg: dict, model: str = "") -> str:
+def _context(requirements: str, url: str, cfg: dict, model: str = "", earlier: str = "") -> str:
     text = f"Requirements:\n{requirements}\n\n"
     if model:
         text += f"{model}\n\n"
+    if earlier:
+        text += f"{earlier}\n\n"
     if url:
         text += f"Application URL: {url}\n"
     types = [t for t in cfg.get("types") or [] if t in TYPES]
@@ -165,7 +190,8 @@ def _field(text: str, key: str, default):
 
 
 def _listing(planned: list[PlannedScenario], first: int = 0) -> str:
-    return "\n".join(f"{first + i + 1}. [{s.layer}, {s.type}, {s.priority}] {s.title} — {s.covers}"
+    return "\n".join(f"{first + i + 1}. [{s.layer}, {s.type}, {s.priority}{', ' + s.role if s.role else ''}] "
+                     f"{s.title} — {s.covers}"
                      for i, s in enumerate(planned))
 
 
@@ -219,26 +245,31 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
     cfg = cfg or settings(project)
     system = SYSTEM + projects.language_rule(project) + (skills.prompt(project["id"], cfg.get("skills", []))
                                                          if project else "")
-    context = _context(requirements, url, cfg, knowledge.prompt(project["id"]) if project else "")
-
     pid = project["id"] if project else ""
+    earlier = reuse.candidates(pid) if project else []
+    context = _context(requirements, url, cfg, knowledge.prompt(pid) if project else "", reuse.listing(earlier))
+
     if progress:
         say(f"Анализ требований ({len(requirements)} символов) и план покрытия…")
     plan = await _plan(cfg, system, context, pid, say)
+    matches = [reuse.resolve(earlier, s.existing, s.relation) for s in plan.scenarios]
+    if any(matches):
+        say(f"Похожи на созданные ранее: {sum(1 for m in matches if m)} — решите, переиспользовать, доработать "
+            "или создать новые")
     if progress:
         progress({"type": "plan", "feature": plan.feature, "assumptions": plan.assumptions,
-                  "scenarios": [s.model_dump() for s in plan.scenarios]})
+                  "scenarios": [s.model_dump() | {"match": m} for s, m in zip(plan.scenarios, matches)]})
     say(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
     if not plan.scenarios:
         return ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[])
 
     gate = asyncio.Semaphore(PARALLEL)
 
-    async def detail(start: int, count: int) -> list[Scenario]:
+    async def detail(start: int, count: int) -> list[DesignedScenario]:
         # Only the scenarios of this batch go into the request, not the whole plan: a short request.
         part = plan.scenarios[start:start + count]
         task = (f"Write out in full these scenarios {start + 1}–{start + len(part)} of the test plan, in this order, "
-                f"keeping their titles, layers, types and priorities:\n{_listing(part, start)}")
+                f"keeping their titles, layers, types, priorities and roles:\n{_listing(part, start)}")
         async with gate:
             if progress:
                 say(f"Детализация сценариев {start + 1}–{start + len(part)}: {part[0].title}…")
@@ -252,9 +283,10 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
             half = len(part) // 2
             return await detail(start, half) + await detail(start + half, len(part) - half)
         # The plan is authoritative for what the scenario is; the batch adds the details.
-        out = [full.model_copy(update={"title": planned.title, "type": planned.type, "layer": planned.layer,
-                                       "priority": planned.priority})
-               for planned, full in zip(part, got)]
+        out = [DesignedScenario(**full.model_dump() | {
+                   "title": planned.title, "type": planned.type, "layer": planned.layer, "priority": planned.priority,
+                   "role": planned.role or full.role, "match": matches[start + k]})
+               for k, (planned, full) in enumerate(zip(part, got))]
         if progress and out:
             progress({"type": "batch", "start": start, "scenarios": [s.model_dump() for s in out]})
             say(f"Готовы сценарии {start + 1}–{start + len(out)}" + "".join(f"\n  ✓ {s.title}" for s in out))
@@ -265,5 +297,9 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
         return out
 
     batches = await asyncio.gather(*(detail(i, BATCH) for i in range(0, len(plan.scenarios), BATCH)))
-    return ScenarioSet(feature=plan.feature, assumptions=plan.assumptions,
-                       scenarios=[s for b in batches for s in b])
+    res = ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[s for b in batches for s in b])
+    if project and project["pipeline"]["requirements"].get("learn_model"):
+        doc = knowledge.need(pid, [sc.model_dump() for sc in res.scenarios])
+        say(f"Тестовые данные сценариев записаны в модель приложения: записей {len(doc['data'])}, "
+            f"ролей {len(doc['roles'])}")
+    return res

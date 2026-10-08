@@ -12,10 +12,11 @@ import re
 import time
 import uuid
 
-from . import fs, projects
+from . import fs, projects, reuse
 from .catalog import LAYERS, TYPES
 
-FIELDS = ("title", "type", "layer", "priority", "preconditions", "instructions", "expected_result", "gherkin")
+FIELDS = ("title", "type", "layer", "priority", "role", "preconditions", "instructions", "expected_result", "gherkin")
+DATA_FIELDS = ("entity", "name", "details", "state", "role")     # test data a scenario needs (scenarios.DataNeed)
 PRIORITIES = ("high", "medium", "low")
 STALE = 3600     # a "running" analysis older than this was cut off (the studio restarted)
 
@@ -86,7 +87,14 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
 def _fields(data: dict) -> dict:
     out = {k: str(data.get(k) or "") for k in FIELDS}
     out["layer"] = out["layer"] if out["layer"] in LAYERS else "ui"
+    out["test_data"] = data_needs(data.get("test_data"))
+    out["match"] = reuse.clean(data.get("match"))     # an earlier test or scenario it repeats (reuse.py)
     return out
+
+
+def data_needs(value) -> list[dict]:
+    return [{k: str(d.get(k) or "")[:1000] for k in DATA_FIELDS} for d in (value or [])[:30]
+            if isinstance(d, dict) and str(d.get("entity") or "").strip() and str(d.get("name") or "").strip()]
 
 
 def _new_scenario(data: dict) -> dict:
@@ -110,7 +118,8 @@ def set_batch(pid: str, aid: str, start: int, detailed: list[dict]) -> list[dict
             i = start + k
             if i < len(a["scenarios"]) and a["scenarios"][i].get("pending"):
                 old = a["scenarios"][i]
-                a["scenarios"][i] = {**_fields(d), "id": old["id"], "test_ids": old["test_ids"]}
+                a["scenarios"][i] = {**_fields(d), "id": old["id"], "test_ids": old["test_ids"],
+                                     "match": old.get("match")}     # the plan's match, maybe decided already
                 out.append(a["scenarios"][i])
         return out
     return _change(pid, aid, fn)
@@ -123,7 +132,8 @@ def finish(pid: str, aid: str, result: dict | None = None, error: str = "", stat
             a["feature"], a["assumptions"] = result["feature"], result["assumptions"]
             for i, s in enumerate(a["scenarios"]):
                 if s.get("pending") and i < len(result["scenarios"]):
-                    a["scenarios"][i] = {**_fields(result["scenarios"][i]), "id": s["id"], "test_ids": s["test_ids"]}
+                    a["scenarios"][i] = {**_fields(result["scenarios"][i]), "id": s["id"], "test_ids": s["test_ids"],
+                                         "match": s.get("match")}
         a["scenarios"] = [s for s in a["scenarios"] if not s.get("pending")]
         a["status"] = status or ("error" if error else "done")
         a["error"], a["finished"] = error, time.time()
@@ -134,12 +144,18 @@ def finish(pid: str, aid: str, result: dict | None = None, error: str = "", stat
 
 def clean_fields(data: dict) -> dict:
     out = {k: str(v)[:20_000] for k, v in data.items() if k in FIELDS and v is not None}
+    if isinstance(data.get("test_data"), list):
+        out["test_data"] = data_needs(data["test_data"])
     if "type" in out and out["type"] not in TYPES:
         raise ValueError("Тип сценария: " + ", ".join(TYPES))
     if "layer" in out and out["layer"] not in LAYERS:
         raise ValueError("Слой сценария: ui или api")
     if "priority" in out and out["priority"] not in PRIORITIES:
         raise ValueError("Приоритет сценария: high, medium или low")
+    if data.get("decision") is not None:
+        if data["decision"] not in reuse.DECISIONS:
+            raise ValueError("Решение по похожему сценарию: new, reuse или refine")
+        out["decision"] = data["decision"]
     return out
 
 
@@ -152,6 +168,14 @@ def update_scenario(pid: str, aid: str, scid: str, data: dict) -> dict:
             raise KeyError(scid)
         if s.get("pending"):
             raise Conflict("Сценарий ещё детализируется")
+        decision = fields.pop("decision", None)
+        if decision:
+            if not s.get("match"):
+                raise Conflict("У сценария нет похожего среди созданных ранее")
+            s["match"]["decision"] = decision
+            # Reused: the earlier test is this scenario's test as well, nothing is generated.
+            if decision == "reuse" and reuse.test_of(pid, s["match"]) and s["match"]["id"] not in s["test_ids"]:
+                s["test_ids"].append(s["match"]["id"])
         s.update(fields)
         return s
     return _change(pid, aid, fn)

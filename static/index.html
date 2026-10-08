@@ -983,10 +983,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <textarea data-p="requirements.checklist" rows="4" placeholder="У каждого требования есть номер REQ-…&#10;Для каждой формы описаны сообщения об ошибках&#10;Указаны роли, которым доступна функция"></textarea>
           <div class="checks" style="margin-top:8px">
             <label class="inline"><input type="checkbox" data-p="requirements.validate"> Проверять ТЗ перед каждой генерацией сценариев (и в конвейере)</label>
-            <label class="inline"><input type="checkbox" data-p="requirements.learn_model"> Обновлять модель приложения из требований: сущности, зависимости, жизненный цикл, роли («Проект → Тестовые данные»)</label>
+            <label class="inline"><input type="checkbox" data-p="requirements.learn_model"> Обновлять модель приложения из требований: сущности, зависимости, жизненный цикл, роли и их возможности; тестовые данные сценариев («Проект → Тестовые данные»)</label>
+            <label class="inline"><input type="checkbox" data-p="requirements.confirm_model"> Генерировать тесты только по подтверждённому жизненному циклу системы: конвейер ждёт подтверждения модели</label>
           </div>
-          <label>Скиллы</label>
+          <label>Скиллы проверки ТЗ</label>
           <div class="checks" data-list="requirements.skills" data-kind="skills" data-stage="requirements"></div>
+          <label>Скиллы модели приложения (тестовые данные)</label>
+          <div class="checks" data-list="requirements.model_skills" data-kind="skills" data-stage="requirements"></div>
           <div class="grid2">
             <div><label>Модель</label><input data-p="requirements.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="requirements.effort" class="effortSel"></select></div>
@@ -1050,6 +1053,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div class="row" style="margin-top:6px"><span class="muted grow" id="knExtractMsg"></span><button class="btn" id="knExtract">Построить</button></div>
           </details>
         </div>
+        <div class="card" id="knConfirmBox">
+          <h3>Подтверждение жизненного цикла системы</h3>
+          <div class="hint">Перед генерацией тестов человек проверяет и подтверждает модель: сущности и их зависимости, статусы и переходы (кто их выполняет), роли с возможностями и ограничениями. Без подтверждения конвейер ждёт, а «Тест в Studio» из сценария не запускается. Изменение сущностей, жизненного цикла или ролей требует нового подтверждения; данные стенда и память меняются свободно.</div>
+          <div class="row" style="margin-top:8px"><span class="grow" id="knConfirmState"></span><button class="btn primary" id="knConfirm">Подтвердить жизненный цикл</button></div>
+        </div>
         <div class="card">
           <h3>Сущности, зависимости и жизненный цикл</h3>
           <div class="hint">«Требует» — сущности (и их настройки), которые должны существовать до создания этой; жизненный цикл — статусы и разрешённые переходы.</div>
@@ -1058,13 +1066,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
         <div class="card">
           <h3>Роли и учётные записи</h3>
-          <div class="hint">Какой учётной записью проекта выполнять действия роли. Конвейер входит под учётной записью роли, названной в предусловиях сценария.</div>
+          <div class="hint">Что роль может и чего не может — из этого строятся сценарии на права доступа; каждый сценарий выполняется от одной роли. Учётная запись — под ней конвейер выполняет сценарии роли.</div>
           <div id="knRoles"></div>
           <button class="btn small" style="margin-top:6px" onclick="knAdd('roles')">+ Роль</button>
         </div>
         <div class="card">
           <h3>Тестовые данные стенда</h3>
-          <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio): такие записи обновляются новыми находками; очистите поле, чтобы запись больше не менялась.</div>
+          <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio): такие записи обновляются новыми находками; очистите поле, чтобы запись больше не менялась. «Нужны сценариям» — данные, которые назвали сценарии, но ещё никто не видел на стенде: первый тест, который их найдёт или подготовит, переведёт запись в «на стенде», следующие тесты переиспользуют её.</div>
           <div id="knData"></div>
           <button class="btn small" style="margin-top:6px" onclick="knAdd('data')">+ Запись</button>
         </div>
@@ -2777,7 +2785,23 @@ const scTypes = () => Object.fromEntries(Object.entries(PROJ.catalog.types).map(
 const scType = k => PROJ.catalog.types[k]?.label || k;
 const layerBadge = s => s.layer === 'api' ? '<span class="badge" title="Тест API (бэкенд)">API</span> ' : '';
 const SC_PRIOS = {high: 'высокий', medium: 'средний', low: 'низкий'};
-const SC_FIELDS = ['title', 'type', 'layer', 'priority', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
+const SC_FIELDS = ['title', 'type', 'layer', 'priority', 'role', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
+// A scenario similar to an earlier test or scenario (reuse.py): a person decides what to do with it.
+const REUSE_DECISIONS = {new: 'Создать новый тест', reuse: 'Переиспользовать прежний', refine: 'Доработать прежний'};
+const REUSE_RELATION = {same: 'проверяет то же', refine: 'можно доработать'};
+function reuseOptions(m) {
+  const keys = m.kind === 'test' ? ['reuse', 'refine', 'new'] : ['reuse', 'new'];
+  return `<option value="" ${m.decision ? '' : 'selected'} disabled>— решите —</option>` +
+    keys.map(k => `<option value="${k}" ${m.decision === k ? 'selected' : ''}>${k === 'reuse' && m.kind === 'scenario' ? 'Не дублировать' : REUSE_DECISIONS[k]}</option>`).join('');
+}
+function reuseHtml(s, attrs) {
+  const m = s.match;
+  if (!m) return '';
+  return `<div class="hint" style="margin-top:3px;${m.decision ? '' : 'color:var(--warn)'}">≈ Похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${esc(m.title)}» (${REUSE_RELATION[m.relation] || ''}):
+    <select ${attrs} style="width:auto;padding:1px 4px;font-size:12px">${reuseOptions(m)}</select></div>`;
+}
+const roleBadge = s => s.role ? ` <span class="badge" title="Роль, от которой выполняется сценарий">${esc(s.role)}</span>` : '';
+const scDataText = s => (s.test_data || []).map(d => `${d.entity} «${d.name}»` + (d.state ? ` (${d.state})` : '') + (d.details ? ` — ${d.details}` : '') + (d.role ? `; роль: ${d.role}` : '')).join('\n');
 const AN_STATUS = {running: ['генерация…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
 const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
 const isReady = s => !s.pending;
@@ -2968,8 +2992,8 @@ function scenRow(s, i) {
   const row = `<tr class="sc-row${open ? ' open' : ''}${s.fresh ? ' fresh' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
     <td class="chk"><input type="checkbox" class="sc-sel" data-id="${s.id}" ${s.sel !== false ? 'checked' : ''}></td>
     <td class="num">${i + 1}</td>
-    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions)}</div>`}${testsHtml(s)}</td>
-    <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
+    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions)}</div>`}${reuseHtml(s, `data-decision="${s.id}"`)}${testsHtml(s)}</td>
+    <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">
       <button class="btn small" data-act="studio" data-id="${s.id}" title="Создать тест по этому сценарию в Studio">Тест в Studio</button>
       ${REQ_ABORT ? '' : `<button class="btn small" data-act="del" data-id="${s.id}" title="Удалить сценарий">✕</button>`}</div></td></tr>`;
@@ -2981,8 +3005,10 @@ function scenRow(s, i) {
       <div><label>Вид проверки</label><select data-f="type" data-id="${s.id}">${opt(scTypes(), s.type)}</select></div>
       <div><label>Слой</label><select data-f="layer" data-id="${s.id}">${opt(PROJ.catalog.layers, s.layer || 'ui')}</select></div>
       <div><label>Приоритет</label><select data-f="priority" data-id="${s.id}">${opt(SC_PRIOS, s.priority)}</select></div>
+      <div><label>Роль</label><input data-f="role" data-id="${s.id}" list="knRoleNames" value="${esc(s.role || '')}" placeholder="роль из «Тестовых данных»"></div>
     </div>
     <label>Предусловия</label><textarea data-f="preconditions" data-id="${s.id}" rows="2">${esc(s.preconditions)}</textarea>
+    ${s.test_data?.length ? `<label>Тестовые данные (записаны в «Проект → Тестовые данные»)</label><div class="hint" style="white-space:pre-wrap;margin-top:0">${esc(scDataText(s))}</div>` : ''}
     <label>Шаги сценария (их получит агент)</label><textarea data-f="instructions" data-id="${s.id}" rows="5">${esc(s.instructions)}</textarea>
     <label>Ожидаемый результат</label><textarea data-f="expected_result" data-id="${s.id}" rows="2">${esc(s.expected_result)}</textarea>
     <label>Gherkin</label><textarea class="mono" data-f="gherkin" data-id="${s.id}" rows="5">${esc(s.gherkin)}</textarea>
@@ -3057,6 +3083,21 @@ $('#anList').addEventListener('click', async e => {
   updateScenRow(id);
   if (SCEN_OPEN.has(id)) $(`#sc-edit-${id} [data-f="instructions"]`)?.focus();
 });
+$('#anList').addEventListener('change', async e => {
+  const el = e.target.closest('[data-decision]');
+  if (!el) return;
+  try {
+    const sc = await api('PUT', `/api/analyses/${AN.id}/scenarios/${el.dataset.decision}`, {decision: el.value});
+    const old = scenById(el.dataset.decision);
+    Object.assign(old, {match: sc.match, test_ids: sc.test_ids});
+    if (el.value === 'reuse' && sc.match.kind === 'test') {       // the earlier test is now this scenario's test
+      const a = await api('GET', `/api/analyses/${AN.id}`).catch(() => null);
+      const fresh = a?.scenarios.find(x => x.id === old.id);
+      if (fresh) old.tests = fresh.tests;
+    }
+    updateScenRow(old.id);
+  } catch (err) { alert(err.message); }
+});
 $('#anList').addEventListener('input', e => {
   const el = e.target, sc = el.dataset.id && scenById(el.dataset.id);
   if (!sc) return;
@@ -3064,7 +3105,7 @@ $('#anList').addEventListener('input', e => {
   if (!el.dataset.f) return;
   sc[el.dataset.f] = el.value;
   if (el.dataset.f === 'title') $(`#sc-row-${sc.id} .sc-title`).textContent = el.value || 'Без названия';
-  if (el.dataset.f === 'type' || el.dataset.f === 'layer') $(`#sc-row-${sc.id} td:nth-child(4)`).innerHTML = layerBadge(sc) + esc(scType(sc.type));
+  if (['type', 'layer', 'role'].includes(el.dataset.f)) $(`#sc-row-${sc.id} td:nth-child(4)`).innerHTML = layerBadge(sc) + esc(scType(sc.type)) + roleBadge(sc);
   if (el.dataset.f === 'priority') $(`#sc-row-${sc.id} td:nth-child(5)`).textContent = SC_PRIOS[el.value];
   const msg = $('#sc-msg-' + sc.id); if (msg) msg.textContent = 'Сохранение…';
   saveScenario(sc.id);
@@ -3179,17 +3220,28 @@ function setStudioScen(v) {
 function toStudio(id) {
   const sc = scenById(id);
   if (!sc) return;
+  const m = sc.match;
+  if (m && !m.decision) return alert(`Сценарий похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${m.title}». Сначала решите в строке сценария: создать новый тест, переиспользовать или доработать прежний.`);
+  if (m?.decision === 'reuse') return alert(m.kind === 'test' ? `Используется прежний тест «${m.title}» — новый не создаётся.` : `Сценарий уже есть: «${m.title}» — новый тест не создаётся.`);
+  if (m?.decision === 'refine' && m.kind === 'test') {
+    if (!confirm(`Открыть тест «${m.title}» в Studio для доработки под этот сценарий? Тест воспроизведётся, дальше — вы и агент.`)) return;
+    showTab('studio');
+    return editInStudio(m.id, {disabled: false});
+  }
   if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
   const url = AN.url || $('#reqUrl').value;
   if (url) { $('#fUrl').value = url; delete $('#fUrl').dataset.auto; }
   $('#fName').value = sc.title;
-  $('#fScenario').value = (sc.preconditions ? `Предусловия: ${sc.preconditions}\n` : '') +
+  const data = scDataText(sc).replace(/\n/g, '; ');
+  $('#fScenario').value = (sc.role ? `Роль: ${sc.role}\n` : '') + (sc.preconditions ? `Предусловия: ${sc.preconditions}\n` : '') +
+    (data ? `Тестовые данные: ${data}\n` : '') +
     (sc.layer === 'api' ? 'Тест API (бэкенд): проверяй через запросы api_request — статус и поля ответа, без действий в интерфейсе.\n' : '') +
     sc.instructions + (sc.expected_result ? '\nОжидаемый результат: ' + sc.expected_result : '');
   // the role the preconditions name -> its project account (Проект → Тестовые данные → Роли)
   api('GET', `/api/projects/${PID}/knowledge`).then(k => {
     const text = `${sc.preconditions}\n${sc.instructions}`.toLowerCase();
-    const role = k.roles.find(r => r.account && r.name && text.includes(r.name.toLowerCase()));
+    const role = k.roles.find(r => r.account && sc.role && r.name.toLowerCase() === sc.role.trim().toLowerCase())
+      || k.roles.find(r => r.account && r.name && text.includes(r.name.toLowerCase()));
     if (role && [...$('#fAccount').options].some(o => o.value === role.account)) $('#fAccount').value = role.account;
   }).catch(() => {});
   setStudioScen({analysis_id: AN.id, scenario_id: sc.id, title: sc.title});
@@ -3198,7 +3250,7 @@ function toStudio(id) {
 
 // ---- pipeline
 const STAGES = [['requirements', 'Требования'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
-const JOB_STATUS = {running: 'Выполняется', awaiting_selection: 'Ждёт выбора сценариев', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
+const JOB_STATUS = {running: 'Выполняется', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
 const ITEM_STATUS = {queued: ['в очереди', 'off'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
   done: ['готово', 'ok'], needs_attention: ['нужен человек', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
 let JOB = null, jobTimer = null;
@@ -3229,7 +3281,7 @@ async function loadPipe() {
   if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id);
 }
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
-const LIVE_JOB = ['running', 'awaiting_selection'];
+const LIVE_JOB = ['running', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
 let PIPE_BUSY = null;
 function pipeBusy(job) {
   PIPE_BUSY = job || null;
@@ -3283,7 +3335,7 @@ function itemKind(it, live) {
   return 'waiting';     // queued, cancelled, interrupted by a stop or a restart
 }
 function jobStepper(j, live) {
-  const cur = live ? (j.status === 'awaiting_selection' ? 'scenarios' : j.stage) : '';
+  const cur = live ? (['awaiting_selection', 'awaiting_model', 'awaiting_reuse'].includes(j.status) ? 'scenarios' : j.stage) : '';
   const at = STAGES.findIndex(([k]) => k === cur);
   const now = {};
   j.items.forEach(it => { if (live && ACTIVE_ITEM.includes(it.status)) now[it.status] = (now[it.status] || 0) + 1; });
@@ -3330,7 +3382,8 @@ function renderJob() {
   let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
     ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}
-    ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}</div>
+    ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}
+    ${!live && failedItems(j).length ? `<button class="btn small" onclick="retryJob()" title="Сгенерировать заново все сценарии, где генерация упала с ошибкой агента, агент остановился или не смог пройти сценарий: каждый начинается с новой сессии">Перезапустить сбойные (${failedItems(j).length})</button>` : ''}</div>
     ${jobStepper(j, live)}`;
   const groups = {bug: [], attention: [], active: [], done: [], waiting: []};
   j.items.forEach((it, i) => groups[itemKind(it, live)].push([it, i]));
@@ -3342,6 +3395,20 @@ function renderJob() {
         ${k(groups.active.length, 'в работе')}${k(groups.done.length, 'готово', 'ok')}${k(groups.waiting.length, live ? 'в очереди' : 'не начато или прервано')}</div>`;
   }
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
+  if (j.status === 'awaiting_model') {
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите жизненный цикл системы — сущности, статусы и переходы, роли и их возможности. Тесты генерируются только по подтверждённой модели.</span>
+      <button class="btn" onclick="openSettings('data')">Открыть модель</button>
+      <button class="btn primary" onclick="confirmModelFromJob()">Подтвердить</button></div></div>`;
+  }
+  if (j.status === 'awaiting_reuse') {
+    const rows = j.items.map((it, i) => [it, i]).filter(([it]) => it.match && !it.match.decision && !['done', 'needs_attention'].includes(it.status));
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: эти сценарии похожи на созданные ранее — создать новый тест, переиспользовать или доработать прежний?</span>
+      <button class="btn primary" onclick="applyReuse()">Применить</button></div>
+      <table class="scen-list"><thead><tr><th>#</th><th>Новый сценарий</th><th>Похож на</th><th>Решение</th></tr></thead><tbody>${rows.map(([it, i]) => `<tr>
+        <td class="num">${i + 1}</td><td>${esc(it.title)}</td>
+        <td>${it.match.kind === 'test' ? 'тест' : 'сценарий'} «${esc(it.match.title)}» <span class="muted">— ${REUSE_RELATION[it.match.relation] || ''}</span></td>
+        <td><select data-reuse="${i}" onchange="JOB_REUSE[${i}] = this.value">${reuseOptions({...it.match, decision: JOB_REUSE[i] || (it.match.relation === 'refine' && it.match.kind === 'test' ? 'refine' : 'reuse')})}</select></td></tr>`).join('')}</tbody></table></div>`;
+  }
   if (j.status === 'awaiting_selection') {
     if (JOB_PICK.id !== j.id) JOB_PICK = {id: j.id, open: new Set(),
       sel: new Set(j.scenarios.map((s, i) => s.priority !== 'low' ? i : -1).filter(i => i >= 0))};
@@ -3372,18 +3439,34 @@ function jobScenRow(s, i) {
   const row = `<tr class="sc-row${open ? ' open' : ''}" onclick="if (!event.target.closest('input')) toggleJobScen(${i})">
     <td class="chk"><input type="checkbox" onchange="pickJobScen(${i}, this.checked)" ${JOB_PICK.sel.has(i) ? 'checked' : ''}></td>
     <td class="num">${i + 1}</td>
-    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions || '')}</div>`}</td>
-    <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority || '')}</td></tr>`;
+    <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions || '')}</div>`}${s.match ? `<div class="hint">≈ Похож на ${s.match.kind === 'test' ? 'тест' : 'сценарий'} «${esc(s.match.title)}» — решение после выбора</div>` : ''}</td>
+    <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority || '')}</td></tr>`;
   if (!open) return row;
   const part = (label, text, cls = '') => text ? `<label>${label}</label><div class="${cls}" style="white-space:pre-wrap">${esc(text)}</div>` : '';
   return row + `<tr class="sc-edit"><td colspan="5">
-    ${part('Предусловия', s.preconditions)}${part('Шаги сценария (их получит агент)', s.instructions)}
+    ${part('Роль', s.role)}${part('Предусловия', s.preconditions)}${part('Тестовые данные', scDataText(s))}${part('Шаги сценария (их получит агент)', s.instructions)}
     ${part('Ожидаемый результат', s.expected_result)}${s.gherkin ? `<label>Gherkin</label><pre>${esc(s.gherkin)}</pre>` : ''}
     <div class="row" style="margin-top:8px"><span class="grow"></span><button class="btn small" onclick="toggleJobScen(${i})">Свернуть</button></div></td></tr>`;
 }
 function toggleJobScen(i) { JOB_PICK.open.has(i) ? JOB_PICK.open.delete(i) : JOB_PICK.open.add(i); renderJob(); }
 function pickJobScen(i, on) { on ? JOB_PICK.sel.add(i) : JOB_PICK.sel.delete(i); renderJob(); }
 function pickAllJob(on) { JOB_PICK.sel = new Set(on ? JOB.scenarios.map((_, i) => i) : []); renderJob(); }
+// Items whose authoring failed (pipeline.retryable): an error of the agent, it stopped or gave up.
+let JOB_REUSE = {};      // decisions chosen in the run awaiting them: they survive the polling
+const failedItems = j => j.items.filter(it => !it.test_id && ['error', 'needs_attention', 'cancelled'].includes(it.status) && !it.bug);
+async function retryJob() {
+  const n = failedItems(JOB).length;
+  if (!confirm(`Перезапустить генерацию ${n} сценариев с ошибкой? Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.`)) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {}); openJob(JOB.id); } catch (e) { alert(e.message); }
+}
+async function applyReuse() {
+  const decisions = Object.fromEntries($$('#jobBox select[data-reuse]').map(el => [el.dataset.reuse, el.value]).filter(([, v]) => v));
+  try { await api('POST', `/api/jobs/${JOB.id}/reuse`, {decisions}); JOB_REUSE = {}; setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
+}
+async function confirmModelFromJob() {
+  try { await api('POST', `/api/projects/${PID}/knowledge/confirm`); openJob(JOB.id); }
+  catch (e) { if (confirm(e.message + '\n\nОткрыть «Проект → Тестовые данные»?')) openSettings('data'); }
+}
 async function selectScenarios() {
   const indices = [...JOB_PICK.sel];
   if (!indices.length) return alert('Выберите хотя бы один сценарий');
@@ -4221,7 +4304,7 @@ let SKILL = null;
 const SK_F = {group: '*', q: '', stage: '', state: ''};
 const STAGE_NAMES = {requirements: 'требования', scenarios: 'сценарии', authoring: 'генерация', run: 'прогон', publish: 'публикация', any: 'любой этап'};
 // the pipeline settings that list skills (skills.SLOTS)
-const SKILL_SLOTS = {'requirements.skills': 'Требования (проверка ТЗ)', 'scenarios.skills': 'Сценарии', 'authoring.skills': 'Генерация теста',
+const SKILL_SLOTS = {'requirements.skills': 'Требования (проверка ТЗ)', 'requirements.model_skills': 'Модель приложения (тестовые данные)', 'scenarios.skills': 'Сценарии', 'authoring.skills': 'Генерация теста',
   'run.skills': 'Прогон и анализ падений', 'publish.skills': 'Публикация тест-кейса', 'publish.run_skills': 'Отправка результата прогона'};
 const groupTitle = g => g || 'Без группы';
 const skillGroups = () => [...new Set(SKILLS.map(s => s.group || ''))].sort((a, b) => !a - !b || a.localeCompare(b));
@@ -4395,10 +4478,24 @@ const KN_FIELDS = {
   entities: [['name', 'Сущность', 'Заказ'], ['description', 'Что это', ''], ['depends_on', 'Требует (через запятую)', 'Товар (в наличии), Покупатель (с адресом)'],
              ['lifecycle', 'Жизненный цикл', 'новый → оплачен → отправлен → доставлен; новый → отменён'], ['create', 'Кто и как создаёт', 'покупатель: корзина → оформление заказа'],
              ['rules', 'Правила', 'отправленный заказ нельзя отменить']],
-  roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Что может', ''], ['account', 'Учётная запись проекта', '']],
+  roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Описание', ''], ['account', 'Учётная запись проекта', ''],
+          ['capabilities', 'Может', 'создаёт товары и категории, отправляет оплаченные заказы'], ['restrictions', 'Не может', 'оплачивать заказы, менять чужие профили']],
   data: [['entity', 'Сущность', 'Товар'], ['name', 'Объект', 'Тестовый товар А'], ['details', 'Подробности', 'категория «Категория 1», цена 1000'],
-         ['state', 'Состояние', 'в наличии'], ['account', 'Учётная запись', ''], ['source', 'Найдено', '']],
+         ['state', 'Состояние', 'в наличии'], ['role', 'Роль', 'Менеджер магазина'], ['account', 'Учётная запись', ''],
+         ['status', 'Где', ''], ['source', 'Найдено', '']],
 };
+const KN_CONFIRM = {none: ['не подтверждён', 'warn'], changed: ['изменён после подтверждения', 'warn'], confirmed: ['подтверждён', 'ok']};
+function knStatusSelect(i, value) {
+  return `<select data-kn="data" data-i="${i}" data-k="status"><option value="">на стенде</option><option value="needed" ${value === 'needed' ? 'selected' : ''}>нужны сценариям</option></select>`;
+}
+function renderKnConfirm() {
+  const c = KN.confirmation || {state: 'none', missing: []};
+  const [label, cls] = KN_CONFIRM[c.state];
+  $('#knConfirmState').innerHTML = `<span class="badge ${cls}">Жизненный цикл ${label}</span>` +
+    (c.at ? ` <span class="muted" style="font-size:12px">${fmtTime(c.at)}${c.by ? ' · ' + esc(c.by) : ''}</span>` : '') +
+    (c.missing?.length ? `<div class="hint">Не хватает: ${c.missing.map(esc).join('; ')}</div>` : '');
+  $('#knConfirm').textContent = c.state === 'confirmed' ? 'Подтвердить заново' : 'Подтвердить жизненный цикл';
+}
 async function loadKnowledge() {
   try { KN = await api('GET', `/api/projects/${PID}/knowledge`); } catch (e) { $('#knMsg').textContent = e.message; return; }
   renderKnowledge();
@@ -4414,12 +4511,17 @@ function renderKnowledge() {
     const box = $({entities: '#knEntities', roles: '#knRoles', data: '#knData'}[kind]);
     box.innerHTML = KN[kind].map((item, i) => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
       <div class="grid3">${KN_FIELDS[kind].map(([k, label, ph]) => `<div><label>${label}</label>${k === 'account' ? knAccountSelect(kind, i, item.account)
-        : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : ''} placeholder="${esc(ph)}" value="${esc(k === 'depends_on' ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
+        : k === 'status' ? knStatusSelect(i, item.status)
+        : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : k === 'role' ? 'list="knRoleNames"' : ''} placeholder="${esc(ph)}" value="${esc(k === 'depends_on' ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
+      ${kind === 'data' && item.needed_by?.length ? `<div class="hint">Нужны сценариям: ${item.needed_by.map(t => '«' + esc(t) + '»').join(', ')}</div>` : ''}
       <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small" onclick="knDel('${kind}', ${i})">Удалить</button></div></div>`).join('')
       || '<div class="hint">Пока пусто.</div>';
   }
   if (!$('#knEnts')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knEnts"></datalist>');
   $('#knEnts').innerHTML = ents.map(n => `<option value="${esc(n)}">`).join('');
+  if (!$('#knRoleNames')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knRoleNames"></datalist>');
+  $('#knRoleNames').innerHTML = KN.roles.map(r => r.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
+  renderKnConfirm();
   $('#knMemory').innerHTML = KN.memory.slice().reverse().map(m => `<div class="row" style="margin:3px 0"><span class="grow">${esc(m.text)}
       <span class="muted" style="font-size:12px"> · ${esc(m.source || '')} ${fmtTime(m.at)}</span></span>
       <button class="linkbtn" onclick="knDelFact('${m.id}')">удалить</button></div>`).join('') || '<div class="hint">Пока пусто.</div>';
@@ -4439,6 +4541,14 @@ function knAddFact() {
   readKnowledge(); KN.memory.push({text, source: ME.user, at: Date.now() / 1000}); $('#knFact').value = ''; renderKnowledge();
 }
 function knDelFact(id) { readKnowledge(); KN.memory = KN.memory.filter(m => m.id !== id); renderKnowledge(); }
+$('#knConfirm').onclick = async () => {
+  readKnowledge();
+  try {
+    await api('PUT', `/api/projects/${PID}/knowledge`, KN);      // what is on the screen is what gets confirmed
+    KN = await api('POST', `/api/projects/${PID}/knowledge/confirm`);
+    renderKnowledge(); $('#knMsg').textContent = 'Жизненный цикл подтверждён: тесты генерируются по этой модели';
+  } catch (e) { $('#knMsg').textContent = e.message; KN = await api('GET', `/api/projects/${PID}/knowledge`).catch(() => KN); renderKnConfirm(); }
+};
 $('#knSave').onclick = async () => {
   readKnowledge();
   try { KN = await api('PUT', `/api/projects/${PID}/knowledge`, KN); renderKnowledge(); $('#knMsg').textContent = 'Сохранено'; }

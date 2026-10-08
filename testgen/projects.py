@@ -48,7 +48,9 @@ DEFAULT_PIPELINE = {
         "checklist": "",           # the team's own rules for specifications, one per line
         "validate": False,         # validate the specification before every generation of scenarios
         "learn_model": True,       # update the application model (knowledge.py) from analysed requirements
+        "confirm_model": True,     # tests are generated only after a person confirmed the lifecycle of the system
         "skills": ["requirements-validation"],
+        "model_skills": ["application-model"],     # building the application model (knowledge.extract)
         "model": "", "effort": "",
     },
     "explore": {                   # Planner: crawl the site instead of (or besides) requirements
@@ -59,7 +61,7 @@ DEFAULT_PIPELINE = {
     },
     "scenarios": {
         "enabled": True,
-        "skills": ["test-design", "test-check-types", "test-design-techniques"],
+        "skills": ["test-design", "test-check-types", "test-design-techniques", "test-data-roles"],
         "types": list(DEFAULT_TYPES),
         "layers": ["ui"],          # ui: tests in the browser | api: tests of the backend API
         "techniques": list(DEFAULT_TECHNIQUES),

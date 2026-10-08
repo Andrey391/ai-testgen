@@ -225,7 +225,8 @@ DATA_TOOL = _tool(
     "test_data",
     "Record test data in the project's application model, so later tests reuse it instead of creating it again (not "
     "a test step): an object the scenario relies on that exists on the stand (the product «Test product A» in stock), "
-    "or one this test creates and keeps, with what it requires and its lifecycle as you saw them. Call it when you "
+    "or one this test creates and keeps, with what it requires, its lifecycle and the role it belongs to as you saw "
+    "them; data the model lists as needed becomes data on the stand. Call it when you "
     "find or create such an object; for an object created with {{unique}} name the kind (\"a new order of the "
     "customer\") and how it is created. Never passwords.", {
         "entity": {"type": "string", "description": "Entity of the domain: Product, Category, Order, Customer…"},
@@ -234,7 +235,8 @@ DATA_TOOL = _tool(
         "state": {"type": "string", "description": "Its state in the lifecycle: in stock, paid, blocked…; or \"\"."},
         "depends_on": {"type": "string", "description": "Entities that must exist before it, comma-separated; or \"\"."},
         "lifecycle": {"type": "string", "description": "States and transitions seen: \"new → paid → shipped\"; or \"\"."},
-        "create": {"type": "string", "description": "How and by which role it is created; or \"\"."}})
+        "create": {"type": "string", "description": "How and by which role it is created; or \"\"."},
+        "role": {"type": "string", "description": "The role whose object it is or who works with it (Customer); or \"\"."}})
 # Tools that help the agent but are not recorded as steps.
 HELPERS = {"look", "find_elements", "remember", "test_data"}
 
@@ -979,7 +981,8 @@ class StudioSession:
             self._say("system", f"🧠 Запомнено: {fact[:300]}")
             return "Saved to the project's memory."
         if name == "test_data":
-            item = {k: str(inp.get(k) or "") for k in ("entity", "name", "details", "state", "lifecycle", "create")}
+            item = {k: str(inp.get(k) or "") for k in ("entity", "name", "details", "state", "lifecycle", "create",
+                                                 "role")}
             for secret in testdata.secret_values(self.credentials):
                 item = {k: v.replace(secret, "***") for k, v in item.items()}
             item["depends_on"] = [x.strip() for x in str(inp.get("depends_on") or "").split(",") if x.strip()]
