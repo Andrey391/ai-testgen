@@ -436,6 +436,18 @@ def save_account(pid: str, body: dict, account_id: str = "") -> dict:
     return acc
 
 
+def ensure_account(pid: str, name: str, username: str, password: str = "") -> str:
+    """The account with this login (a user a test registered or found): the existing one gets the new
+    password, else a new account is created. Its id."""
+    login = username.strip().lower()
+    acc = next((a for a in _load_accounts(pid)["accounts"] if (a.get("username") or "").strip().lower() == login), None)
+    if acc is not None:
+        if password and password != acc.get("password"):
+            save_account(pid, {"password": password}, acc["id"])
+        return acc["id"]
+    return save_account(pid, {"name": name or username, "username": username, "password": password})["id"]
+
+
 def delete_account(pid: str, account_id: str) -> bool:
     with fs.lock(SECRETS / secrets_kind(pid) / "app.json"):
         data = _load_accounts(pid)
