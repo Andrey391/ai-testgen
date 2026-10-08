@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from fakes import Resp
 from helpers import arun
-from testgen import analyses, auth, knowledge, pipeline, projects, scenarios, skills
+from testgen import analyses, auth, fs, knowledge, pipeline, projects, scenarios, skills
 from testgen.scenarios import DataNeed, PlannedScenario, Scenario, ScenarioBatch, ScenarioPlan
 
 SHOP = {"summary": "Интернет-магазин",
@@ -407,6 +407,23 @@ def test_a_user_a_test_registers_becomes_an_account_of_its_role():
     assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]}["Менеджер"] == other
 
 
+def test_an_account_has_several_roles():
+    pid = _project()["id"]
+    knowledge.save(pid, SHOP)
+    doc = knowledge.record(pid, {"entity": "Сотрудник", "name": "Анна", "role": "Покупатель; менеджер"}, "t",
+                           login="anna", password="x")
+    aid = projects.accounts_view(pid)[0]["id"]
+    assert {r["name"]: r["account"] for r in doc["roles"]} == {"Покупатель": aid, "Менеджер": aid}
+    assert knowledge.split_roles("Покупатель; Менеджер, Покупатель") == ["Покупатель", "Менеджер"]
+    # Merged duplicate roles are renamed inside the list of a record's roles.
+    doc = knowledge.get(pid)
+    doc["roles"].append({"id": "man2", "name": "Менеджер магазина", "capabilities": "отправляет"})
+    fs.write_json(knowledge._path(pid), doc)
+    keep = next(r["id"] for r in doc["roles"] if r["name"] == "Менеджер")
+    knowledge.merge_duplicates(pid, [{"kind": "roles", "ids": ["man2", keep], "keep": "man2"}])
+    assert next(d for d in knowledge.get(pid)["data"] if d["name"] == "Анна")["role"] == "Покупатель, Менеджер магазина"
+
+
 def test_stand_data_goes_to_the_entity_of_the_model():
     pid = _project()["id"]
     knowledge.save(pid, SHOP)
@@ -428,10 +445,10 @@ def test_stand_data_is_sorted_and_a_doubt_asks_a_person(fake_llm):
     def script(kind, kw):
         asked.append(kw["messages"][-1]["content"])
         return Resp(parsed=knowledge.XSort(items=[
-            knowledge.XSorted(id=ids["buyer@example.com"], entity="Заказ", role="Покупатель", account=True, sure=False,
+            knowledge.XSorted(id=ids["buyer@example.com"], entity="Заказ", roles=["Покупатель"], account=True, sure=False,
                               reason="пользователь, но сущности пользователей в модели нет"),
-            knowledge.XSorted(id=ids["Тестовый товар"], entity="Товар", role="", account=False, sure=True, reason="товар"),
-            knowledge.XSorted(id=ids["Основной склад"], entity="", role="", account=False, sure=False, reason="нет такой сущности")]))
+            knowledge.XSorted(id=ids["Тестовый товар"], entity="Товар", roles=[], account=False, sure=True, reason="товар"),
+            knowledge.XSorted(id=ids["Основной склад"], entity="", roles=[], account=False, sure=False, reason="нет такой сущности")]))
     fake_llm.script = script
     res = arun(knowledge.sort(projects.get(pid)))
     assert res == {"applied": 1, "asked": 1, "checked": 3}

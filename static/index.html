@@ -1210,7 +1210,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               <div id="accParams"></div>
               <button class="btn small" id="accParamAdd" style="margin-top:6px">+ Параметр</button>
               <label style="margin-top:10px">Роли</label>
-              <div class="hint">Роли модели приложения, тесты которых входят под этой записью. У роли одна учётная запись: выбранная здесь заменит прежнюю.</div>
+              <div class="hint">Все роли этого пользователя в приложении — их может быть несколько: тесты каждой отмеченной роли входят под этой записью. У роли одна учётная запись для тестов: отмеченная здесь заменит прежнюю.</div>
               <div id="accRolePick" class="row" style="flex-wrap:wrap;gap:4px 14px"></div>
               <div class="row" style="margin-top:10px">
                 <label class="inline"><input type="checkbox" id="accDefault"> По умолчанию для проекта</label>
@@ -4946,7 +4946,7 @@ const KN_FIELDS = {
   roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Описание', ''], ['account', 'Учётная запись проекта', ''],
           ['capabilities', 'Может', 'создаёт товары и категории, отправляет оплаченные заказы'], ['restrictions', 'Не может', 'оплачивать заказы, менять чужие профили']],
   data: [['entity', 'Сущность', 'Товар'], ['name', 'Объект', 'Тестовый товар А'], ['details', 'Подробности', 'категория «Категория 1», цена 1000'],
-         ['state', 'Состояние', 'в наличии'], ['role', 'Роль', 'Менеджер магазина'], ['account', 'Учётная запись', ''],
+         ['state', 'Состояние', 'в наличии'], ['role', 'Роли (через запятую)', 'Покупатель, Менеджер магазина'], ['account', 'Учётная запись', ''],
          ['status', 'Где', ''], ['source', 'Найдено', '']],
   memory: [['text', 'Факт', ''], ['source', 'Источник', ''], ['at', 'Когда', '']],
 };
@@ -5148,8 +5148,9 @@ function knDataAccount(i) {     // a user found on the stand becomes a project a
   editAccount('');
   ACC_LINK = x.id;
   $('#accName').value = x.name; $('#pLogin').value = email; $('#accDefault').checked = false;
-  const role = KN.roles.find(r => (r.name || '').toLowerCase() === (x.role || '').toLowerCase());
-  if (role) $$('#accRolePick input').forEach(c => { if (c.value === role.id) c.checked = true; });
+  const names = (x.role || '').split(/[,;]/).map(r => r.trim().toLowerCase()).filter(Boolean);   // a user may have several
+  const ids = KN.roles.filter(r => names.includes((r.name || '').toLowerCase())).map(r => r.id);
+  $$('#accRolePick input').forEach(c => { if (ids.includes(c.value)) c.checked = true; });
   $('#pcMsg').textContent = `Учётная запись для «${x.name}»: введите пароль и сохраните.`;
   (email ? $('#pPass') : $('#pLogin')).focus();
 }

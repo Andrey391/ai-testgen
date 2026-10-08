@@ -257,7 +257,9 @@ DATA_TOOL = _tool(
         "depends_on": {"type": "string", "description": "Entities that must exist before it, comma-separated; or \"\"."},
         "lifecycle": {"type": "string", "description": "States and transitions seen: \"new → paid → shipped\"; or \"\"."},
         "create": {"type": "string", "description": "How and by which role it is created; or \"\"."},
-        "role": {"type": "string", "description": "The role whose object it is or who works with it (Customer); or \"\"."},
+        "role": {"type": "string", "description": "The role whose object it is or who works with it (Customer); a "
+                                                  "user account with several roles - all of them, comma-separated "
+                                                  "(Player, Organizer); or \"\"."},
         "login": {"type": "string", "description": "For a user account: its login or email exactly as typed in the "
                                                    "step, placeholders included (user+{{unique}}@example.com); or \"\"."},
         "password": {"type": "string", "description": "For a user account: its password as typed in the step "
@@ -1064,7 +1066,7 @@ class StudioSession:
                 return str(e)
             if login:
                 self._say("system", f"🔑 Учётная запись «{login}» добавлена в «Тестовые данные → Учётные записи»"
-                                    + (f" (роль «{item['role']}»)" if item["role"] else ""))
+                                    + (f" (роли: {item['role']})" if item["role"] else ""))
             if self.project["pipeline"]["requirements"].get("learn_model", True) and knowledge.to_sort(doc):
                 knowledge.sort_soon(self.project)     # its section is in doubt: what is unclear asks a person
             waits = any(p["kind"] == "data" and p["item"]["name"] == " ".join(item["name"].split())

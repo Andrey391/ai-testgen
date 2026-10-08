@@ -533,19 +533,30 @@ def record(pid: str, item: dict, source: str, login: str = "", password: str = "
     return doc
 
 
+def split_roles(text: str) -> list[str]:
+    """The roles of a data record: a user may have several («Игрок, Организатор»)."""
+    return list(dict.fromkeys(r.strip() for r in re.split(r"[,;]", str(text or "")) if r.strip()))
+
+
+def join_roles(roles) -> str:
+    return ", ".join(dict.fromkeys(r for r in roles if r))
+
+
 def attach_account(pid: str, entity: str, name: str, account: str, role: str = "") -> dict:
     """A stand data record is a project account: the record points to it (a stored record repeated by
-    a test too - the link is no lifecycle change for a person to confirm), and its role logs in with it
-    when the role has no account yet."""
+    a test too - the link is no lifecycle change for a person to confirm), and each of its roles logs in
+    with it when the role has no account yet."""
     with fs.lock(_path(pid)):
         doc = get(pid)
         x, _ = _find(doc, "data", {"entity": _entity_name(doc, entity), "name": name})
         if x is not None:
             x["account"] = account
             role = role or x["role"]
-        r = find_role(doc, role)
-        if r is not None and r["account"] not in set(_accounts(pid)) | {NO_LOGIN}:
-            r["account"] = account
+        have = set(_accounts(pid)) | {NO_LOGIN}
+        for name_ in split_roles(role):
+            r = find_role(doc, name_)
+            if r is not None and r["account"] not in have:
+                r["account"] = account
         fs.write_json(_path(pid), doc, indent=1)
     return doc
 
@@ -569,7 +580,7 @@ def to_sort(doc: dict) -> list[dict]:
 class XSorted(BaseModel):
     id: str
     entity: str
-    role: str
+    roles: list[str]
     account: bool
     sure: bool
     reason: str
@@ -579,7 +590,7 @@ class XSort(BaseModel):
     items: list[XSorted]
 
 
-SORT = """You sort the test data of the stand into the sections of the application model. For each record decide: `entity` - the entity of the model the record is an object of: exactly one of the listed entity names ("" when none fits; a user's profile, a player and a user account are objects of the entity of users the model has); `role` - when the record is a user one logs in as (an account, a registered player or customer, an administrator), exactly one of the listed role names it has ("" when it is not a user or the text does not say); `account` - true when the record is a user one can log in as; `sure` - false when the record fits several entities or roles, or the text does not say enough to decide; `reason` - one short sentence in the language of the records: why the record goes there, or what is in doubt. Return every record you were given, with its id."""
+SORT = """You sort the test data of the stand into the sections of the application model. For each record decide: `entity` - the entity of the model the record is an object of: exactly one of the listed entity names ("" when none fits; a user's profile, a player and a user account are objects of the entity of users the model has); `roles` - when the record is a user one logs in as (an account, a registered player or customer, an administrator), the listed role names it has, exactly as listed - a user may have several roles ([] when it is not a user or the text does not say); `account` - true when the record is a user one can log in as; `sure` - false when the record fits several entities or roles, or the text does not say enough to decide; `reason` - one short sentence in the language of the records: why the record goes there, or what is in doubt. Return every record you were given, with its id."""
 SORT_BATCH = 60
 
 
@@ -600,10 +611,10 @@ async def sort(project: dict, ids: list[str] | None = None, user: str = "") -> d
     found: dict[str, XSorted] = {}
     for at in range(0, len(records), SORT_BATCH):
         batch = records[at:at + SORT_BATCH]
-        lines = "\n".join(f"{d['id']} | category: {d['entity']} | {d['name']} | {d['details'][:300]} | role: {d['role']}"
+        lines = "\n".join(f"{d['id']} | category: {d['entity']} | {d['name']} | {d['details'][:300]} | roles: {d['role']}"
                           for d in batch)
         reply = await llm.parse(cfg, system=system, context=model,
-                                messages=[{"role": "user", "content": f"Records (id | category | object | details | role):\n{lines}"}],
+                                messages=[{"role": "user", "content": f"Records (id | category | object | details | roles):\n{lines}"}],
                                 schema=XSort, max_tokens=8000, project_id=pid, stage_name="requirements")
         for x in (reply.parsed.items if reply.parsed else []):
             found[x.id] = x
@@ -618,11 +629,13 @@ async def sort(project: dict, ids: list[str] | None = None, user: str = "") -> d
             if x is None:
                 continue
             changes = {}
-            entity, role = names.get(norm(x.entity), ""), role_names.get(norm(x.role), "")
+            entity = names.get(norm(x.entity), "")
             if entity and entity != d["entity"]:
                 changes["entity"] = entity
-            if role and x.account and norm(role) != norm(d["role"]):
-                changes["role"] = role
+            have = split_roles(d["role"])          # roles are only added: a user may have several
+            add = [role_names[norm(r)] for r in x.roles if norm(r) in role_names and norm(r) not in {norm(h) for h in have}]
+            if add and x.account:
+                changes["role"] = join_roles(have + add)
             # Nothing of the model fits: the record keeps its category («не сущность модели» for a person).
             sure = x.sure and bool(entity or d["entity"] in names.values())
             if changes and sure:
@@ -920,8 +933,8 @@ def merge_duplicates(pid: str, groups: list[dict] | None, user: str = "") -> dic
             for d in doc["data"]:
                 if kind == "entities" and norm(d["entity"]) in names:
                     d["entity"] = result["name"]
-                if kind == "roles" and norm(d["role"]) in names:
-                    d["role"] = result["name"]
+                if kind == "roles" and any(norm(r) in names for r in split_roles(d["role"])):
+                    d["role"] = join_roles(result["name"] if norm(r) in names else r for r in split_roles(d["role"]))
             merged += 1
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)
