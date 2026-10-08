@@ -1352,8 +1352,22 @@ async def create_session(body: NewSession, request: Request):
     sc = next((x for x in (a or {}).get("scenarios") or [] if x.get("id") == body.scenario_id), None)
     if sc and sc.get("layer") == "api":
         engine = "api"
+    guest = False
+    if sc and p["pipeline"]["requirements"].get("preflight"):
+        # The scenario's role has an account and the scenario keeps to the restrictions and lifecycles.
+        try:
+            check = await knowledge.preflight(p, sc)
+        except llm.BudgetExceeded as e:
+            raise HTTPException(429, str(e))
+        except Exception as e:
+            raise HTTPException(502, f"Проверка сценария перед тестом не удалась: {llm.api_error_text(e)}")
+        if not check["ok"]:
+            raise HTTPException(409, knowledge.preflight_text(check))
+        if not body.account and not any(creds.values()):     # no account chosen: the role's one
+            account, guest = check["account"], check["guest"]
+            creds = {} if guest else projects.account_credentials(p["id"], account)
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
-                      engine=engine, use_login_state=not body.fresh_login, account=account)
+                      engine=engine, use_login_state=not body.fresh_login and not guest, account=account)
     request.state.project_id = p["id"]
     _start_session(s, body.autopilot)
     t = tasks.load(body.task_id)

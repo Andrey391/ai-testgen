@@ -8,7 +8,8 @@ data/projects/<id>/knowledge.json:
                Online shop: an order depends on a product in stock and a customer with a delivery
                address; it goes new → paid → shipped → delivered.
     roles      roles of users: what each may do (`capabilities`) and may not (`restrictions`), and the
-               project account (projects.accounts) that has the role
+               project account (projects.accounts) that has the role (NO_LOGIN - the role works without
+               logging in, like a guest)
     data       test data that exists on the test stand: "product «Test product A», in stock: 10";
                `source` - who found it automatically ("" - people wrote it); `status` "needed" - data
                the scenarios need that nobody has seen on the stand yet (`needed_by` - the scenarios):
@@ -30,6 +31,11 @@ creating duplicates. People edit it in "Проект → Тестовые дан
 the scenarios, the authoring agent and the failure analysis are told: scenarios state their
 preconditions, the agent checks that the data a step depends on exists (or prepares it), the
 analysis tells a missing precondition from a product bug.
+
+Before a test of a scenario starts (the setting "requirements.preflight") preflight() checks that the
+role the scenario acts as has a project account and that the scenario does not break the restrictions
+of the roles and the lifecycles of the entities (a positive scenario where a role does what it may not,
+a transition the lifecycle does not allow, a precondition missing a dependency).
 """
 from __future__ import annotations
 
@@ -55,6 +61,10 @@ FIELDS = {
 }
 LISTS = ("depends_on", "needed_by")
 # What a confirmation of the lifecycle covers: a change of these asks for a new one.
+# The account of a role that works without logging in.
+NO_LOGIN = "none"
+GUEST = re.compile(r"гост|guest|аноним|anonym|неавториз|unauthori[sz]ed|unauthenticated|без входа|посетител|visitor")
+PREFLIGHT_CACHE = 500
 CONFIRMED = {"entities": ("name", "depends_on", "lifecycle", "create", "rules"),
              "roles": ("name", "capabilities", "restrictions")}
 
@@ -175,7 +185,8 @@ def confirmation(doc: dict) -> dict:
 
 def view(pid: str) -> dict:
     doc = get(pid)
-    return doc | {"confirmation": confirmation(doc), "duplicates": len(duplicates(doc))}
+    return doc | {"confirmation": confirmation(doc), "duplicates": len(duplicates(doc)),
+                  "role_accounts": role_accounts(pid, doc)}
 
 
 def is_confirmed(pid: str) -> bool:
@@ -241,7 +252,8 @@ def prompt(pid: str, limit: int = 12000) -> str:
         lines.append("Roles:")
         for r in doc["roles"]:
             lines.append(f"- {r['name']}" + (f": {r['description']}" if r["description"] else "")
-                         + (f" (project account «{accounts[r['account']]}»)" if r["account"] in accounts else ""))
+                         + (f" (project account «{accounts[r['account']]}»)" if r["account"] in accounts
+                            else " (works without logging in)" if r["account"] == NO_LOGIN else ""))
             if r["capabilities"]:
                 lines.append(f"  may: {r['capabilities']}")
             if r["restrictions"]:
@@ -286,6 +298,126 @@ def account_for(pid: str, text: str) -> str:
         if name and name.lower() in low:
             return aid
     return ""
+
+
+# ---------- before a test: the account of the role and the lifecycle ----------
+
+def is_guest(role: dict | str) -> bool:
+    """A role that works without logging in: marked so, or named like a guest."""
+    if isinstance(role, dict):
+        return role.get("account") == NO_LOGIN or bool(GUEST.search((role.get("name") or "").lower()))
+    return bool(GUEST.search(str(role or "").lower()))
+
+
+def find_role(doc: dict, name: str) -> dict | None:
+    name = str(name or "").strip()
+    if not name:
+        return None
+    return (next((r for r in doc["roles"] if norm(r["name"]) == norm(name)), None)
+            or next((r for r in doc["roles"] if similar(r["name"], name)), None))
+
+
+def role_accounts(pid: str, doc: dict | None = None) -> list[dict]:
+    """Every role of the model with its account: ok - a test of the role can start (an account with
+    a login, or the role needs no login), problem - what a person has to do first."""
+    full = {a["id"]: a for a in projects.accounts_view(pid)}
+    out = []
+    for r in (doc or get(pid))["roles"]:
+        acc = full.get(r["account"])
+        guest = not acc and is_guest(r)
+        problem = ("" if guest or acc and acc.get("username")
+                   else f"у учётной записи «{acc['name']}» не задан логин" if acc
+                   else "привязанная учётная запись удалена" if r["account"] and r["account"] != NO_LOGIN
+                   else "учётная запись не заведена")
+        out.append({"id": r["id"], "name": r["name"], "account": acc["id"] if acc else "",
+                    "account_name": acc["name"] if acc else "", "guest": guest, "ok": not problem,
+                    "problem": problem})
+    return out
+
+
+class XViolation(BaseModel):
+    rule: str          # the restriction of a role or the lifecycle rule of the model
+    problem: str       # what in the scenario breaks it
+    fix: str           # how to change the scenario or the test data
+
+
+class XPreflight(BaseModel):
+    violations: list[XViolation]
+
+
+PREFLIGHT = """You check a test scenario against the confirmed model of the application under test before a test is written for it. Report a violation only when the scenario, as written, cannot be carried out under the rules of the model:
+- the role of the scenario does what its restrictions forbid (or what is not among its capabilities) AND the scenario expects it to succeed;
+- the scenario expects a state transition of an entity that its lifecycle does not allow, or a transition made by a role the lifecycle does not give it to;
+- the scenario works with an entity without the entities it depends on, or relies on data in a state that does not allow the action (e.g. cancels an order that is already shipped and expects success).
+A negative scenario that expects the action to be denied, hidden or rejected follows the rules - it is NOT a violation. Do not report missing details, style, or rules the model does not state. Return an empty list when nothing is broken. Write `rule`, `problem` and `fix` in Russian."""
+
+
+async def lifecycle_violations(project: dict, role: str, text: str) -> list[dict]:
+    """What in the scenario breaks the restrictions of the roles or the lifecycles of the entities
+    ([] - nothing, or the model has nothing to check against). The answer is kept for the same model
+    and scenario: a retry of the test does not ask the model again."""
+    pid = project["id"]
+    doc = get(pid)
+    if not any(e["lifecycle"] or e["depends_on"] or e["rules"] for e in doc["entities"]) \
+            and not any(r["capabilities"] or r["restrictions"] for r in doc["roles"]):
+        return []
+    key = hashlib.sha256(json.dumps([signature(doc), role, text], ensure_ascii=False).encode()).hexdigest()[:24]
+    cache_path = projects.path(pid) / "preflight.json"
+    cached = (fs.read_json(cache_path) or {}).get(key)
+    if isinstance(cached, list):
+        return cached
+    reply = await llm.parse(project["pipeline"]["scenarios"], system=PREFLIGHT + projects.language_rule(project),
+                            context=prompt(pid),
+                            messages=[{"role": "user", "content": (f"Role of the scenario: {role}\n" if role else "")
+                                       + f"Scenario:\n{text[:20000]}"}],
+                            schema=XPreflight, max_tokens=3000, project_id=pid, stage_name="preflight")
+    if reply.parsed is None:
+        raise RuntimeError("Модель не смогла проверить сценарий по жизненному циклу системы")
+    found = [v.model_dump() for v in reply.parsed.violations if v.problem.strip()]
+    with fs.lock(cache_path):
+        cache = fs.read_json(cache_path) or {}
+        cache[key] = found
+        fs.write_json(cache_path, dict(list(cache.items())[-PREFLIGHT_CACHE:]))
+    return found
+
+
+async def preflight(project: dict, sc: dict) -> dict:
+    """Before a test of the scenario starts. account - the account the scenario's role logs in with
+    ("" - the default one), guest - the role needs no login; problems - what a person fixes first:
+    an account for the role, a scenario that breaks the restrictions or the lifecycle."""
+    pid = project["id"]
+    doc = get(pid)
+    role_name = " ".join(str(sc.get("role") or "").split())
+    text = "\n".join(str(sc.get(k) or "") for k in ("title", "preconditions", "instructions",
+                                                     "expected_result")).strip()
+    problems, account, guest = [], "", False
+    if role_name:
+        role = find_role(doc, role_name)
+        ra = next((x for x in role_accounts(pid, doc) if role and x["id"] == role["id"]), None)
+        if ra:
+            account, guest = ra["account"], ra["guest"]
+            if not ra["ok"]:
+                problems.append({"kind": "account", "role": ra["name"],
+                                 "text": f"роль «{ra['name']}»: {ra['problem']} — заведите учётную запись в "
+                                         "«Проект → Тестовые данные → Учётные записи» и привяжите её к роли"})
+        elif is_guest(role_name):
+            guest = True
+        else:
+            account = account_for(pid, role_name)
+            if not account:
+                problems.append({"kind": "account", "role": role_name,
+                                 "text": f"роли «{role_name}» нет в модели приложения и для неё нет учётной "
+                                         "записи — добавьте роль и привяжите учётную запись в «Проект → Тестовые данные»"})
+    else:
+        account = account_for(pid, text)
+    violations = await lifecycle_violations(project, role_name, text) if text else []
+    problems += [{"kind": "lifecycle", "text": f"{v['problem']} (правило: {v['rule']})"
+                  + (f"; как исправить: {v['fix']}" if v.get("fix") else ""), **v} for v in violations]
+    return {"ok": not problems, "account": account, "guest": guest, "role": role_name, "problems": problems}
+
+
+def preflight_text(res: dict) -> str:
+    return "Тест не запущен: " + "; ".join(p["text"] for p in res["problems"])
 
 
 # ---------- extraction from requirements ----------

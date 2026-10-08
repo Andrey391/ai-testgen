@@ -50,6 +50,7 @@ DEFAULT_PIPELINE = {
         "validate": False,         # validate the specification before every generation of scenarios
         "learn_model": True,       # update the application model (knowledge.py) from analysed requirements
         "confirm_model": True,     # tests are generated only after a person confirmed the lifecycle of the system
+        "preflight": True,         # before a test: an account for the scenario's role, no broken lifecycle (knowledge.preflight)
         "skills": ["requirements-validation"],
         "model_skills": ["application-model"],     # building the application model (knowledge.extract)
         "model": "", "effort": "",

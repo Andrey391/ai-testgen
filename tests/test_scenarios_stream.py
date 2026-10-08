@@ -251,3 +251,29 @@ def test_a_cut_off_structured_answer_reports_max_tokens():
         Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}]), ScenarioPlan))
     assert reply.stop == "max_tokens" and reply.parsed is None and reply.usage["output_tokens"] == 16000
     assert reply.text.startswith('{"feature"')
+
+
+def test_a_thinking_block_without_signature_does_not_break_structured_output():
+    """A gateway answers with a thinking block whose signature is null: the strict BetaMessage
+    used to reject the whole answer ("validation errors for BetaMessage")."""
+    import json
+    import anthropic
+    import httpx2
+    from helpers import arun
+    from testgen.providers.anthropic import AnthropicProvider
+    from testgen.providers.base import Request
+
+    plan = {"feature": "Вход", "assumptions": [], "scenarios": [], "more": False}
+
+    def handler(request):
+        return httpx2.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model",
+            "content": [{"type": "thinking", "thinking": "План.", "signature": None},
+                        {"type": "text", "text": json.dumps(plan, ensure_ascii=False)}],
+            "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 20}})
+    client = anthropic.AsyncAnthropic(api_key="x",
+                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+    reply = arun(AnthropicProvider(client, {"structured"}).parse(
+        Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}]), ScenarioPlan))
+    assert reply.stop == "end" and reply.parsed.feature == "Вход"

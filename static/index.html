@@ -851,6 +851,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <button data-sub="data" data-sec="dups">Дубли <span class="nb" data-kn-count="dups"></span></button>
         <button data-sub="data" data-sec="entities">Сущности <span class="nb" data-kn-count="entities"></span></button>
         <button data-sub="data" data-sec="roles">Роли <span class="nb" data-kn-count="roles"></span></button>
+        <button data-sub="data" data-sec="accounts">Учётные записи <span class="nb" data-kn-count="accounts"></span></button>
         <button data-sub="data" data-sec="data">Данные стенда <span class="nb" data-kn-count="data"></span></button>
         <button data-sub="data" data-sec="memory">Память <span class="nb" data-kn-count="memory"></span></button>
       </div>
@@ -867,37 +868,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <label>URL приложения по умолчанию</label><input id="pUrl" placeholder="https://staging.example.com">
           <label>Язык шагов, сценариев и Gherkin</label>
           <select id="pLang"><option value="">как написан сценарий / требования</option><option value="ru">русский (Gherkin: Дано / Когда / Тогда)</option><option value="en">английский</option></select>
+          <div class="hint">Учётные записи тестируемого приложения и их привязка к ролям — в <a href="#" onclick="showSub('data', 'accounts'); return false">«Тестовые данные → Учётные записи»</a>.</div>
           <div class="row" style="margin-top:10px"><span class="muted grow" id="pMsg"></span>
             <button class="btn primary" id="pSave">Сохранить</button></div>
-        </div>
-        <div class="card">
-          <h3>Учётные записи тестируемого приложения</h3>
-          <div class="muted">Сколько угодно учётных записей (администратор, покупатель, менеджер…). Тест и сессия Studio входят под выбранной записью, без выбора — под записью по умолчанию. Агент видит только плейсхолдеры <code>{{username}}</code>, <code>{{password}}</code>, <code>{{totp}}</code> и <code>{{auth.имя}}</code>; секреты хранятся на сервере зашифрованными и не попадают в модель, шаги, trace и экспорт.</div>
-          <table style="margin-top:8px"><thead><tr><th>Название</th><th>Логин</th><th>Вход</th><th></th></tr></thead>
-            <tbody id="accList"></tbody></table>
-          <div class="row" style="margin-top:8px"><span class="muted grow" id="pcMsg"></span>
-            <button class="btn" id="accAdd">+ Учётная запись</button></div>
-          <div id="accForm" class="hidden" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
-            <h4 id="accFormTitle" style="margin:0 0 6px">Новая учётная запись</h4>
-            <div class="row">
-              <div class="grow"><label>Название</label><input id="accName" placeholder="Администратор" maxlength="120" autocomplete="off"></div>
-              <div class="grow"><label>Логин</label><input id="pLogin" autocomplete="off"></div>
-              <div class="grow"><label>Пароль</label><input id="pPass" type="password" autocomplete="new-password"></div>
-            </div>
-            <label>Секрет 2FA (TOTP, base32)</label>
-            <div class="row"><input id="pTotp" type="password" autocomplete="off" class="grow">
-              <button class="btn small" id="pcTotpClear">Удалить секрет 2FA</button></div>
-            <div class="hint">Секрет из QR-кода приложения-аутентификатора: агент вводит одноразовый код как <code>{{totp}}</code>, код вычисляется в момент шага (в экспорте — <code>TESTGEN_TOTP_SECRET</code>).</div>
-            <label style="margin-top:10px">Параметры авторизации</label>
-            <div class="hint">Всё, что ещё нужно для входа: OTP-код тестового стенда, PIN, организация, телефон… Агент вводит значение как <code>{{auth.имя}}</code>. Секретный параметр, как пароль, не показывается модели и маскируется в шагах, trace и трафике; в экспорте — переменная <code>TESTGEN_AUTH_ИМЯ</code>.</div>
-            <div id="accParams"></div>
-            <button class="btn small" id="accParamAdd" style="margin-top:6px">+ Параметр</button>
-            <div class="row" style="margin-top:10px">
-              <label class="inline"><input type="checkbox" id="accDefault"> По умолчанию для проекта</label>
-              <span class="grow"></span>
-              <button class="btn" id="accCancel">Отмена</button>
-              <button class="btn primary" id="pcSave">Сохранить</button></div>
-          </div>
         </div>
         <div class="card">
           <h3>Тестовый почтовый ящик</h3>
@@ -1087,6 +1060,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <label class="inline"><input type="checkbox" data-p="requirements.validate"> Проверять ТЗ перед каждой генерацией сценариев (и в конвейере)</label>
             <label class="inline"><input type="checkbox" data-p="requirements.learn_model"> Обновлять модель приложения из требований: сущности, зависимости, жизненный цикл, роли и их возможности; тестовые данные сценариев («Проект → Тестовые данные»)</label>
             <label class="inline"><input type="checkbox" data-p="requirements.confirm_model"> Генерировать тесты только по подтверждённому жизненному циклу системы: конвейер ждёт подтверждения модели</label>
+            <label class="inline"><input type="checkbox" data-p="requirements.preflight"> Проверять сценарий перед тестом: у его роли заведена учётная запись, сценарий не нарушает ограничения ролей и жизненный цикл сущностей (иначе тест не запускается)</label>
           </div>
           <label>Скиллы проверки ТЗ</label>
           <div class="checks" data-list="requirements.skills" data-kind="skills" data-stage="requirements"></div>
@@ -1192,10 +1166,42 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div data-kn-sec="roles" class="hidden">
           <div class="card">
             <h3>Роли и учётные записи</h3>
-            <div class="hint">Что роль может и чего не может — из этого строятся сценарии на права доступа; каждый сценарий выполняется от одной роли. Учётная запись — под ней конвейер выполняет сценарии роли.</div>
+            <div class="hint">Что роль может и чего не может — из этого строятся сценарии на права доступа; каждый сценарий выполняется от одной роли. Учётная запись — под ней выполняются сценарии роли: перед тестом студия проверяет, что у роли сценария есть учётная запись (роли без входа — «без входа (гость)») и что сценарий не нарушает ограничения ролей и жизненный цикл сущностей. Учётные записи заводятся в разделе <a href="#" onclick="showSub('data', 'accounts'); return false">«Учётные записи»</a>.</div>
             <div class="kn-bar" id="knBar-roles"></div>
             <div id="knList-roles" data-nopage></div>
             <button class="btn small" style="margin-top:6px" onclick="knAdd('roles')">+ Роль</button>
+          </div>
+        </div>
+        <div data-kn-sec="accounts" class="hidden">
+          <div class="card">
+            <h3>Учётные записи тестируемого приложения</h3>
+            <div class="muted">Сколько угодно учётных записей (администратор, покупатель, менеджер…). Тест и сессия Studio входят под выбранной записью, без выбора — под записью по умолчанию. Агент видит только плейсхолдеры <code>{{username}}</code>, <code>{{password}}</code>, <code>{{totp}}</code> и <code>{{auth.имя}}</code>; секреты хранятся на сервере зашифрованными и не попадают в модель, шаги, trace и экспорт.</div>
+            <div id="accRoles" style="margin-top:8px"></div>
+            <table style="margin-top:8px"><thead><tr><th>Название</th><th>Логин</th><th>Вход</th><th>Роли</th><th></th></tr></thead>
+              <tbody id="accList"></tbody></table>
+            <div class="row" style="margin-top:8px"><span class="muted grow" id="pcMsg"></span>
+              <button class="btn" id="accAdd">+ Учётная запись</button></div>
+            <div id="accForm" class="hidden" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+              <h4 id="accFormTitle" style="margin:0 0 6px">Новая учётная запись</h4>
+              <div class="row">
+                <div class="grow"><label>Название</label><input id="accName" placeholder="Администратор" maxlength="120" autocomplete="off"></div>
+                <div class="grow"><label>Логин</label><input id="pLogin" autocomplete="off"></div>
+                <div class="grow"><label>Пароль</label><input id="pPass" type="password" autocomplete="new-password"></div>
+              </div>
+              <label>Секрет 2FA (TOTP, base32)</label>
+              <div class="row"><input id="pTotp" type="password" autocomplete="off" class="grow">
+                <button class="btn small" id="pcTotpClear">Удалить секрет 2FA</button></div>
+              <div class="hint">Секрет из QR-кода приложения-аутентификатора: агент вводит одноразовый код как <code>{{totp}}</code>, код вычисляется в момент шага (в экспорте — <code>TESTGEN_TOTP_SECRET</code>).</div>
+              <label style="margin-top:10px">Параметры авторизации</label>
+              <div class="hint">Всё, что ещё нужно для входа: OTP-код тестового стенда, PIN, организация, телефон… Агент вводит значение как <code>{{auth.имя}}</code>. Секретный параметр, как пароль, не показывается модели и маскируется в шагах, trace и трафике; в экспорте — переменная <code>TESTGEN_AUTH_ИМЯ</code>.</div>
+              <div id="accParams"></div>
+              <button class="btn small" id="accParamAdd" style="margin-top:6px">+ Параметр</button>
+              <div class="row" style="margin-top:10px">
+                <label class="inline"><input type="checkbox" id="accDefault"> По умолчанию для проекта</label>
+                <span class="grow"></span>
+                <button class="btn" id="accCancel">Отмена</button>
+                <button class="btn primary" id="pcSave">Сохранить</button></div>
+            </div>
           </div>
         </div>
         <div data-kn-sec="data" class="hidden">
@@ -3473,7 +3479,7 @@ function toStudio(id) {
 // ---- pipeline
 const STAGES = [['requirements', 'Требования'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
 const JOB_STATUS = {running: 'Выполняется', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
-const ITEM_STATUS = {queued: ['в очереди', 'off'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
+const ITEM_STATUS = {queued: ['в очереди', 'off'], preflight: ['проверка перед тестом', 'warn'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
   done: ['готово', 'ok'], needs_attention: ['нужно подтверждение', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
 let JOB = null, jobTimer = null;
 const JOB_FOLDED = new Set();      // groups of a run open by default that the person folded
@@ -4189,14 +4195,22 @@ $('#pSave').onclick = async () => {
 let ACC_EDIT = null;   // the account being edited: null - none, '' - a new one
 function renderAccounts() {
   const accs = PROJ.accounts || [], owner = canRole('owner');
+  const ra = KN && KN_PID === PID ? KN.role_accounts || [] : [];    // roles of the application model and their accounts
+  const missing = ra.filter(r => !r.ok);
+  $('#accRoles').innerHTML = !ra.length ? '<div class="hint">В модели приложения нет ролей: тесты входят под учётной записью по умолчанию.</div>'
+    : missing.length ? `<div class="badge warn">Роли без учётной записи: ${missing.length}</div>
+      <div class="hint">Тесты этих ролей не запускаются, пока для роли не заведена учётная запись: ${missing.map(r =>
+        `<a href="#" onclick="knGoRole('${r.id}'); return false">«${esc(r.name)}»</a> — ${esc(r.problem)}`).join('; ')}. Создайте запись здесь и выберите её у роли в разделе «Роли»; роль, которая работает без входа, отметьте «без входа (гость)».</div>`
+    : `<span class="badge ok">У каждой роли есть учётная запись</span>`;
   $('#accList').innerHTML = accs.map(a => `<tr>
       <td>${esc(a.name)} ${a.default ? '<span class="badge ok">по умолчанию</span>' : ''}</td>
       <td>${esc(a.username || '—')}</td>
       <td>${a.has_password ? '<span class="badge">пароль</span>' : ''}${a.has_totp ? '<span class="badge">2FA</span>' : ''}${(a.params || []).map(p =>
         `<span class="badge${p.secret ? ' warn' : ''}" title="${p.secret ? 'секрет' : esc(p.value)}">{{auth.${esc(p.name)}}}</span>`).join('')}</td>
+      <td>${ra.filter(r => r.account === a.id).map(r => esc(r.name)).join(', ') || '<span class="muted">—</span>'}</td>
       <td class="row" style="justify-content:flex-end">${owner ? `<button class="btn small" onclick="editAccount('${a.id}')">Изменить</button>
         <button class="btn small" onclick="deleteAccount('${a.id}')" style="color:var(--bad)">Удалить</button>` : ''}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">Учётных записей нет: агент и прогоны не смогут войти в приложение.</td></tr>';
+    || '<tr><td colspan="5" class="muted">Учётных записей нет: агент и прогоны не смогут войти в приложение.</td></tr>';
   $('#accAdd').classList.toggle('hidden', !owner);
   if (ACC_EDIT !== null && ACC_EDIT !== '' && !accs.some(a => a.id === ACC_EDIT)) ACC_EDIT = null;
   $('#accForm').classList.toggle('hidden', ACC_EDIT === null);
@@ -4247,6 +4261,7 @@ async function deleteAccount(id) {
     await api('DELETE', `/api/projects/${PID}/accounts/${id}`);
     if (ACC_EDIT === id) ACC_EDIT = null;
     await refreshProject(); renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
+    loadKnowledge();      // which roles have an account
   } catch (e) { $('#pcMsg').textContent = e.message; }
 }
 $('#accAdd').onclick = () => editAccount('');
@@ -4256,6 +4271,7 @@ $('#pcSave').onclick = async () => {
   try {
     await saveAccount();
     ACC_EDIT = null; renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
+    loadKnowledge();
     $('#pcMsg').textContent = 'Сохранено';
   } catch (e) { $('#pcMsg').textContent = e.message; }
 };
@@ -4901,7 +4917,7 @@ const knSourceKind = s => (s || '').split(':')[0].trim();
 function knText(k, v) {
   if (Array.isArray(v)) return v.join(', ');
   if (k === 'status') return KN_STATUS[v || ''];
-  if (k === 'account') return (PROJ.accounts || []).find(a => a.id === v)?.name || '';
+  if (k === 'account') return v === 'none' ? 'без входа' : (PROJ.accounts || []).find(a => a.id === v)?.name || '';
   if (k === 'at') return fmtTime(v);
   return v || '';
 }
@@ -4933,7 +4949,8 @@ function knStatusSelect(i, value) {
 }
 function knAccountSelect(kind, i, value) {
   const accs = PROJ.accounts || [];
-  return `<select data-kn="${kind}" data-i="${i}" data-k="account"><option value="">—</option>${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
+  return `<select data-kn="${kind}" data-i="${i}" data-k="account"><option value="">—</option>${kind === 'roles'
+    ? `<option value="none" ${value === 'none' ? 'selected' : ''}>без входа (гость)</option>` : ''}${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
 }
 function renderKnConfirm() {
   const c = KN.confirmation || {state: 'none', missing: []};
@@ -4948,7 +4965,7 @@ function renderKnConfirm() {
 function showKnSec(sec) {
   KN_SEC = sec;
   $$('[data-kn-sec]').forEach(p => p.classList.toggle('hidden', p.dataset.knSec !== sec));
-  $('#knSaveBar').classList.toggle('hidden', ['pending', 'dups'].includes(sec));
+  $('#knSaveBar').classList.toggle('hidden', ['pending', 'dups', 'accounts'].includes(sec));
   if (sec === 'dups' && KN && KN_PID === PID) knCheckDups();
 }
 async function loadKnowledge() {
@@ -4977,24 +4994,27 @@ function renderKnowledge() {
   $('#knEnts').innerHTML = KN.entities.map(e => e.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
   $('#knRoleNames').innerHTML = KN.roles.map(r => r.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
   for (const list of ['entities', 'roles', 'data', 'memory', 'pending', 'dups']) { knBar(list); knRenderList(list); }
-  renderKnConfirm(); knCounts();
+  renderKnConfirm(); knCounts(); renderAccounts();
   if (!KN_DIRTY) $('#knMsg').textContent = KN.updated ? `Изменено ${fmtTime(KN.updated)}${KN.updated_by ? ' · ' + KN.updated_by : ''}` : '';
 }
 function knCounts() {
   if (!KN) return;
   const c = {pending: KN.pending.length, dups: KN_DUPS ? KN_DUPS.length : KN.duplicates || 0, entities: KN.entities.length,
-             roles: KN.roles.length, data: KN.data.length, memory: KN.memory.length};
+             roles: KN.roles.length, data: KN.data.length, memory: KN.memory.length,
+             accounts: (PROJ.accounts || []).length, noacc: (KN.role_accounts || []).filter(r => !r.ok).length};
   $$('[data-kn-count]').forEach(b => {
-    const k = b.dataset.knCount;
-    b.textContent = c[k] || ''; b.classList.toggle('warn', ['pending', 'dups'].includes(k) && c[k] > 0);
+    const k = b.dataset.knCount, warn = ['pending', 'dups'].includes(k) && c[k] > 0 || k === 'accounts' && c.noacc > 0;
+    b.textContent = c[k] || ''; b.classList.toggle('warn', warn);
+    if (k === 'accounts') b.title = c.noacc ? `Ролей без учётной записи: ${c.noacc}` : '';
   });
-  const alert = c.pending + c.dups;
+  const alert = c.pending + c.dups + c.noacc;
   $('#knNavAlert').textContent = alert || ''; $('#knNavAlert').classList.toggle('warn', alert > 0);
-  $('#knNavAlert').title = alert ? `Ожидают решения: обновлений ${c.pending}, групп дублей ${c.dups}` : '';
+  $('#knNavAlert').title = alert ? `Ожидают решения: обновлений ${c.pending}, групп дублей ${c.dups}, ролей без учётной записи ${c.noacc}` : '';
   const needed = KN.data.filter(d => d.status === 'needed').length;
   const tiles = [['pending', 'Обновления', c.pending, 'ждут подтверждения', true], ['dups', 'Дубли', c.dups, 'групп похожих записей', true],
     ['entities', 'Сущности', c.entities, `без жизненного цикла: ${KN.entities.filter(e => !e.lifecycle).length}`],
-    ['roles', 'Роли', c.roles, `без учётной записи: ${KN.roles.filter(r => !r.account).length}`],
+    ['roles', 'Роли', c.roles, `без учётной записи: ${c.noacc}`],
+    ['accounts', 'Учётные записи', c.accounts, c.noacc ? `не хватает ролям: ${c.noacc}` : 'у всех ролей есть', c.noacc > 0],
     ['data', 'Данные стенда', c.data, needed ? `нужны сценариям: ${needed}` : 'все на стенде'], ['memory', 'Память', c.memory, 'фактов']];
   $('#knTiles').innerHTML = tiles.map(([sec, title, n, sub, warn]) => `<button class="kn-tile ${warn && n ? 'warn' : ''}" onclick="showSub('data', '${sec}')">
     <b>${n}</b>${title}<span style="display:block">${sub}</span></button>`).join('');
@@ -5099,6 +5119,12 @@ function knAddFact() {
 function knDelFact(id) { readKnowledge(); KN.memory = KN.memory.filter(m => m.id !== id); knSetDirty(); knRenderList('memory'); knCounts(); }
 
 // updates of existing records: each one or all of them (all those the filters show)
+function knGoRole(id) {       // the role opened for editing: choose its account
+  const st = knUi('roles'), x = KN.roles.find(r => r.id === id);
+  st.f = {}; st.q = x?.name || ''; st.page = 0; st.open.add(id);
+  showSub('data', 'roles');
+  knBar('roles'); knRenderList('roles');
+}
 function knGoPending(kind, id) {
   const st = knUi('pending'), x = KN[kind].find(r => r.id === id);
   st.f = {kind}; st.q = x?.name || ''; st.page = 0;

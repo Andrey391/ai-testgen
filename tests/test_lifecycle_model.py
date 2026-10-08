@@ -310,3 +310,85 @@ def test_duplicates_and_updates_over_the_api(monkeypatch):
     doc = client.post(url + "/pending", json={"action": "accept", "ids": [doc["pending"][0]["id"]]}).json()
     assert doc["pending"] == [] and doc["roles"][0]["description"] == "клиент магазина"
     assert client.post(url + "/duplicates", json={"dismiss": ["x"]}).json()["distinct"] == ["x"]
+
+
+def _preflight_project(fake_llm, violations=()):
+    """A shop whose model has roles with restrictions; the model answers the lifecycle check with `violations`."""
+    asked = []
+
+    def script(kind, kw):
+        system = kw["system"] if isinstance(kw["system"], str) else " ".join(b["text"] for b in kw["system"])
+        assert "You check a test scenario against the confirmed model" in system
+        asked.append(kw["messages"][-1]["content"])
+        return Resp(parsed=knowledge.XPreflight(violations=[knowledge.XViolation(**v) for v in violations]))
+    fake_llm.script = script
+    p = _project()
+    p["pipeline"]["requirements"]["preflight"] = True
+    p = projects.update(p["id"], {"pipeline": p["pipeline"]})
+    projects.update_llm(p["id"], {"model": "test-model", "effort": "medium"})
+    knowledge.save(p["id"], SHOP | {"roles": SHOP["roles"] + [{"name": "Гость", "capabilities": "смотрит каталог"}]})
+    return projects.get(p["id"]), asked
+
+
+def test_a_test_starts_only_with_an_account_for_its_role(fake_llm):
+    p, asked = _preflight_project(fake_llm)
+    pid = p["id"]
+    sc = {"title": "Оплата", "role": "покупатель", "instructions": "Оплатить новый заказ", "expected_result": "оплачен"}
+    res = arun(knowledge.preflight(p, sc))
+    assert not res["ok"] and [x["kind"] for x in res["problems"]] == ["account"]
+    assert "«Покупатель»: учётная запись не заведена" in knowledge.preflight_text(res)
+    ra = {r["name"]: r for r in knowledge.view(pid)["role_accounts"]}
+    assert not ra["Покупатель"]["ok"] and ra["Гость"]["ok"] and ra["Гость"]["guest"]
+
+    # An account without a login is not enough; with a login the role's tests log in with it.
+    acc = projects.save_account(pid, {"name": "Покупатель 1"})
+    doc = knowledge.get(pid)
+    doc["roles"][0]["account"] = acc["id"]
+    knowledge.save(pid, doc)
+    assert "не задан логин" in knowledge.preflight_text(arun(knowledge.preflight(p, sc)))
+    projects.save_account(pid, {"username": "buyer", "password": "x"}, acc["id"])
+    res = arun(knowledge.preflight(p, sc))
+    assert res["ok"] and res["account"] == acc["id"] and not res["guest"]
+    assert "project account «Покупатель 1»" in knowledge.prompt(pid)
+
+    # A guest needs no login; a role nobody described and no account has stops the test.
+    assert arun(knowledge.preflight(p, sc | {"role": "Гость"}))["guest"]
+    res = arun(knowledge.preflight(p, sc | {"role": "Кладовщик"}))
+    assert not res["ok"] and "«Кладовщик» нет в модели" in knowledge.preflight_text(res)
+    # The same scenario on the same model is checked against the lifecycle once.
+    assert len([a for a in asked if "Оплатить новый заказ" in a and "Role of the scenario: покупатель" in a]) == 1
+
+
+def test_a_scenario_breaking_the_lifecycle_does_not_start(fake_llm, monkeypatch):
+    import server
+    v = {"rule": "Покупатель не видит чужие заказы", "problem": "сценарий ждёт, что покупатель откроет чужой заказ",
+         "fix": "сделайте сценарий негативным: доступ запрещён"}
+    p, asked = _preflight_project(fake_llm, [v])
+    pid = p["id"]
+    doc = knowledge.get(pid)
+    doc["roles"][0]["account"] = projects.save_account(pid, {"username": "buyer", "password": "x"})["id"]
+    knowledge.save(pid, doc)
+    sc = {"id": "s1", "title": "Чужой заказ", "role": "Покупатель", "instructions": "Открыть чужой заказ",
+          "expected_result": "заказ открыт"}
+    res = arun(knowledge.preflight(p, sc))
+    assert not res["ok"] and res["problems"][0]["kind"] == "lifecycle"
+    assert "правило: Покупатель не видит чужие заказы" in knowledge.preflight_text(res)
+
+    # Studio from the scenario: 409 with what to fix.
+    knowledge.confirm(pid, "ann")
+    monkeypatch.setattr(auth, "ENABLED", False)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    a = analyses.create(pid, "Заказы")
+    added = analyses.add_scenario(pid, a["id"], sc)
+    r = client.post("/api/sessions", json={"project_id": pid, "name": "Чужой заказ", "url": p["base_url"],
+                                            "scenario": "Шаги", "analysis_id": a["id"], "scenario_id": added["id"]})
+    assert r.status_code == 409 and "Тест не запущен" in r.json()["detail"]
+    assert "не видит чужие заказы" in r.json()["detail"]
+
+    # The pipeline: the item waits for a person, no session is started.
+    job = pipeline.Job(p, [], "", "", {}, scenarios=[sc], feature="Заказы")
+    item = job._item(sc)
+    assert arun(job._create_test(projects.get(pid), item, sc)) is None
+    assert item["status"] == "needs_attention" and "не видит чужие заказы" in item["error"]
+    assert item["preflight"][0]["kind"] == "lifecycle" and not item["session_id"]
+    assert pipeline.retryable(item)          # fixed scenario or model: «Перезапустить сбойные»
