@@ -326,6 +326,26 @@ FRESH_TASK = ("To keep the requests short, the conversation was started over: th
 EDIT_TASK = ("A person opened this saved test to edit it: the steps above are already recorded in the test and have "
              "been replayed. Do only what the person asks in the chat (add, change or re-record steps from the current "
              "page); do not repeat the steps above and do not go on with the scenario on your own.")
+FIX_TASK = "A run of this saved test failed and a person asked you to fix the test."
+
+
+def fix_task(steps: list[dict], index: int, result: dict, analysis: dict | None = None) -> str:
+    """The task of a session that fixes a test at its failed step: the steps before it are replayed,
+    the agent repairs the step and records the rest of the test."""
+    def line(i: int, s: dict) -> str:
+        return f"{i + 1}. [{s['action']}] {s['description']}" + (f" | value: {s['value']}" if s.get("value") else "")
+    failed = steps[index]
+    text = (f"{FIX_TASK} The steps before the failure have been replayed in the browser.\n"
+            f"Failed step: {line(index, failed)}\nError: {(result.get('error') or '')[:500]}\n")
+    if analysis and analysis.get("summary"):
+        text += f"Failure analysis: {analysis['summary']}" + (f" Suggested fix: {analysis['suggestion']}"
+                                                              if analysis.get("suggestion") else "") + "\n"
+    rest = "\n".join(line(i, s) for i, s in enumerate(steps) if i > index)
+    text += (f"Saved steps after it:\n{rest}\n" if rest else "It was the last step of the test.\n")
+    return text + ("\nFind out on the current page why the step failed and record it correctly (the right element, "
+                   "value or check). If the page shows a real defect of the application, do not adapt the test to it: "
+                   "call finish and describe the defect. Then record the saved steps after it (change them only where "
+                   "the page differs) and finish.")
 
 
 # ---------- checkpoints of sessions (survive a restart of the studio) ----------
@@ -612,7 +632,7 @@ class StudioSession:
                 try:
                     await self._replay()
                 except ValueError as e:
-                    if not self.restored and self.task != EDIT_TASK:
+                    if not self.restored and self.task != EDIT_TASK and not self.task.startswith(FIX_TASK):
                         raise
                     # The steps stay in the session: a person saves, corrects or continues them.
                     self.steps = copy.deepcopy(self.base_steps)
@@ -639,8 +659,11 @@ class StudioSession:
             else:
                 step = new_step("navigate", f"Open {self.url}", self.url, source="system")
                 await self._run_step(step)
-                self._say("user", self.scenario)
+                # a test fixed at its first step starts from scratch with the fix task
+                fixing = self.task.startswith(FIX_TASK)
+                self._say("user", self.task if fixing else self.scenario)
                 text = (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n"
+                        + (f"{self.task}\n\n" if fixing else "") +
                         f"{self._credentials_note()}{self._context_note()}"
                         "The browser has already opened the application. Current page state:")
             await self._think([{"type": "text", "text": text}] + await self._page_state())

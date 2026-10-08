@@ -234,3 +234,20 @@ def test_empty_assistant_turn_gets_placeholder():
     assert out[3]["content"] == [call]
     assert out[4]["content"] == EMPTY_REPLY
     assert out[5] is messages[5] and messages[1]["content"] == []      # the history itself is not changed
+
+
+def test_fix_task_names_failed_step_and_rest():
+    """«Разобрать с агентом»: the task names the failed step, its error, the analysis and the steps after it."""
+    from testgen.agent import FIX_TASK, fix_task
+
+    steps = [{"action": "navigate", "description": "Open", "value": "https://x"},
+             {"action": "click", "description": "Click Save", "value": ""},
+             {"action": "assert_text_present", "description": "Saved", "value": "Saved"}]
+    text = fix_task(steps, 1, {"error": "locator not found"},
+                    {"summary": "the button was renamed", "suggestion": "use Submit"})
+
+    assert text.startswith(FIX_TASK)
+    assert "Failed step: 2. [click] Click Save" in text and "locator not found" in text
+    assert "the button was renamed" in text and "use Submit" in text
+    assert "3. [assert_text_present] Saved | value: Saved" in text and "1. [navigate]" not in text
+    assert "last step" in fix_task(steps, 2, {"error": "no text"})

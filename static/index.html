@@ -2299,7 +2299,72 @@ function dataResultsHtml(title, list) {
   if (!list?.length) return '';
   return `<div class="hint" style="margin-top:6px"><b>${title}:</b> ` + list.map(d => `${d.status === 'passed' ? '<span class="ok">✔</span>' : '<span class="err">✘</span>'} ${esc(d.description)}${d.details?.api ? ` <span class="muted">(${d.details.api.status}${d.details.api.saved?.length ? ', сохранено: ' + d.details.api.saved.join(', ') : ''})</span>` : ''}${d.error ? ` <span class="err">${esc(d.error)}</span>` : ''}`).join(' · ') + '</div>';
 }
+// failed steps of a run that are still in the test: shown first, with a quick edit, the agent and the Studio
+let RUN_VIEW = null;      // {r, t}: the run on screen (its failed steps are edited in place)
+function failedSteps(r, t) {
+  if (!t || r.status === 'running') return [];
+  return (r.results || []).filter(x => x.status !== 'passed')
+    .map(x => ({x, i: t.steps.findIndex(s => s.id === x.id)})).filter(f => f.i >= 0).map(f => ({...f, s: t.steps[f.i]}));
+}
+function failedStepsHtml(r, t) {
+  const list = failedSteps(r, t);
+  if (!list.length) return '';
+  const can = canRole('editor');
+  return `<div class="card failed-steps" style="margin-top:10px"><b>Упавшие шаги (${list.length})</b>` + list.map(({x, i, s}) => `
+    <div class="sub" data-fstep="${s.id}"><div class="row"><span class="err">✘</span><b class="grow">Шаг ${i + 1}. <span class="badge ${s.action.startsWith('assert') ? 'assert' : ''}">${esc(STEP_ACTIONS[s.action] || s.action)}</span> ${esc(s.description)}</b>
+      ${can ? `<button class="btn small" onclick="runStepEdit('${s.id}')" title="Исправить действие, значение или локатор шага — новая версия теста">Править шаг</button>
+      <button class="btn primary small" onclick="fixWithAgent('${r.id}', '${s.id}', this)" title="Studio воспроизведёт тест до этого шага, агент разберёт ошибку на странице, исправит шаг и допишет остальные; каждый шаг подтверждаете вы">Разобрать с агентом</button>
+      <button class="btn small" onclick="editInStudio('${t.id}', this)" title="Тест воспроизводится в Studio и ждёт ваших правок">Открыть в Studio</button>` : ''}</div>
+      ${x.error ? `<div class="err">${esc(x.error)}</div>` : ''}
+      ${s.locator?.length ? `<div class="hint">Локатор: <span class="loc">${esc(locLines(s)).replace(/\n/g, ' · ')}</span></div>` : ''}
+      ${x.shot ? `<a class="shot-link" href="/api/runs/${r.id}/files/${x.shot}"><img class="shot" style="margin-top:6px;max-height:220px;width:auto" src="/api/runs/${r.id}/files/${x.shot}" alt="Страница в момент падения"></a>` : ''}
+      <div data-fedit></div></div>`).join('') + '</div>';
+}
+function runStepEdit(sid) {
+  const {r, t} = RUN_VIEW || {};
+  const s = t?.steps.find(y => y.id === sid), box = document.querySelector(`[data-fstep="${sid}"] [data-fedit]`);
+  if (!s || !box) return;
+  const opts = Object.entries(STEP_ACTIONS).map(([k, l]) => `<option value="${k}" ${k === s.action ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  box.innerHTML = `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
+    <div class="row"><select data-ff="action" style="width:auto">${opts}</select><input data-ff="description" class="grow" value="${esc(s.description)}" placeholder="описание шага"></div>
+    <div class="grid2" style="margin-top:4px"><div><label>Значение</label><input data-ff="value" value="${esc(s.value || '')}"></div>
+      <div><label>Локатор (по варианту в строке: <code>role=button[name="Войти"]</code>, <code>text=…</code>, <code>css=#id</code>)</label><textarea data-ff="locator_text" rows="${Math.min(4, Math.max(1, (s.locator || []).length))}" class="mono">${esc(locLines(s))}</textarea></div></div>
+    <div class="row" style="margin-top:6px"><span class="err grow" data-fmsg></span>
+      <button class="btn small" onclick="this.closest('[data-fedit]').innerHTML=''">Отмена</button>
+      <button class="btn small" onclick="saveRunStep('${sid}', false, this)">Сохранить</button>
+      <button class="btn primary small" onclick="saveRunStep('${sid}', true, this)" title="Сохранить новую версию теста и сразу запустить его снова">Сохранить и повторить</button></div></div>`;
+  box.querySelector('[data-ff="description"]').focus();
+}
+async function saveRunStep(sid, rerun, btn) {
+  const {r, t} = RUN_VIEW;
+  const box = document.querySelector(`[data-fstep="${sid}"] [data-fedit]`), val = f => box.querySelector(`[data-ff="${f}"]`).value;
+  const steps = t.steps.map(s => {
+    const out = {id: s.id, action: s.action, description: s.description, value: s.value, press_enter: !!s.press_enter};
+    if (s.id !== sid) return out;
+    Object.assign(out, {action: val('action'), description: val('description'), value: val('value')});
+    if (val('locator_text') !== locLines(s)) out.locator_text = val('locator_text');
+    return out;
+  });
+  btn.disabled = true;
+  try {
+    await api('PUT', `/api/tests/${t.id}/steps`, {steps});
+    loadTests();
+    if (OPEN_TEST === t.id) openTest(t.id, true);
+    if (rerun) await retryRun(r.id);
+    else openRun(r.id);
+  } catch (e) { box.querySelector('[data-fmsg]').textContent = e.message; btn.disabled = false; }
+}
+async function fixWithAgent(rid, stepId, btn) {
+  if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
+  btn.disabled = true;
+  try {
+    if (SID) await api('DELETE', `/api/sessions/${SID}`);
+    const {id} = await api('POST', `/api/runs/${rid}/fix`, {step_id: stepId, headless: true});
+    openSession(id);
+  } catch (e) { alert(e.message); btn.disabled = false; }
+}
 function renderRun(r, t) {
+  RUN_VIEW = {r, t};
   const box = $('#runBox'); box.classList.remove('hidden');
   const attempts = r.attempts || [];
   let html = `<div class="row"><b class="grow">Прогон: ${esc(r.test_name)} ${runBadge(r.status)}${r.quarantined ? ' <span class="badge warn">в карантине</span>' : ''}</b>
@@ -2312,13 +2377,21 @@ function renderRun(r, t) {
   if (r.status === 'running' && r.attempt > 1) html += '<div class="hint">Повторный запуск…</div>';
   if (r.browser && (r.browser !== 'chromium' || r.device)) html += `<div class="hint">Браузер: ${esc(r.browser)}${r.device ? ' · устройство: ' + esc(r.device) : ''}</div>`;
   if (r.relogin) html += '<div class="hint">Сохранённый вход устарел — тест входа выполнен заново.</div>';
+  if (r.status !== 'running') html += failedStepsHtml(r, t);
   html += dataResultsHtml('До теста', r.before);
   html += stepsHtml(r, r.results || [], t);
   html += dataResultsHtml('После теста', r.after);
   if (attempts.length > 1) html += `<details class="opt"><summary>Первая попытка</summary>${stepsHtml(r, attempts[0].results, t)}</details>`;
   if (r.proposals) html += `<div class="hint">Самолечение предложило новых локаторов: ${r.proposals} — <a href="#" onclick="openTest('${r.test_id}');return false">на ревью</a>.</div>`;
-  if (r.analysis) html += `<div class="card" style="margin-top:10px"><b>Анализ падения: ${esc(VERDICT[r.analysis.verdict] || r.analysis.verdict)}</b>
-      <div>${esc(r.analysis.summary)}</div>${r.analysis.suggestion ? `<div class="muted" style="margin-top:4px">${esc(r.analysis.suggestion)}</div>` : ''}</div>`;
+  if (r.analysis) {
+    const fixable = failedSteps(r, t).length && canRole('editor') && r.analysis.verdict !== 'product_bug';
+    html += `<div class="card" style="margin-top:10px"><b>Анализ падения: ${esc(VERDICT[r.analysis.verdict] || r.analysis.verdict)}</b>
+      <div>${esc(r.analysis.summary)}</div>${r.analysis.suggestion ? `<div class="muted" style="margin-top:4px">${esc(r.analysis.suggestion)}</div>` : ''}
+      ${fixable ? `<div class="row" style="margin-top:8px">
+        <button class="btn primary small" onclick="fixWithAgent('${r.id}', '', this)" title="Studio воспроизведёт тест до упавшего шага, агент исправит шаг с учётом анализа и допишет остальные; каждый шаг подтверждаете вы">Исправить с агентом</button>
+        <button class="btn small" onclick="runStepEdit('${failedSteps(r, t)[0].s.id}')">Править шаг ${failedSteps(r, t)[0].i + 1}</button>
+        <button class="btn small" onclick="editInStudio('${t.id}', this)">Открыть в Studio</button></div>` : ''}</div>`;
+  }
   if (r.defect) html += `<div class="hint">Дефект: ${r.defect.url ? `<a href="${esc(r.defect.url)}" target="_blank" rel="noopener">${esc(r.defect.key)}</a>` : esc(r.defect.key)} (${esc(r.defect.tracker)}, ${esc(r.defect.by || '')})</div>`;
   else if (['failed', 'flaky'].includes(r.status) && PROJ.connections.some(c => c.enabled && [...TRACKERS, 'atlassian'].includes(c.preset)))
     html += `<div id="defectBox" style="margin-top:8px"><button class="btn small" onclick="defectDraft('${r.id}')">Черновик дефекта${r.analysis?.verdict === 'product_bug' ? ' (похоже на дефект продукта)' : ''}</button></div>`;
