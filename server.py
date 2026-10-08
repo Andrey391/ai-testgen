@@ -895,35 +895,40 @@ class AccountBody(BaseModel):
     totp_secret: str | None = None    # None = keep, "" = remove
     params: list[AuthParam] | None = None   # extra login parameters: {{auth.<name>}}
     default: bool = False
+    roles: list[str] | None = None    # ids of the roles of the application model that log in with it; None = keep
 
 
-def _save_account(pid: str, body: AccountBody, aid: str = "") -> dict:
+def _save_account(pid: str, body: AccountBody, user: str, aid: str = "") -> dict:
     _check_totp(body.totp_secret)
     try:
-        acc = projects.save_account(pid, body.model_dump(), aid)
+        acc = projects.save_account(pid, body.model_dump(exclude={"roles"}), aid)
     except KeyError:
         raise HTTPException(404, "Учётная запись не найдена")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if body.roles is not None:
+        knowledge.link_account(pid, acc["id"], body.roles, user)
     return {"id": acc["id"], "accounts": projects.accounts_view(pid)}
 
 
 @app.post("/api/projects/{pid}/accounts")
-async def create_account(pid: str, body: AccountBody):
-    """Any number of accounts of the application under test, each with its own login parameters."""
-    return _save_account(pid, body)
+async def create_account(pid: str, body: AccountBody, request: Request):
+    """Any number of accounts of the application under test, each with its own login parameters and the
+    roles of the application model it is for."""
+    return _save_account(pid, body, request.state.user)
 
 
 @app.put("/api/projects/{pid}/accounts/{aid}")
-async def update_account(pid: str, aid: str, body: AccountBody):
-    return _save_account(pid, body, aid)
+async def update_account(pid: str, aid: str, body: AccountBody, request: Request):
+    return _save_account(pid, body, request.state.user, aid)
 
 
 @app.delete("/api/projects/{pid}/accounts/{aid}")
-async def delete_account(pid: str, aid: str):
+async def delete_account(pid: str, aid: str, request: Request):
     """Tests of a deleted account run with the default one."""
     if not projects.delete_account(pid, aid):
         raise HTTPException(404, "Учётная запись не найдена")
+    knowledge.link_account(pid, aid, [], request.state.user)     # its roles have no account now
     return {"accounts": projects.accounts_view(pid)}
 
 

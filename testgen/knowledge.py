@@ -220,6 +220,21 @@ def remember(pid: str, text: str, source: str = "") -> dict:
     return doc
 
 
+def link_account(pid: str, account: str, role_ids: list[str], user: str = "") -> None:
+    """The roles a project account is for (the account form): the chosen roles log in with it, the
+    others that did stop pointing to it. The account of a role is not part of the confirmed lifecycle."""
+    with fs.lock(_path(pid)):
+        doc = get(pid)
+        changed = False
+        for r in doc["roles"]:
+            new = account if r["id"] in role_ids else "" if r["account"] == account else r["account"]
+            if new != r["account"]:
+                r["account"], changed = new, True
+        if changed:
+            doc |= {"updated": time.time(), "updated_by": user}
+            fs.write_json(_path(pid), doc, indent=1)
+
+
 def _accounts(pid: str) -> dict[str, str]:
     return {a["id"]: a["name"] for a in projects.accounts_view(pid, full=False)}
 

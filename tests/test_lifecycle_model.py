@@ -359,6 +359,32 @@ def test_a_test_starts_only_with_an_account_for_its_role(fake_llm):
     assert len([a for a in asked if "Оплатить новый заказ" in a and "Role of the scenario: покупатель" in a]) == 1
 
 
+def test_an_account_is_linked_to_its_roles_from_the_account_form(monkeypatch):
+    import server
+    monkeypatch.setattr(auth, "ENABLED", False)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    pid = _project()["id"]
+    roles = {r["name"]: r["id"] for r in knowledge.save(pid, SHOP)["roles"]}
+    buyer, manager = roles["Покупатель"], roles["Менеджер"]
+    url = f"/api/projects/{pid}/accounts"
+    aid = client.post(url, json={"name": "Покупатель 1", "username": "buyer", "roles": [buyer]}).json()["id"]
+    ra = {r["name"]: r for r in client.get(f"/api/projects/{pid}/knowledge").json()["role_accounts"]}
+    assert ra["Покупатель"]["account"] == aid and ra["Покупатель"]["ok"] and not ra["Менеджер"]["account"]
+
+    # Another account takes the role over; without `roles` the links stay as they are.
+    other = client.post(url, json={"name": "Менеджер", "username": "man", "roles": [buyer, manager]}).json()["id"]
+    assert {r["account"] for r in knowledge.get(pid)["roles"]} == {other}
+    client.put(f"{url}/{other}", json={"name": "Менеджер"})
+    assert {r["account"] for r in knowledge.get(pid)["roles"]} == {other}
+    client.put(f"{url}/{other}", json={"name": "Менеджер", "roles": [manager]})
+    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]} == {"Покупатель": "", "Менеджер": other}
+
+    # A deleted account leaves its roles without one; the lifecycle stays confirmed.
+    knowledge.confirm(pid, "ann")
+    assert client.delete(f"{url}/{other}").status_code == 200
+    assert all(not r["account"] for r in knowledge.get(pid)["roles"]) and knowledge.is_confirmed(pid)
+
+
 def test_a_scenario_breaking_the_lifecycle_does_not_start(fake_llm, monkeypatch):
     import server
     v = {"rule": "Покупатель не видит чужие заказы", "problem": "сценарий ждёт, что покупатель откроет чужой заказ",

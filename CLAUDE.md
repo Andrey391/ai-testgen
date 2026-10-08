@@ -428,7 +428,9 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 - Учётные данные тестируемого приложения: сколько угодно учётных записей проекта в
   `secrets/projects/<id>/app.json` (`projects.save_account`/`account_credentials`; у записи логин, пароль,
   TOTP и параметры авторизации «имя — значение», агент вводит их как `{{auth.<имя>}}`, секретные маскируются
-  как пароль — `testdata.secret_pairs`; одна запись — по умолчанию). Тест входит под `test["account"]`,
+  как пароль — `testdata.secret_pairs`; одна запись — по умолчанию; роли модели приложения, которые входят
+  под записью, отмечаются в её форме — `roles` в `…/accounts`, `knowledge.link_account`, удаление записи
+  отвязывает её роли). Тест входит под `test["account"]`,
   иначе под записью по умолчанию; свои у теста — `secrets/projects/<id>/test-<test>.json`. Видят их
   редакторы, в API только логин, несекретные параметры и признаки «задан»; наблюдатель — только названия.
 - Токены MCP-подключений: `secrets/projects/<id>/conn-<cid>.json`; в `project.json` и API только
