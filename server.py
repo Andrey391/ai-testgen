@@ -207,6 +207,8 @@ AUDIT_ACTIONS = {
     ("PUT", "/api/projects/{pid}/knowledge"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/extract"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/confirm"): "knowledge.confirm",
+    ("POST", "/api/projects/{pid}/knowledge/pending"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/knowledge/duplicates"): "knowledge.save",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
     ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
     ("POST", "/api/projects/{pid}/runs"): "suite.start",
@@ -2316,6 +2318,53 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
     return knowledge.view(pid)
+
+
+class PendingBody(BaseModel):
+    action: str                     # accept | reject | separate
+    ids: list[str] = []
+    all: bool = False
+
+
+@app.post("/api/projects/{pid}/knowledge/pending")
+async def resolve_knowledge(pid: str, body: PendingBody, request: Request):
+    """A person decides on updates of existing records (found again by analyses, Planner, tests or
+    added by people): each one or all of them."""
+    project(pid, "editor")
+    try:
+        return knowledge.resolve(pid, None if body.all else body.ids, body.action, request.state.user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/projects/{pid}/knowledge/duplicates")
+async def knowledge_duplicates(pid: str):
+    """Groups of entities, roles and stand data that name the same thing."""
+    project(pid)
+    return knowledge.duplicates(knowledge.get(pid))
+
+
+class DuplicateGroup(BaseModel):
+    kind: str
+    ids: list[str]
+    keep: str = ""
+
+
+class DuplicatesBody(BaseModel):
+    groups: list[DuplicateGroup] = []
+    all: bool = False
+    dismiss: list[str] = []         # ids of groups that are not duplicates
+
+
+@app.post("/api/projects/{pid}/knowledge/duplicates")
+async def merge_knowledge_duplicates(pid: str, body: DuplicatesBody, request: Request):
+    """Merges the chosen groups of duplicates (or all found) into the records to keep; `dismiss` -
+    groups a person marked as different things."""
+    project(pid, "editor")
+    if body.dismiss:
+        return knowledge.dismiss_duplicates(pid, body.dismiss, request.state.user)
+    groups = None if body.all else [g.model_dump() for g in body.groups]
+    return knowledge.merge_duplicates(pid, groups, request.state.user)
 
 
 @app.post("/api/projects/{pid}/knowledge/confirm")

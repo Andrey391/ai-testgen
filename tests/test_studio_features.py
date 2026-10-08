@@ -195,18 +195,24 @@ def test_application_model_prompt_memory_and_accounts():
     assert knowledge.account_for(pid, "Предусловия: войти как администратор клуба") == acc
     assert knowledge.account_for(pid, "Гость открывает расписание") == ""
 
-    # What the requirements say joins the model; what people wrote stays.
+    # What the requirements say joins the model: new records at once, a change of a known one after a person accepts it.
     knowledge.merge(pid, {"summary": "другое", "entities": [
         {"name": "турнир", "description": "Соревнование", "depends_on": ["Судья"], "lifecycle": "иначе",
          "create": "", "rules": ""},
         {"name": "Матч", "description": "Игра двух игроков", "depends_on": ["Турнир"], "lifecycle": "", "create": "",
-         "rules": ""}], "roles": [{"name": "Игрок", "description": "записывается на турнир"}]})
+         "rules": ""}], "roles": [{"name": "Игрок", "description": "записывается на турнир"}]}, source="требования")
     doc = knowledge.get(pid)
     tour = next(e for e in doc["entities"] if e["name"] == "Турнир")
-    assert tour["lifecycle"] == "черновик → набор → идёт → завершён" and tour["description"] == "Соревнование"
-    assert tour["depends_on"] == ["Клуб (турниры разрешены)", "Корт", "Судья"]
+    assert tour["lifecycle"] == "черновик → набор → идёт → завершён" and tour["description"] == ""
     assert doc["summary"] == "Турниры теннисных клубов" and {e["name"] for e in doc["entities"]} >= {"Матч"}
     assert {r["name"] for r in doc["roles"]} == {"Администратор клуба", "Игрок"}
+    [p] = doc["pending"]
+    assert p["source"] == "требования" and p["before"]["lifecycle"] == "черновик → набор → идёт → завершён"
+    assert p["changes"] == {"description": "Соревнование", "depends_on": ["Клуб (турниры разрешены)", "Корт", "Судья"],
+                            "lifecycle": "иначе"}
+    tour = next(e for e in knowledge.resolve(pid, [p["id"]], "accept")["entities"] if e["name"] == "Турнир")
+    assert tour["description"] == "Соревнование" and tour["lifecycle"] == "иначе"
+    assert tour["depends_on"] == ["Клуб (турниры разрешены)", "Корт", "Судья"]
 
 
 def test_application_model_api_and_extraction(monkeypatch, fake_llm):
@@ -255,8 +261,11 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
     out = arun(StudioSession._helper(fake, "test_data", {
         "entity": "Товар", "name": "Тестовый товар А", "state": "нет в наличии", "details": "pw-secret",
         "depends_on": "Категория, Склад", "lifecycle": "в наличии → нет в наличии"}))
-    assert out.startswith("Recorded") and say
+    assert out.startswith("Recorded") and "awaits a person's confirmation" in out and "ждёт подтверждения" in say[-1]
     doc = knowledge.get(pid)
+    assert next(d for d in doc["data"] if d["name"] == "Тестовый товар А")["state"] == "в наличии"
+    assert {p["kind"] for p in doc["pending"]} == {"data", "entities"}      # Planner's category and the test's findings
+    doc = knowledge.resolve(pid, [p["id"] for p in doc["pending"] if p["source"].startswith("Studio")], "accept")
     item = next(d for d in doc["data"] if d["name"] == "Тестовый товар А")
     assert item["state"] == "нет в наличии" and item["source"] == "Studio: Оформление заказа" and "pw-secret" not in item["details"]
     product = next(e for e in doc["entities"] if e["name"] == "Товар")
