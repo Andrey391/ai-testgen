@@ -896,13 +896,14 @@ class AccountBody(BaseModel):
     totp_secret: str | None = None    # None = keep, "" = remove
     params: list[AuthParam] | None = None   # extra login parameters: {{auth.<name>}}
     default: bool = False
-    roles: list[str] | None = None    # ids of the roles of the application model that log in with it; None = keep
+    roles: list[str] | None = None    # ids of the roles of the application model the user has; None = keep
+    notes: str | None = None          # who the user is: state, profile, what tests need it for
 
 
 def _save_account(pid: str, body: AccountBody, user: str, aid: str = "") -> dict:
     _check_totp(body.totp_secret)
     try:
-        acc = projects.save_account(pid, body.model_dump(exclude={"roles"}), aid)
+        acc = projects.save_account(pid, body.model_dump(), aid)
     except KeyError:
         raise HTTPException(404, "Учётная запись не найдена")
     except ValueError as e:

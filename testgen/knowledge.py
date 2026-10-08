@@ -13,7 +13,9 @@ data/projects/<id>/knowledge.json:
     data       test data that exists on the test stand: "product «Test product A», in stock: 10";
                `source` - who found it automatically ("" - people wrote it); `status` "needed" - data
                the scenarios need that nobody has seen on the stand yet (`needed_by` - the scenarios):
-               the first test that prepares or finds it records it, and the next ones reuse it
+               the first test that prepares or finds it records it, and the next ones reuse it.
+               Only objects of the domain: users one logs in as are project accounts (projects.accounts,
+               with their roles and notes), not stand data - to_account() moves them there
     memory     facts learned while working: the agent's `remember` tool, people, events
     pending    updates of existing records waiting for a person (merge()): a record found again (the same
                or a similar name - a duplicate) is not changed silently, the update is proposed and a
@@ -61,7 +63,7 @@ LIMITS = {"entities": 200, "roles": 50, "data": 300}
 FIELDS = {
     "entities": ("name", "description", "depends_on", "lifecycle", "create", "rules"),
     "roles": ("name", "description", "capabilities", "restrictions", "account"),
-    "data": ("entity", "name", "details", "account", "state", "role", "source", "status", "needed_by"),
+    "data": ("entity", "name", "details", "state", "source", "status", "needed_by"),
 }
 LISTS = ("depends_on", "needed_by")
 # What a confirmation of the lifecycle covers: a change of these asks for a new one.
@@ -89,6 +91,8 @@ def empty() -> dict:
 def get(pid: str) -> dict:
     """The stored model with every field of this version (a model saved before has fewer)."""
     raw = fs.read_json(_path(pid)) or {}
+    if any(isinstance(d, dict) and ("role" in d or "account" in d) for d in raw.get("data") or []):
+        return _split_users(pid)            # a model of an earlier version: its users go to the accounts
     return normalize(raw) | {"updated": raw.get("updated"), "updated_by": raw.get("updated_by") or ""}
 
 
@@ -130,12 +134,14 @@ def _clean_pending(p: dict) -> dict | None:
     if kind not in FIELDS or not isinstance(p.get("changes"), dict):
         return None
     item = _clean_item(kind, p.get("item") or {})
-    changes = {f: v for f, v in p["changes"].items() if f in FIELDS[kind]}
+    # "move": "accounts" - a stand data record is a user: it goes to the project accounts with `roles`.
+    changes = {f: v for f, v in p["changes"].items() if f in FIELDS[kind] or kind == "data" and f == "move"}
     if not item or not changes:
         return None
     return {"id": str(p.get("id") or _id())[:16], "kind": kind, "target": str(p.get("target") or "")[:16],
             "match": p.get("match") if p.get("match") in ("similar", "sort") else "same", "item": item, "changes": changes,
             "reason": str(p.get("reason") or "")[:500],
+            "roles": [str(r)[:120] for r in p.get("roles") or [] if r][:20],
             "before": {f: v for f, v in (p.get("before") or {}).items() if f in changes},
             "source": str(p.get("source") or "")[:200], "at": p.get("at") or time.time()}
 
@@ -227,13 +233,21 @@ def remember(pid: str, text: str, source: str = "") -> dict:
 
 
 def link_account(pid: str, account: str, role_ids: list[str], user: str = "") -> None:
-    """The roles a project account is for (the account form): the chosen roles log in with it, the
-    others that did stop pointing to it. The account of a role is not part of the confirmed lifecycle."""
+    """The roles of a project account changed (the account form; [] - it was deleted): a role of it without
+    an account logs in with it; a role that logged in with it and is not its role any more takes another
+    account of the role, if any. Which account a role's tests use is chosen in «Роли»; it is not part of
+    the confirmed lifecycle."""
     with fs.lock(_path(pid)):
         doc = get(pid)
+        accounts = projects.accounts_view(pid)
+        have = {a["id"] for a in accounts} | {NO_LOGIN}
         changed = False
         for r in doc["roles"]:
-            new = account if r["id"] in role_ids else "" if r["account"] == account else r["account"]
+            new = r["account"]
+            if r["id"] in role_ids and r["account"] not in have:
+                new = account
+            elif r["id"] not in role_ids and r["account"] == account:
+                new = next((a["id"] for a in accounts if a["id"] != account and r["id"] in a["roles"]), "")
             if new != r["account"]:
                 r["account"], changed = new, True
         if changed:
@@ -279,12 +293,22 @@ def prompt(pid: str, limit: int = 12000) -> str:
                 lines.append(f"  may: {r['capabilities']}")
             if r["restrictions"]:
                 lines.append(f"  may not: {r['restrictions']}")
+    users = projects.accounts_view(pid)
+    if users:
+        role_name = {r["id"]: r["name"] for r in doc["roles"]}
+        lines.append("Project accounts - the users of the application tests log in as (a test logs in with its own "
+                     "account through {{username}} / {{password}}; record a user a test registers with `test_data` "
+                     "and its login, not as stand data):")
+        for a in users:
+            roles = [role_name[x] for x in a["roles"] if x in role_name]
+            lines.append(f"- «{a['name']}»" + (f"; roles: {', '.join(roles)}" if roles else "")
+                         + ("" if a["username"] else "; no login yet - a person fills it in")
+                         + (f" — {a['notes'][:300]}" if a["notes"] else ""))
 
     def data_line(d: dict) -> str:
         return (f"- [{d['entity'] or 'data'}] {d['name']}" + (f" — {d['details']}" if d["details"] else "")
-                + (f"; state: {d['state']}" if d["state"] else "") + (f"; role: {d['role']}" if d["role"] else "")
+                + (f"; state: {d['state']}" if d["state"] else "")
                 + (f"; found by: {d['source']}" if d["source"] and d["status"] != "needed" else "")
-                + (f"; account «{accounts[d['account']]}»" if d["account"] in accounts else "")
                 + (f"; needed by: {', '.join(d['needed_by'][:5])}" if d["needed_by"] else ""))
     stand = [d for d in doc["data"] if d["status"] != "needed"]
     needed = [d for d in doc["data"] if d["status"] == "needed"]
@@ -296,7 +320,7 @@ def prompt(pid: str, limit: int = 12000) -> str:
         lines.append("Test data the scenarios need that nobody has seen on the stand yet (find it or prepare it, "
                      "then record it with `test_data` so later tests reuse it):")
         lines += [data_line(d) for d in needed]
-    reported = [p["item"] for p in doc["pending"] if p["kind"] == "data"]
+    reported = [p["item"] for p in doc["pending"] if p["kind"] == "data" and "move" not in p["changes"]]
     if reported:
         lines.append("Test data reported again by tests or analyses, the update awaits a person's confirmation "
                      "(until then the record above stays as it is):")
@@ -477,7 +501,7 @@ EXTRACT = """You are a business analyst. From the requirements, build the model 
 
 Take only what the text says or clearly implies; leave a field empty when unknown. Merge with the model you are given: keep its entities and roles (by name) and add what is new. Write in the language of the text."""
 
-EXPLORE = """The text is not a specification but the map of the site made by an automatic walk through its pages (titles, forms, buttons, links, text). Infer the entities, their dependencies and lifecycles and the roles from what the pages show (a cart and a checkout form mean "Order" depends on "Product" and "Cart"). Also list in `data` the concrete objects that already exist on the test stand and that tests can rely on: e.g. the product «Test product A» of the category «Category 1», in stock, price 1000 - its entity, its name as shown, details and state. Only objects the pages actually show, at most 50."""
+EXPLORE = """The text is not a specification but the map of the site made by an automatic walk through its pages (titles, forms, buttons, links, text). Infer the entities, their dependencies and lifecycles and the roles from what the pages show (a cart and a checkout form mean "Order" depends on "Product" and "Cart"). Also list in `data` the concrete objects that already exist on the test stand and that tests can rely on: e.g. the product «Test product A» of the category «Category 1», in stock, price 1000 - its entity, its name as shown, details and state. Only objects the pages actually show, at most 50. Users of the application (people, profiles, accounts) are not stand data: leave them out."""
 
 SOURCES = {"requirements": ("Requirements", "", "требования"), "explore": ("Map of the site", EXPLORE, "Planner")}
 
@@ -513,75 +537,143 @@ async def extract(project: dict, requirements: str, user: str = "", source: str 
 def record(pid: str, item: dict, source: str, login: str = "", password: str = "") -> dict:
     """Test data a test found or created (the agent's `test_data` tool): the record joins the stand
     data (by entity and name), its entity - the entities, with the dependencies and lifecycle seen.
-    A user account a test registered or found (`login`, `password` - real values, not placeholders)
-    becomes a project account (the password only in the encrypted store), the record points to it and
-    so does its role when the role has no account yet."""
+    A user (`login` given, or a record of an entity of users) is no stand data: it becomes a project
+    account with its roles (`role`, comma-separated; the password - real values, not placeholders - only
+    in the encrypted store), and each of its roles without an account logs in with it."""
     entity = " ".join(str(item.get("entity") or "").split())
     name = " ".join(str(item.get("name") or "").split())
     if not entity or not name:
         raise ValueError("Укажите сущность и объект")
     depends = item.get("depends_on") or []
-    account = projects.ensure_account(pid, name, login.strip(), password) if login.strip() else ""
-    found = {"data": [{"entity": entity, "name": name, "details": item.get("details") or "",
-                       "state": item.get("state") or "", "role": item.get("role") or "", "source": source,
-                       "account": account}],
-             "entities": [{"name": entity, "depends_on": depends if isinstance(depends, list) else str(depends).split(","),
+    found = {"entities": [{"name": entity, "depends_on": depends if isinstance(depends, list) else str(depends).split(","),
                            "lifecycle": item.get("lifecycle") or "", "create": item.get("create") or ""}]}
-    doc = merge(pid, found, source=source)
-    if account:
-        doc = attach_account(pid, entity, name, account, item.get("role") or "")
-    return doc
+    if login.strip() or is_user(entity):
+        doc = merge(pid, found, source=source)
+        with fs.lock(_path(pid)):
+            doc = get(pid)
+            to_account(pid, doc, {"name": name, "details": item.get("details") or "", "state": item.get("state") or "",
+                                  "source": source}, split_roles(item.get("role")), login.strip(), password)
+            fs.write_json(_path(pid), doc, indent=1)
+        return doc
+    found["data"] = [{"entity": entity, "name": name, "details": item.get("details") or "",
+                      "state": item.get("state") or "", "source": source}]
+    return merge(pid, found, source=source)
 
 
-def split_roles(text: str) -> list[str]:
-    """The roles of a data record: a user may have several («Игрок, Организатор»)."""
-    return list(dict.fromkeys(r.strip() for r in re.split(r"[,;]", str(text or "")) if r.strip()))
+def split_roles(text) -> list[str]:
+    """Roles written as text: a user may have several («Игрок, Организатор»)."""
+    items = text if isinstance(text, list) else re.split(r"[,;]", str(text or ""))
+    return list(dict.fromkeys(str(r).strip() for r in items if str(r).strip()))
 
 
-def join_roles(roles) -> str:
-    return ", ".join(dict.fromkeys(r for r in roles if r))
+# Words of any application that name its users (whatever the domain calls them, the model decides in sort()).
+USERISH = re.compile(r"пользовател|\buser|аккаунт|account|учётн|учетн|логин|login|администратор|\badmin")
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+# A password written into the details of a record found before: it goes to the encrypted store.
+PASSWORD_IN_TEXT = re.compile(r"(пароль|password)\s*[:=—-]?\s*[«\"']?([^\s,;«»\"']{6,})", re.I)
+CREDENTIALS = re.compile(r"парол|password|логин|login|учётн|учетн|аккаунт|account|войти|вход|sign.?in")
 
 
-def attach_account(pid: str, entity: str, name: str, account: str, role: str = "") -> dict:
-    """A stand data record is a project account: the record points to it (a stored record repeated by
-    a test too - the link is no lifecycle change for a person to confirm), and each of its roles logs in
-    with it when the role has no account yet."""
+def is_user(entity: str) -> bool:
+    """The entity is the users of the application (one logs in as them), not an object of the domain."""
+    return bool(USERISH.search(str(entity or "").lower()))
+
+
+def to_account(pid: str, doc: dict, rec: dict, roles: list[str], login: str = "", password: str = "") -> str:
+    """A user of the application (a stand data record, a test's finding, a scenario's need) as a project
+    account: the one with the same login or a similar name gets what is new, else a new one is created
+    (without a login - a person fills it in). Its roles (names; new ones join the model `doc`) are the
+    account's roles, and a role without an account logs in with it. The account's id."""
+    text = " ".join(x for x in (rec.get("details") or "", f"состояние: {rec['state']}" if rec.get("state") else "",
+                               "нужна сценариям: " + ", ".join(rec["needed_by"]) if rec.get("needed_by") else "") if x)
+    m = PASSWORD_IN_TEXT.search(text)
+    if m and not password and "{{" not in m.group(2) and re.search(r"\d", m.group(2)):
+        password = m.group(2)
+    if password:
+        text = text.replace(password, "***")
+    login = login or (EMAIL.search(rec.get("name") or "") or [""])[0]
+    ids, unknown = [], []
+    for name in roles:              # a role the model has not got is no change of the confirmed lifecycle
+        r = find_role(doc, name)
+        (ids.append(r["id"]) if r else unknown.append(name))
+    if unknown:
+        text = "\n".join(x for x in (text, "роли не из модели: " + ", ".join(unknown)) if x)
+    accounts = projects.accounts_view(pid)
+    acc = (next((a for a in accounts if login and a["username"].strip().lower() == login.lower()), None)
+           or next((a for a in accounts if similar(a["name"], rec["name"])), None))
+    if acc is None:
+        aid = projects.save_account(pid, {"name": rec["name"], "username": login, "password": password,
+                                          "notes": text, "roles": ids, "source": rec.get("source") or ""})["id"]
+    else:
+        aid = acc["id"]
+        notes = acc["notes"] if not text or norm(text) in norm(acc["notes"]) else "\n".join(x for x in (acc["notes"], text) if x)
+        projects.save_account(pid, {"password": password, "notes": notes, "roles": acc["roles"] + ids,
+                                    **({"username": login} if login and not acc["username"] else {})}, aid)
+    accounts = projects.accounts_view(pid)
+    have = {a["id"] for a in accounts} | {NO_LOGIN}
+    if next(a for a in accounts if a["id"] == aid)["username"]:     # tests can log in with it
+        for r in doc["roles"]:
+            if r["id"] in ids and r["account"] not in have:
+                r["account"] = aid
+    return aid
+
+
+def _split_users(pid: str) -> dict:
+    """A model of an earlier version kept users and roles in the stand data: a user a test made or found,
+    one the scenarios need or one with an account goes to the project accounts with its roles; one that
+    only looks like a user (a player the site map shows) waits for a person in «Обновления»; the roles
+    and accounts of the other records are dropped - the stand data holds objects only."""
     with fs.lock(_path(pid)):
-        doc = get(pid)
-        x, _ = _find(doc, "data", {"entity": _entity_name(doc, entity), "name": name})
-        if x is not None:
-            x["account"] = account
-            role = role or x["role"]
-        have = set(_accounts(pid)) | {NO_LOGIN}
-        for name_ in split_roles(role):
-            r = find_role(doc, name_)
-            if r is not None and r["account"] not in have:
-                r["account"] = account
+        raw = fs.read_json(_path(pid)) or {}
+        doc = normalize(raw) | {"updated": raw.get("updated"), "updated_by": raw.get("updated_by") or ""}
+        old = {str(d.get("id") or ""): d for d in raw.get("data") or [] if isinstance(d, dict)}
+        keep = []
+        for d in doc["data"]:
+            o = old.get(d["id"], {})
+            roles, account = split_roles(o.get("role")), str(o.get("account") or "")
+            user = bool(account) or is_user(d["entity"])
+            sure = account or d["status"] == "needed" or d["source"].startswith("Studio") or not d["source"] \
+                or CREDENTIALS.search(f"{d['name']} {d['details']}".lower())
+            if user and sure:
+                aid = to_account(pid, doc, d, roles)
+                if account and account != aid:
+                    _join_roles(pid, account, doc, roles)
+                continue
+            keep.append(d)
+            if user or roles:               # a record with a role may be a user: a person decides
+                reason = ("Похоже на пользователя приложения: перенести в учётные записи?" if user else
+                          f"У записи указана роль «{', '.join(roles)}»: если это пользователь, под которым входят, "
+                          "перенесите её в учётные записи; иначе отклоните — роль из данных уберётся.")
+                doc["pending"].append({"id": _id(), "kind": "data", "target": d["id"], "match": "sort", "item": d,
+                                       "changes": {"move": "accounts"}, "before": {}, "roles": roles,
+                                       "reason": reason, "source": "разбор по разделам", "at": time.time()})
+        doc["data"] = keep
+        doc = normalize(doc) | {"updated": doc["updated"], "updated_by": doc["updated_by"]}
         fs.write_json(_path(pid), doc, indent=1)
     return doc
 
 
-USERISH = re.compile(r"польз|user|аккаунт|account|учётн|учетн|игрок|player|клиент|customer|покупател|сотрудник|"
-                     r"employee|участник|member|админ|admin|login|логин")
-EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+def _join_roles(pid: str, aid: str, doc: dict, roles: list[str]) -> None:
+    """An account linked before gets the roles too."""
+    ids = [r["id"] for r in (find_role(doc, n) for n in roles) if r]
+    acc = next((a for a in projects.accounts_view(pid) if a["id"] == aid), None)
+    if acc and ids:
+        projects.save_account(pid, {"roles": acc["roles"] + ids}, aid)
 
 
 def to_sort(doc: dict) -> list[dict]:
     """Stand data whose section is in doubt and that nobody sorted yet: its category is no entity of the
-    model, or it is a user (one logs in as) without a role."""
+    model, or it looks like a user (an account belongs to «Учётные записи», not to the stand data)."""
     names = {e["name"] for e in doc["entities"]}
     done = set(doc["sorted"])
-    return [d for d in doc["data"] if d["id"] not in done
-            and (d["entity"] not in names
-                 or not d["role"] and (d["account"] or USERISH.search(d["entity"].lower())
-                                       or EMAIL.search(f"{d['name']} {d['details']}")))]
+    return [d for d in doc["data"] if d["id"] not in done and (d["entity"] not in names or is_user(d["entity"]))]
 
 
 class XSorted(BaseModel):
     id: str
     entity: str
+    user: bool
     roles: list[str]
-    account: bool
     sure: bool
     reason: str
 
@@ -590,31 +682,31 @@ class XSort(BaseModel):
     items: list[XSorted]
 
 
-SORT = """You sort the test data of the stand into the sections of the application model. For each record decide: `entity` - the entity of the model the record is an object of: exactly one of the listed entity names ("" when none fits; a user's profile, a player and a user account are objects of the entity of users the model has); `roles` - when the record is a user one logs in as (an account, a registered player or customer, an administrator), the listed role names it has, exactly as listed - a user may have several roles ([] when it is not a user or the text does not say); `account` - true when the record is a user one can log in as; `sure` - false when the record fits several entities or roles, or the text does not say enough to decide; `reason` - one short sentence in the language of the records: why the record goes there, or what is in doubt. Return every record you were given, with its id."""
+SORT = """You sort the test data of the stand into the sections of the application model. The stand data holds only objects of the domain (products, orders, clubs, tournaments...). Users of the application - people who log in: accounts, registered players or customers, administrators, the profile of a user - are no stand data, they belong to the project accounts. For each record decide: `user` - true when the record is such a user; `roles` - for a user, the listed role names it has, exactly as listed (a user may have several; [] when the text does not say); `entity` - for an object, the entity of the model it is an object of: exactly one of the listed entity names ("" for a user, or when none fits); `sure` - false when it is unclear whether the record is a user or an object, or which entity or roles it has; `reason` - one short sentence in the language of the records: why it goes there, or what is in doubt. Return every record you were given, with its id."""
 SORT_BATCH = 60
 
 
 async def sort(project: dict, ids: list[str] | None = None, user: str = "") -> dict:
-    """The stand data sorted into the sections of the model (entities and the roles of users): a change the
-    model is sure of is made at once, one it doubts waits in `pending` for a person (match "sort", with its
-    reason). `ids` - these records (None - every record whose section is in doubt, to_sort())."""
+    """The stand data sorted into the sections: users go to the project accounts with their roles, objects
+    to the entities of the model. A change the model is sure of is made at once, one it doubts waits in
+    `pending` for a person (match "sort", with its reason). `ids` - these records (None - every record
+    whose section is in doubt, to_sort())."""
     pid = project["id"]
     doc = get(pid)
     records = [d for d in doc["data"] if d["id"] in ids] if ids is not None else to_sort(doc)
     entities, roles = [e["name"] for e in doc["entities"]], [r["name"] for r in doc["roles"]]
-    if not records or not entities:
+    if not records:
         return {"applied": 0, "asked": 0, "checked": 0}
     cfg = project["pipeline"]["requirements"]
     system = SORT + projects.language_rule(project)
-    model = ("Entities of the model:\n" + "\n".join(f"- {e['name']}: {e['description'][:200]}" for e in doc["entities"])
+    model = ("Entities of the model:\n" + ("\n".join(f"- {e['name']}: {e['description'][:200]}" for e in doc["entities"]) or "(none)")
              + "\n\nRoles of the model:\n" + ("\n".join(f"- {r['name']}: {r['description'][:200]}" for r in doc["roles"]) or "(none)"))
     found: dict[str, XSorted] = {}
     for at in range(0, len(records), SORT_BATCH):
         batch = records[at:at + SORT_BATCH]
-        lines = "\n".join(f"{d['id']} | category: {d['entity']} | {d['name']} | {d['details'][:300]} | roles: {d['role']}"
-                          for d in batch)
+        lines = "\n".join(f"{d['id']} | category: {d['entity']} | {d['name']} | {d['details'][:300]}" for d in batch)
         reply = await llm.parse(cfg, system=system, context=model,
-                                messages=[{"role": "user", "content": f"Records (id | category | object | details | roles):\n{lines}"}],
+                                messages=[{"role": "user", "content": f"Records (id | category | object | details):\n{lines}"}],
                                 schema=XSort, max_tokens=8000, project_id=pid, stage_name="requirements")
         for x in (reply.parsed.items if reply.parsed else []):
             found[x.id] = x
@@ -624,29 +716,38 @@ async def sort(project: dict, ids: list[str] | None = None, user: str = "") -> d
         names = {norm(n): n for n in entities}
         role_names = {norm(n): n for n in roles}
         waiting = {p["target"] for p in doc["pending"] if p["kind"] == "data"}
+        keep = []
         for d in doc["data"]:
             x = found.get(d["id"])
+            keep.append(d)
             if x is None:
                 continue
-            changes = {}
-            entity = names.get(norm(x.entity), "")
-            if entity and entity != d["entity"]:
-                changes["entity"] = entity
-            have = split_roles(d["role"])          # roles are only added: a user may have several
-            add = [role_names[norm(r)] for r in x.roles if norm(r) in role_names and norm(r) not in {norm(h) for h in have}]
-            if add and x.account:
-                changes["role"] = join_roles(have + add)
-            # Nothing of the model fits: the record keeps its category («не сущность модели» for a person).
-            sure = x.sure and bool(entity or d["entity"] in names.values())
-            if changes and sure:
-                _apply(d, changes)
-                applied += 1
-            elif changes and d["id"] not in waiting:
-                doc["pending"].append({"id": _id(), "kind": "data", "target": d["id"], "match": "sort",
-                                       "item": d | changes, "changes": changes, "before": {f: d[f] for f in changes},
-                                       "reason": x.reason, "source": "разбор по разделам", "at": time.time()})
-                asked += 1
             doc["sorted"].append(d["id"])
+            if x.user:
+                user_roles = [role_names[norm(r)] for r in x.roles if norm(r) in role_names]
+                if x.sure:
+                    to_account(pid, doc, d, user_roles)
+                    keep.pop()
+                    applied += 1
+                elif d["id"] not in waiting:
+                    doc["pending"].append({"id": _id(), "kind": "data", "target": d["id"], "match": "sort", "item": d,
+                                           "changes": {"move": "accounts"}, "before": {}, "roles": user_roles,
+                                           "reason": x.reason, "source": "разбор по разделам", "at": time.time()})
+                    asked += 1
+                continue
+            entity = names.get(norm(x.entity), "")
+            if not entity or entity == d["entity"]:
+                continue                    # nothing of the model fits: «не сущность модели» for a person
+            if x.sure:
+                d["entity"] = entity
+                applied += 1
+            elif d["id"] not in waiting:
+                doc["pending"].append({"id": _id(), "kind": "data", "target": d["id"], "match": "sort",
+                                       "item": d | {"entity": entity}, "changes": {"entity": entity},
+                                       "before": {"entity": d["entity"]}, "reason": x.reason,
+                                       "source": "разбор по разделам", "at": time.time()})
+                asked += 1
+        doc["data"] = keep
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)
     return {"applied": applied, "asked": asked, "checked": len(found)}
@@ -770,7 +871,7 @@ def _join(doc: dict, kind: str, item: dict, source: str, added: set) -> None:
         old["needed_by"] = list(dict.fromkeys(old["needed_by"] + item["needed_by"]))[:20]
         if item["status"] == "needed":      # one more scenario needs it: what the record says is kept
             if old["id"] in added:
-                _apply(old, {f: item[f] for f in ("details", "state", "role") if item[f] and not old[f]})
+                _apply(old, {f: item[f] for f in ("details", "state") if item[f] and not old[f]})
             return
     changes = _changes(kind, old, item)
     if not changes:
@@ -828,7 +929,10 @@ def resolve(pid: str, ids: list[str] | None, action: str, user: str = "") -> dic
             if action == "reject":
                 continue
             target = next((x for x in doc[p["kind"]] if x["id"] == p["target"]), None)
-            if action == "separate" or target is None:      # the record was deleted meanwhile: it comes back
+            if "move" in p["changes"]:      # a user found among the stand data: it goes to the accounts
+                to_account(pid, doc, target or p["item"], p["roles"])
+                doc["data"] = [x for x in doc["data"] if x["id"] != p["target"]]
+            elif action == "separate" or target is None:    # the record was deleted meanwhile: it comes back
                 doc[p["kind"]].append(p["item"] | {"id": _id()})
             else:
                 _apply(target, p["changes"])
@@ -933,8 +1037,10 @@ def merge_duplicates(pid: str, groups: list[dict] | None, user: str = "") -> dic
             for d in doc["data"]:
                 if kind == "entities" and norm(d["entity"]) in names:
                     d["entity"] = result["name"]
-                if kind == "roles" and any(norm(r) in names for r in split_roles(d["role"])):
-                    d["role"] = join_roles(result["name"] if norm(r) in names else r for r in split_roles(d["role"]))
+            if kind == "roles":             # the accounts that had a merged role have the kept one
+                for a in projects.accounts_view(pid):
+                    if gone & set(a["roles"]):
+                        projects.save_account(pid, {"roles": [keep["id"] if x in gone else x for x in a["roles"]]}, a["id"])
             merged += 1
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         fs.write_json(_path(pid), out, indent=1)
@@ -944,14 +1050,26 @@ def merge_duplicates(pid: str, groups: list[dict] | None, user: str = "") -> dic
 def need(pid: str, scenarios: list[dict]) -> dict:
     """The test data the scenarios need (`test_data` of a scenario) joins the model: data on the stand
     gets the scenarios that rely on it, unknown data is added as "needed" - the first test that finds or
-    prepares it records it (record()), the next ones reuse it. Roles the scenarios act as join the roles."""
-    data, roles = [], []
+    prepares it records it (record()), the next ones reuse it. Roles the scenarios act as join the roles.
+    A user the scenarios need (an entity of users) is a project account to fill in, not stand data."""
+    data, roles, users = [], [], []
     for sc in scenarios:
         title = str(sc.get("title") or "").strip()
         for d in sc.get("test_data") or []:
             if isinstance(d, dict) and d.get("entity") and d.get("name"):
-                data.append({k: d.get(k) or "" for k in ("entity", "name", "details", "state", "role")}
-                            | {"status": "needed", "needed_by": [title] if title else []})
+                rec = ({k: d.get(k) or "" for k in ("entity", "name", "details", "state")}
+                       | {"status": "needed", "needed_by": [title] if title else []})
+                if is_user(rec["entity"]):
+                    users.append((rec | {"source": f"сценарий: {title}"}, split_roles(d.get("role")) or split_roles(sc.get("role"))))
+                else:
+                    data.append(rec)
         if str(sc.get("role") or "").strip():
             roles.append({"name": sc["role"]})
-    return merge(pid, {"data": data, "roles": roles}, source="сценарии")
+    doc = merge(pid, {"data": data, "roles": roles}, source="сценарии")
+    if users:
+        with fs.lock(_path(pid)):
+            doc = get(pid)
+            for rec, rs in users:
+                to_account(pid, doc, rec, rs)
+            fs.write_json(_path(pid), doc, indent=1)
+    return doc

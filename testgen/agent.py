@@ -244,22 +244,21 @@ DATA_TOOL = _tool(
     "test_data",
     "Record test data in the project's application model, so later tests reuse it instead of creating it again (not "
     "a test step): an object the scenario relies on that exists on the stand (the product «Test product A» in stock), "
-    "or one this test creates and keeps, with what it requires, its lifecycle and the role it belongs to as you saw "
-    "them; data the model lists as needed becomes data on the stand. Call it when you "
-    "find or create such an object; for an object created with {{unique}} name the kind (\"a new order of the "
-    "customer\") and how it is created. A user account the test registered or found that tests can log in with "
-    "(a customer, a player, a manager): give its `login` and `password` - it becomes a project account of its role. "
-    "Never put passwords into name or details.", {
-        "entity": {"type": "string", "description": "Entity of the domain: Product, Category, Order, Customer…"},
+    "or one this test creates and keeps, with what it requires and its lifecycle as you saw them; data the model "
+    "lists as needed becomes data on the stand. Call it when you find or create such an object; for an object "
+    "created with {{unique}} name the kind (\"a new order\") and how it is created. A user of the application the "
+    "test registered or found that tests can log in with is no stand data: give its `login`, `password` and `role` "
+    "- it goes to the project accounts with its roles. Never put passwords into name or details.", {
+        "entity": {"type": "string", "description": "Entity of the domain the object belongs to (Product, Order…); "
+                                                    "for a user - the entity of users."},
         "name": {"type": "string", "description": "The object as the application shows it: «Test product A»."},
         "details": {"type": "string", "description": "What matters for tests: price, settings, links to other objects."},
         "state": {"type": "string", "description": "Its state in the lifecycle: in stock, paid, blocked…; or \"\"."},
         "depends_on": {"type": "string", "description": "Entities that must exist before it, comma-separated; or \"\"."},
         "lifecycle": {"type": "string", "description": "States and transitions seen: \"new → paid → shipped\"; or \"\"."},
         "create": {"type": "string", "description": "How and by which role it is created; or \"\"."},
-        "role": {"type": "string", "description": "The role whose object it is or who works with it (Customer); a "
-                                                  "user account with several roles - all of them, comma-separated "
-                                                  "(Player, Organizer); or \"\"."},
+        "role": {"type": "string", "description": "For a user: its roles from the model, comma-separated when several; "
+                                                  "or \"\" (an object has no role)."},
         "login": {"type": "string", "description": "For a user account: its login or email exactly as typed in the "
                                                    "step, placeholders included (user+{{unique}}@example.com); or \"\"."},
         "password": {"type": "string", "description": "For a user account: its password as typed in the step "
@@ -1064,9 +1063,10 @@ class StudioSession:
                                        password=password)
             except ValueError as e:
                 return str(e)
-            if login:
-                self._say("system", f"🔑 Учётная запись «{login}» добавлена в «Тестовые данные → Учётные записи»"
+            if login or knowledge.is_user(item["entity"]):
+                self._say("system", f"🔑 Учётная запись «{login or item['name']}» — в «Тестовые данные → Учётные записи»"
                                     + (f" (роли: {item['role']})" if item["role"] else ""))
+                return "Recorded as a project account with its roles."
             if self.project["pipeline"]["requirements"].get("learn_model", True) and knowledge.to_sort(doc):
                 knowledge.sort_soon(self.project)     # its section is in doubt: what is unclear asks a person
             waits = any(p["kind"] == "data" and p["item"]["name"] == " ".join(item["name"].split())

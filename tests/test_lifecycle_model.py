@@ -82,7 +82,7 @@ def test_scenario_test_data_is_recorded_and_reused():
     assert data["тестовый товар а"]["status"] == "" and data["тестовый товар а"]["needed_by"] == ["Оплата заказа"]
     buyer = data["покупатель с адресом доставки"]
     assert buyer["status"] == "needed" and buyer["needed_by"] == ["Оплата заказа", "Отправка заказа"]
-    assert buyer["role"] == "Покупатель" and len(doc["data"]) == 2
+    assert "role" not in buyer and len(doc["data"]) == 2          # roles are kept in «Роли» and the accounts
     assert "Кладовщик" in [r["name"] for r in doc["roles"]]          # a role the scenarios act as joins the model
 
     text = knowledge.prompt(pid)
@@ -367,17 +367,21 @@ def test_an_account_is_linked_to_its_roles_from_the_account_form(monkeypatch):
     roles = {r["name"]: r["id"] for r in knowledge.save(pid, SHOP)["roles"]}
     buyer, manager = roles["Покупатель"], roles["Менеджер"]
     url = f"/api/projects/{pid}/accounts"
-    aid = client.post(url, json={"name": "Покупатель 1", "username": "buyer", "roles": [buyer]}).json()["id"]
+    aid = client.post(url, json={"name": "Покупатель 1", "username": "buyer", "roles": [buyer],
+                                 "notes": "с адресом доставки"}).json()["id"]
     ra = {r["name"]: r for r in client.get(f"/api/projects/{pid}/knowledge").json()["role_accounts"]}
     assert ra["Покупатель"]["account"] == aid and ra["Покупатель"]["ok"] and not ra["Менеджер"]["account"]
+    acc = next(a for a in client.get(f"/api/projects/{pid}").json()["accounts"] if a["id"] == aid)
+    assert acc["roles"] == [buyer] and acc["notes"] == "с адресом доставки"
 
-    # Another account takes the role over; without `roles` the links stay as they are.
+    # A user has several roles; a role keeps the account its tests log in with, one without gets this one.
     other = client.post(url, json={"name": "Менеджер", "username": "man", "roles": [buyer, manager]}).json()["id"]
-    assert {r["account"] for r in knowledge.get(pid)["roles"]} == {other}
-    client.put(f"{url}/{other}", json={"name": "Менеджер"})
-    assert {r["account"] for r in knowledge.get(pid)["roles"]} == {other}
-    client.put(f"{url}/{other}", json={"name": "Менеджер", "roles": [manager]})
-    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]} == {"Покупатель": "", "Менеджер": other}
+    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]} == {"Покупатель": aid, "Менеджер": other}
+    client.put(f"{url}/{other}", json={"name": "Менеджер"})            # without `roles` they stay
+    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]} == {"Покупатель": aid, "Менеджер": other}
+    # The role a user loses takes another account of the role.
+    client.put(f"{url}/{aid}", json={"roles": []})
+    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]} == {"Покупатель": other, "Менеджер": other}
 
     # A deleted account leaves its roles without one; the lifecycle stays confirmed.
     knowledge.confirm(pid, "ann")
@@ -385,43 +389,78 @@ def test_an_account_is_linked_to_its_roles_from_the_account_form(monkeypatch):
     assert all(not r["account"] for r in knowledge.get(pid)["roles"]) and knowledge.is_confirmed(pid)
 
 
-def test_a_user_a_test_registers_becomes_an_account_of_its_role():
+def test_a_user_a_test_registers_is_an_account_not_stand_data():
     pid = _project()["id"]
     knowledge.save(pid, SHOP)
-    doc = knowledge.record(pid, {"entity": "Покупатели", "name": "Иван Иванов", "details": "пароль Secret-123, город Москва",
+    doc = knowledge.record(pid, {"entity": "Пользователь", "name": "Иван Иванов", "details": "пароль Secret-123, город Москва",
                                  "role": "покупатель"}, "Studio: Регистрация", login="ivan@example.com", password="Secret-123")
+    assert doc["data"] == []
     acc = next(a for a in projects.accounts_view(pid) if a["username"] == "ivan@example.com")
-    assert acc["name"] == "Иван Иванов" and acc["has_password"]
+    assert acc["name"] == "Иван Иванов" and acc["has_password"] and acc["source"] == "Studio: Регистрация"
+    assert "Москва" in acc["notes"] and "Secret-123" not in acc["notes"]
     assert projects.account_credentials(pid, acc["id"])["password"] == "Secret-123"
-    d = next(x for x in doc["data"] if x["name"] == "Иван Иванов")
-    assert d["account"] == acc["id"] and {r["name"]: r["account"] for r in doc["roles"]}["Покупатель"] == acc["id"]
+    buyer = next(r for r in doc["roles"] if r["name"] == "Покупатель")
+    assert acc["roles"] == [buyer["id"]] and buyer["account"] == acc["id"]
 
-    # The same login again: the same account, the role keeps it; a role with an account is not taken over.
+    # The same login again: the same account; a role with an account is not taken over.
     knowledge.record(pid, {"entity": "Покупатель", "name": "Иван", "role": "Покупатель"}, "Studio: Вход",
                      login="IVAN@example.com", password="Secret-456")
     assert len(projects.accounts_view(pid)) == 1
     assert projects.account_credentials(pid, acc["id"])["password"] == "Secret-456"
     other = projects.save_account(pid, {"name": "Менеджер", "username": "man"})["id"]
     knowledge.link_account(pid, other, [r["id"] for r in knowledge.get(pid)["roles"] if r["name"] == "Менеджер"])
-    knowledge.record(pid, {"entity": "Сотрудник", "name": "Пётр", "role": "Менеджер"}, "t", login="petr", password="x")
-    assert {r["name"]: r["account"] for r in knowledge.get(pid)["roles"]}["Менеджер"] == other
+    knowledge.record(pid, {"entity": "Сотрудник", "name": "Пётр", "role": "Менеджер, Кладовщик"}, "t", login="petr", password="x")
+    doc = knowledge.get(pid)
+    assert {r["name"]: r["account"] for r in doc["roles"]}["Менеджер"] == other
+    petr = next(a for a in projects.accounts_view(pid) if a["username"] == "petr")
+    assert {r["name"] for r in doc["roles"] if r["id"] in petr["roles"]} == {"Менеджер"}
+    assert "роли не из модели: Кладовщик" in petr["notes"] and "Кладовщик" not in {r["name"] for r in doc["roles"]}
+    assert knowledge.split_roles("Покупатель; Менеджер, Покупатель") == ["Покупатель", "Менеджер"]
+
+    # A user the scenarios need is an account to fill in; objects stay stand data.
+    doc = knowledge.need(pid, [{"title": "Профиль", "role": "Покупатель", "test_data": [
+        {"entity": "Пользователь", "name": "Покупатель со скрытым профилем", "details": "профиль скрыт"},
+        {"entity": "Товар", "name": "Товар в наличии"}]}])
+    assert [d["name"] for d in doc["data"]] == ["Товар в наличии"]
+    hidden = next(a for a in projects.accounts_view(pid) if a["name"] == "Покупатель со скрытым профилем")
+    assert not hidden["username"] and "нужна сценариям: Профиль" in hidden["notes"]
 
 
-def test_an_account_has_several_roles():
+def test_a_model_of_an_earlier_version_moves_its_users_to_the_accounts():
     pid = _project()["id"]
     knowledge.save(pid, SHOP)
-    doc = knowledge.record(pid, {"entity": "Сотрудник", "name": "Анна", "role": "Покупатель; менеджер"}, "t",
-                           login="anna", password="x")
-    aid = projects.accounts_view(pid)[0]["id"]
-    assert {r["name"]: r["account"] for r in doc["roles"]} == {"Покупатель": aid, "Менеджер": aid}
-    assert knowledge.split_roles("Покупатель; Менеджер, Покупатель") == ["Покупатель", "Менеджер"]
-    # Merged duplicate roles are renamed inside the list of a record's roles.
+    raw = fs.read_json(knowledge._path(pid))
+    main = projects.save_account(pid, {"name": "Основная", "username": "admin@test.com"})["id"]
+    raw["data"] = [
+        {"id": "u1", "entity": "User", "name": "admin@test.com", "details": "вход по email", "role": "Менеджер",
+         "source": "Studio: Вход"},
+        {"id": "u2", "entity": "Пользователь", "name": "Борис", "details": "пароль Pass-1234", "role": "Покупатель",
+         "status": "needed"},
+        {"id": "u3", "entity": "User", "name": "Андрей М", "details": "виден в рейтинге", "source": "Planner"},
+        {"id": "p1", "entity": "Покупатель", "name": "Покупатель с адресом", "role": "Покупатель", "source": "Planner"},
+        {"id": "o1", "entity": "Заказ", "name": "Заказ 1", "role": "Покупатель", "account": "", "source": "Planner"}]
+    fs.write_json(knowledge._path(pid), raw)
     doc = knowledge.get(pid)
+    assert [d["name"] for d in doc["data"]] == ["Андрей М", "Покупатель с адресом", "Заказ 1"]
+    assert all("role" not in d and "account" not in d for d in doc["data"])
+    accounts = {a["name"]: a for a in projects.accounts_view(pid)}
+    roles = {r["name"]: r["id"] for r in doc["roles"]}
+    assert set(accounts) == {"Основная", "Борис"} and accounts["Основная"]["roles"] == [roles["Менеджер"]]
+    assert accounts["Борис"]["roles"] == [roles["Покупатель"]] and "Pass-1234" not in accounts["Борис"]["notes"]
+    assert projects.account_credentials(pid, accounts["Борис"]["id"])["password"] == "Pass-1234"
+    # What only looks like a user, or a record with a role, waits for a person.
+    moves = {p["target"]: p for p in doc["pending"] if "move" in p["changes"]}
+    assert set(moves) == {"u3", "p1", "o1"} and moves["p1"]["roles"] == ["Покупатель"]
+    doc = knowledge.resolve(pid, [moves["p1"]["id"]], "accept")
+    doc = knowledge.resolve(pid, [moves["u3"]["id"], moves["o1"]["id"]], "reject")
+    assert [d["name"] for d in doc["data"]] == ["Андрей М", "Заказ 1"]
+    assert "Покупатель с адресом" in {a["name"] for a in projects.accounts_view(pid)}
+    assert main in {a["id"] for a in projects.accounts_view(pid)} and len(projects.accounts_view(pid)) == 3
+    # Merged duplicate roles: the accounts get the kept one.
     doc["roles"].append({"id": "man2", "name": "Менеджер магазина", "capabilities": "отправляет"})
     fs.write_json(knowledge._path(pid), doc)
-    keep = next(r["id"] for r in doc["roles"] if r["name"] == "Менеджер")
-    knowledge.merge_duplicates(pid, [{"kind": "roles", "ids": ["man2", keep], "keep": "man2"}])
-    assert next(d for d in knowledge.get(pid)["data"] if d["name"] == "Анна")["role"] == "Покупатель, Менеджер магазина"
+    knowledge.merge_duplicates(pid, [{"kind": "roles", "ids": ["man2", roles["Менеджер"]], "keep": "man2"}])
+    assert next(a for a in projects.accounts_view(pid) if a["id"] == main)["roles"] == ["man2"]
 
 
 def test_stand_data_goes_to_the_entity_of_the_model():
@@ -436,29 +475,34 @@ def test_stand_data_is_sorted_and_a_doubt_asks_a_person(fake_llm):
     p = _project()
     pid = p["id"]
     projects.update_llm(pid, {"model": "test-model", "effort": "medium"})
-    knowledge.save(pid, SHOP | {"data": [{"entity": "User", "name": "buyer@example.com"},
+    knowledge.save(pid, SHOP | {"data": [{"entity": "Клиенты", "name": "Ольга"}, {"entity": "Гость", "name": "Пётр"},
                                          {"entity": "Склад", "name": "Основной склад"},
-                                         {"entity": "Item", "name": "Тестовый товар"}]})
+                                         {"entity": "Item", "name": "Тестовый товар"},
+                                         {"entity": "Item", "name": "Подарок"}]})
     ids = {d["name"]: d["id"] for d in knowledge.get(pid)["data"]}
     asked = []
 
     def script(kind, kw):
         asked.append(kw["messages"][-1]["content"])
         return Resp(parsed=knowledge.XSort(items=[
-            knowledge.XSorted(id=ids["buyer@example.com"], entity="Заказ", roles=["Покупатель"], account=True, sure=False,
-                              reason="пользователь, но сущности пользователей в модели нет"),
-            knowledge.XSorted(id=ids["Тестовый товар"], entity="Товар", roles=[], account=False, sure=True, reason="товар"),
-            knowledge.XSorted(id=ids["Основной склад"], entity="", roles=[], account=False, sure=False, reason="нет такой сущности")]))
+            knowledge.XSorted(id=ids["Ольга"], entity="", user=True, roles=["Покупатель", "Менеджер"], sure=True, reason="клиент"),
+            knowledge.XSorted(id=ids["Пётр"], entity="", user=True, roles=[], sure=False, reason="непонятно, входит ли он"),
+            knowledge.XSorted(id=ids["Тестовый товар"], entity="Товар", user=False, roles=[], sure=True, reason="товар"),
+            knowledge.XSorted(id=ids["Подарок"], entity="Товар", user=False, roles=[], sure=False, reason="может быть услугой"),
+            knowledge.XSorted(id=ids["Основной склад"], entity="", user=False, roles=[], sure=False, reason="нет такой сущности")]))
     fake_llm.script = script
     res = arun(knowledge.sort(projects.get(pid)))
-    assert res == {"applied": 1, "asked": 1, "checked": 3}
+    assert res == {"applied": 2, "asked": 2, "checked": 5}
     doc = knowledge.get(pid)
     by = {d["name"]: d for d in doc["data"]}
-    assert by["Тестовый товар"]["entity"] == "Товар" and by["buyer@example.com"]["entity"] == "User"
-    [p_] = doc["pending"]
-    assert p_["match"] == "sort" and p_["changes"] == {"entity": "Заказ", "role": "Покупатель"} and "нет" in p_["reason"]
-    doc = knowledge.resolve(pid, [p_["id"]], "accept")
-    assert {d["name"]: d["role"] for d in doc["data"]}["buyer@example.com"] == "Покупатель"
+    assert "Ольга" not in by and by["Тестовый товар"]["entity"] == "Товар" and by["Подарок"]["entity"] == "Item"
+    olga = next(a for a in projects.accounts_view(pid) if a["name"] == "Ольга")
+    assert {r["name"] for r in doc["roles"] if r["id"] in olga["roles"]} == {"Покупатель", "Менеджер"}
+    pend = {p["item"]["name"]: p for p in doc["pending"]}
+    assert pend["Пётр"]["changes"] == {"move": "accounts"} and pend["Подарок"]["changes"] == {"entity": "Товар"}
+    doc = knowledge.resolve(pid, None, "accept")
+    assert {d["name"]: d["entity"] for d in doc["data"]} == {"Основной склад": "Склад", "Тестовый товар": "Товар", "Подарок": "Товар"}
+    assert "Пётр" in {a["name"] for a in projects.accounts_view(pid)}
     # What was sorted is not sent to the model again.
     assert arun(knowledge.sort(projects.get(pid)))["checked"] == 0 and len(asked) == 1
 

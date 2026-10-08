@@ -376,6 +376,7 @@ def accounts_view(pid: str, full: bool = True) -> list[dict]:
                 "default": a["id"] == data.get("default")}
         if full:
             item |= {"username": a.get("username", ""), "has_password": bool(a.get("password")),
+                     "notes": a.get("notes", ""), "roles": a.get("roles") or [], "source": a.get("source", ""),
                      "has_totp": bool(a.get("totp_secret")),
                      "params": [{"name": p["name"], "secret": bool(p.get("secret")),
                                  "value": "" if p.get("secret") else p.get("value", ""),
@@ -426,6 +427,12 @@ def save_account(pid: str, body: dict, account_id: str = "") -> dict:
             acc["totp_secret"] = re.sub(r"\s+", "", body["totp_secret"]).upper()
         if body.get("params") is not None:
             acc["params"] = _clean_params(body["params"], acc.get("params") or [])
+        if body.get("notes") is not None:      # who the user is: state, profile, what tests need it for
+            acc["notes"] = str(body["notes"]).strip()[:4000]
+        if body.get("roles") is not None:      # ids of the roles of the application model the user has
+            acc["roles"] = list(dict.fromkeys(str(r)[:16] for r in body["roles"] if r))[:20]
+        if body.get("source") is not None:     # who added it: a test, a scenario, a person
+            acc["source"] = str(body["source"]).strip()[:200]
         for k in [k for k in CRED_KEYS if not acc.get(k)]:
             acc.pop(k, None)
         if not acc.get("name"):
@@ -434,18 +441,6 @@ def save_account(pid: str, body: dict, account_id: str = "") -> dict:
             data["default"] = acc["id"]
         _save_accounts(pid, data)
     return acc
-
-
-def ensure_account(pid: str, name: str, username: str, password: str = "") -> str:
-    """The account with this login (a user a test registered or found): the existing one gets the new
-    password, else a new account is created. Its id."""
-    login = username.strip().lower()
-    acc = next((a for a in _load_accounts(pid)["accounts"] if (a.get("username") or "").strip().lower() == login), None)
-    if acc is not None:
-        if password and password != acc.get("password"):
-            save_account(pid, {"password": password}, acc["id"])
-        return acc["id"]
-    return save_account(pid, {"name": name or username, "username": username, "password": password})["id"]
 
 
 def delete_account(pid: str, account_id: str) -> bool:

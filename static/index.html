@@ -239,10 +239,11 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 #knList-data .kn-table th:nth-child(5){width:9%}
 #knList-data .kn-table th:nth-child(7){width:15%}
 .kn-table tr.kn-group>td{background:var(--bg);font-weight:600;font-size:13px;padding-top:10px}
+.acc-cut{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+#accList td{overflow-wrap:anywhere}
 .kn-cats{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .kn-cats button{padding:3px 10px;font-size:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);cursor:pointer}
 .kn-cats button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.kn-cats button.cat-acc{border-style:dashed}
 .kn-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:10px 0 4px}
 .kn-tile{border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;background:none;text-align:left;font:inherit;color:inherit}
 .kn-tile:hover{border-color:var(--accent)}
@@ -1190,7 +1191,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <h3>Учётные записи тестируемого приложения</h3>
             <div class="muted">Сколько угодно учётных записей (администратор, покупатель, менеджер…). Тест и сессия Studio входят под выбранной записью, без выбора — под записью по умолчанию. Агент видит только плейсхолдеры <code>{{username}}</code>, <code>{{password}}</code>, <code>{{totp}}</code> и <code>{{auth.имя}}</code>; секреты хранятся на сервере зашифрованными и не попадают в модель, шаги, trace и экспорт.</div>
             <div id="accRoles" style="margin-top:8px"></div>
-            <table style="margin-top:8px"><thead><tr><th>Название</th><th>Логин</th><th>Вход</th><th>Роли</th><th></th></tr></thead>
+            <table style="margin-top:8px"><thead><tr><th>Название</th><th>Логин</th><th>Вход</th><th>Роли</th><th>Описание</th><th></th></tr></thead>
               <tbody id="accList"></tbody></table>
             <div class="row" style="margin-top:8px"><span class="muted grow" id="pcMsg"></span>
               <button class="btn" id="accAdd">+ Учётная запись</button></div>
@@ -1209,8 +1210,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               <div class="hint">Всё, что ещё нужно для входа: OTP-код тестового стенда, PIN, организация, телефон… Агент вводит значение как <code>{{auth.имя}}</code>. Секретный параметр, как пароль, не показывается модели и маскируется в шагах, trace и трафике; в экспорте — переменная <code>TESTGEN_AUTH_ИМЯ</code>.</div>
               <div id="accParams"></div>
               <button class="btn small" id="accParamAdd" style="margin-top:6px">+ Параметр</button>
+              <label style="margin-top:10px">Описание</label>
+              <textarea id="accNotes" rows="2" placeholder="Кто это: профиль, состояние, для каких тестов нужна (без паролей)"></textarea>
               <label style="margin-top:10px">Роли</label>
-              <div class="hint">Все роли этого пользователя в приложении — их может быть несколько: тесты каждой отмеченной роли входят под этой записью. У роли одна учётная запись для тестов: отмеченная здесь заменит прежнюю.</div>
+              <div class="hint">Все роли этого пользователя в приложении — их может быть несколько. Роль, у которой ещё нет учётной записи, будет входить под этой; какой записью входят тесты роли, выбирается в разделе «Роли» (★ — запись по умолчанию для роли).</div>
               <div id="accRolePick" class="row" style="flex-wrap:wrap;gap:4px 14px"></div>
               <div class="row" style="margin-top:10px">
                 <label class="inline"><input type="checkbox" id="accDefault"> По умолчанию для проекта</label>
@@ -1223,9 +1226,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div data-kn-sec="data" class="hidden">
           <div class="card">
             <h3>Тестовые данные стенда</h3>
-            <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio). «Нужны сценариям» — данные, которые назвали сценарии, но ещё никто не видел на стенде: когда тест их найдёт или подготовит, придёт обновление «на стенде». Записи разложены по категориям — сущностям модели; пользователи, под которыми можно войти, — учётные записи проекта своей роли: тест, зарегистрировавший пользователя, добавляет её сам, для найденного раньше нажмите «→ учётная запись».</div>
-            <div class="row" style="margin-top:8px;gap:6px"><span class="muted grow" id="knSortMsg">Записи, раздел которых под сомнением, модель разбирает сама — после анализа требований, обхода сайта и записи теста; уверенное меняет сразу, сомнительное приходит в «Обновления».</span>
-              <button class="btn small" id="knSort" title="Модель сверит записи с сущностями и ролями модели">Разобрать по разделам</button></div>
+            <div class="hint">Объекты, которые уже есть на тестовом стенде и на которые опираются тесты: «Товар "Тестовый товар А" — категория "Категория 1", в наличии 10 шт., цена 1000». «Найдено» — кто добавил запись автоматически (Planner, тест в Studio). «Нужны сценариям» — данные, которые назвали сценарии, но ещё никто не видел на стенде: когда тест их найдёт или подготовит, придёт обновление «на стенде». Записи разложены по категориям — сущностям модели. Здесь только объекты предметной области: пользователи, под которыми входят в приложение, и их роли — в разделах «Учётные записи» и «Роли».</div>
+            <div class="row" style="margin-top:8px;gap:6px"><span class="muted grow" id="knSortMsg">Записи, раздел которых под сомнением, модель разбирает сама — после анализа требований, обхода сайта и записи теста: пользователей переносит в учётные записи, объекты — в сущности модели; уверенное меняет сразу, сомнительное приходит в «Обновления».</span>
+              <button class="btn small" id="knSort" title="Модель сверит записи с сущностями модели и перенесёт пользователей в учётные записи">Разобрать по разделам</button></div>
             <div class="kn-cats" id="knCats-data"></div>
             <div class="kn-bar" id="knBar-data"></div>
             <div id="knList-data" data-nopage></div>
@@ -4212,10 +4215,12 @@ $('#pSave').onclick = async () => {
 };
 // ---- accounts of the application under test: any number, each with login parameters ({{auth.name}})
 let ACC_EDIT = null;   // the account being edited: null - none, '' - a new one
-let ACC_LINK = null;   // the stand data record the new account is made from (knDataAccount)
+// the roles of a user: its own (a user may have several) and those whose tests log in with it
+const accRoleIds = a => [...new Set([...(a.roles || []), ...(KN && KN_PID === PID ? KN.roles.filter(r => r.account === a.id).map(r => r.id) : [])])];
 function renderAccounts() {
   const accs = PROJ.accounts || [], owner = canRole('owner');
   const ra = KN && KN_PID === PID ? KN.role_accounts || [] : [];    // roles of the application model and their accounts
+  const roleName = Object.fromEntries((KN && KN_PID === PID ? KN.roles : []).map(r => [r.id, r]));
   const missing = ra.filter(r => !r.ok);
   $('#accRoles').innerHTML = !ra.length ? '<div class="hint">В модели приложения нет ролей: тесты входят под учётной записью по умолчанию.</div>'
     : missing.length ? `<div class="badge warn">Роли без учётной записи: ${missing.length}</div>
@@ -4223,14 +4228,17 @@ function renderAccounts() {
         `<a href="#" onclick="knGoRole('${r.id}'); return false">«${esc(r.name)}»</a> — ${esc(r.problem)}`).join('; ')}. Создайте запись здесь и отметьте её роли (или выберите запись у роли в разделе «Роли»); роль, которая работает без входа, отметьте «без входа (гость)».</div>`
     : `<span class="badge ok">У каждой роли есть учётная запись</span>`;
   $('#accList').innerHTML = accs.map(a => `<tr>
-      <td>${esc(a.name)} ${a.default ? '<span class="badge ok">по умолчанию</span>' : ''}</td>
-      <td>${esc(a.username || '—')}</td>
+      <td style="max-width:260px">${esc(a.name)} ${a.default ? '<span class="badge ok">по умолчанию</span>' : ''}${a.source
+        ? `<div class="muted acc-cut" style="font-size:11px" title="${esc(a.source)}">${esc(a.source)}</div>` : ''}</td>
+      <td>${a.username ? esc(a.username) : a.username !== undefined ? '<span class="badge warn" title="Заполните логин: без него под записью не войти">логин не задан</span>' : ''}</td>
       <td>${a.has_password ? '<span class="badge">пароль</span>' : ''}${a.has_totp ? '<span class="badge">2FA</span>' : ''}${(a.params || []).map(p =>
         `<span class="badge${p.secret ? ' warn' : ''}" title="${p.secret ? 'секрет' : esc(p.value)}">{{auth.${esc(p.name)}}}</span>`).join('')}</td>
-      <td>${ra.filter(r => r.account === a.id).map(r => esc(r.name)).join(', ') || '<span class="muted">—</span>'}</td>
+      <td>${accRoleIds(a).filter(id => roleName[id]).map(id => esc(roleName[id].name) + (roleName[id].account === a.id
+        ? ' <span title="Тесты роли входят под этой записью">★</span>' : '')).join(', ') || '<span class="muted">—</span>'}</td>
+      <td style="max-width:260px"><div class="acc-cut" title="${esc(a.notes || '')}">${esc(a.notes || '')}</div></td>
       <td class="row" style="justify-content:flex-end">${owner ? `<button class="btn small" onclick="editAccount('${a.id}')">Изменить</button>
         <button class="btn small" onclick="deleteAccount('${a.id}')" style="color:var(--bad)">Удалить</button>` : ''}</td></tr>`).join('')
-    || '<tr><td colspan="5" class="muted">Учётных записей нет: агент и прогоны не смогут войти в приложение.</td></tr>';
+    || '<tr><td colspan="6" class="muted">Учётных записей нет: агент и прогоны не смогут войти в приложение.</td></tr>';
   $('#accAdd').classList.toggle('hidden', !owner);
   if (ACC_EDIT !== null && ACC_EDIT !== '' && !accs.some(a => a.id === ACC_EDIT)) ACC_EDIT = null;
   $('#accForm').classList.toggle('hidden', ACC_EDIT === null);
@@ -4249,19 +4257,20 @@ function addParamRow(p = {}) {
 }
 function editAccount(id) {
   const a = (PROJ.accounts || []).find(x => x.id === id) || {};
-  ACC_EDIT = id || ''; ACC_LINK = null;
+  ACC_EDIT = id || '';
   $('#accFormTitle').textContent = id ? `Учётная запись «${a.name}»` : 'Новая учётная запись';
   $('#accName').value = a.name || ''; $('#pLogin').value = a.username || ''; $('#pPass').value = ''; $('#pTotp').value = '';
+  $('#accNotes').value = a.notes || '';
   $('#pPass').placeholder = a.has_password ? 'сохранён — введите новый, чтобы заменить' : '';
   $('#pTotp').placeholder = a.has_totp ? 'сохранён — введите новый, чтобы заменить' : '';
   $('#pcTotpClear').classList.toggle('hidden', !a.has_totp);
   $('#accDefault').checked = !!a.default || !(PROJ.accounts || []).length;
   $('#accParams').innerHTML = '';
   (a.params || []).forEach(p => addParamRow(p));
-  const ra = KN && KN_PID === PID ? KN.role_accounts || [] : [];
-  $('#accRolePick').innerHTML = ra.map(r => `<label class="inline" title="${r.account && r.account !== id
-      ? `Сейчас: ${esc(r.account_name)}` : r.guest ? 'Сейчас: без входа (гость)' : ''}"><input type="checkbox" value="${r.id}"
-      ${id && r.account === id ? 'checked' : ''}> ${esc(r.name)}${r.account && r.account !== id ? ` <span class="muted">(${esc(r.account_name)})</span>`
+  const ra = KN && KN_PID === PID ? KN.role_accounts || [] : [], mine = id ? accRoleIds(a) : [];
+  $('#accRolePick').innerHTML = ra.map(r => `<label class="inline"><input type="checkbox" value="${r.id}" ${mine.includes(r.id) ? 'checked' : ''}>
+      ${esc(r.name)}${id && r.account === id ? ' <span title="Тесты роли входят под этой записью">★</span>'
+      : r.account ? ` <span class="muted" title="Тесты роли входят под «${esc(r.account_name)}»">(★ ${esc(r.account_name)})</span>`
       : r.guest ? ' <span class="muted">(гость)</span>' : ''}</label>`).join('')
     || '<span class="muted">В модели приложения нет ролей — добавьте их в разделе «Роли».</span>';
   $('#pcMsg').textContent = '';
@@ -4270,22 +4279,21 @@ function editAccount(id) {
 }
 async function saveAccount(extra = {}) {
   const body = {name: $('#accName').value, username: $('#pLogin').value, password: $('#pPass').value,
-    default: $('#accDefault').checked,
+    default: $('#accDefault').checked, notes: $('#accNotes').value,
     params: [...$$('#accParams .acc-param')].map(r => ({name: r.querySelector('.ap-name').value.trim(),
       value: r.querySelector('.ap-value').value, secret: r.querySelector('.ap-secret').checked})).filter(p => p.name)};
   if ($('#pTotp').value.trim()) body.totp_secret = $('#pTotp').value.trim();
-  const known = KN && KN_PID === PID;          // the roles were shown: the account is for the checked ones
+  const known = KN && KN_PID === PID;          // the roles were shown: the user has the checked ones
   if (known) body.roles = [...$$('#accRolePick input:checked')].map(c => c.value);
   Object.assign(body, extra);
   const r = ACC_EDIT ? await api('PUT', `/api/projects/${PID}/accounts/${ACC_EDIT}`, body)
                      : await api('POST', `/api/projects/${PID}/accounts`, body);
-  if (known && body.roles) {                   // the same in the model being edited, so saving it keeps the link
-    if (KN_DIRTY) readKnowledge();
-    KN.roles.forEach(x => { x.account = body.roles.includes(x.id) ? r.id : x.account === r.id ? '' : x.account; });
-    if (KN_DIRTY) (KN.role_accounts || []).forEach(x => {     // not reloaded while the model has unsaved edits
-      if (body.roles.includes(x.id)) Object.assign(x, {account: r.id, account_name: body.name, guest: false,
-        ok: !!body.username, problem: body.username ? '' : `у учётной записи «${body.name}» не задан логин`});
-      else if (x.account === r.id) Object.assign(x, {account: '', account_name: '', ok: x.guest, problem: x.guest ? '' : 'учётная запись не заведена'});
+  if (known && body.roles && KN_DIRTY) {       // the model has unsaved edits: the same links there, so saving it keeps them
+    readKnowledge();
+    const have = new Set((PROJ.accounts || []).map(a => a.id).concat(r.accounts.map(a => a.id), ['none']));
+    KN.roles.forEach(x => {
+      if (body.roles.includes(x.id) && !have.has(x.account)) x.account = r.id;
+      else if (!body.roles.includes(x.id) && x.account === r.id) x.account = r.accounts.find(a => a.id !== r.id && a.roles.includes(x.id))?.id || '';
     });
   }
   await refreshProject();
@@ -4297,8 +4305,8 @@ async function deleteAccount(id) {
   try {
     await api('DELETE', `/api/projects/${PID}/accounts/${id}`);
     if (ACC_EDIT === id) ACC_EDIT = null;
-    if (KN && KN_PID === PID) {               // its roles have no account now, in the model being edited too
-      if (KN_DIRTY) readKnowledge();
+    if (KN && KN_PID === PID && KN_DIRTY) {   // its roles have no account now, in the model being edited too
+      readKnowledge();
       KN.roles.forEach(x => { if (x.account === id) x.account = ''; });
     }
     await refreshProject(); renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
@@ -4307,16 +4315,11 @@ async function deleteAccount(id) {
 }
 $('#accAdd').onclick = () => editAccount('');
 $('#accParamAdd').onclick = () => { addParamRow(); $('#accParams .acc-param:last-child .ap-name').focus(); };
-$('#accCancel').onclick = () => { ACC_EDIT = null; ACC_LINK = null; renderAccounts(); };
+$('#accCancel').onclick = () => { ACC_EDIT = null; renderAccounts(); };
 $('#pcSave').onclick = async () => {
   try {
-    const r = await saveAccount();
-    const link = ACC_LINK && KN?.data.find(d => d.id === ACC_LINK);
-    if (link) {                  // the stand data record is this account now
-      link.account = r.id;
-      if (KN_DIRTY) knSetDirty(); else { KN = await api('PUT', `/api/projects/${PID}/knowledge`, KN); KN_DIRTY = false; }
-    }
-    ACC_EDIT = null; ACC_LINK = null; renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
+    await saveAccount();
+    ACC_EDIT = null; renderAccounts(); fillAccountSelect($('#fAccount'), $('#fAccount').value);
     loadKnowledge();
     $('#pcMsg').textContent = 'Сохранено';
   } catch (e) { $('#pcMsg').textContent = e.message; }
@@ -4946,7 +4949,7 @@ const KN_FIELDS = {
   roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Описание', ''], ['account', 'Учётная запись проекта', ''],
           ['capabilities', 'Может', 'создаёт товары и категории, отправляет оплаченные заказы'], ['restrictions', 'Не может', 'оплачивать заказы, менять чужие профили']],
   data: [['entity', 'Сущность', 'Товар'], ['name', 'Объект', 'Тестовый товар А'], ['details', 'Подробности', 'категория «Категория 1», цена 1000'],
-         ['state', 'Состояние', 'в наличии'], ['role', 'Роли (через запятую)', 'Покупатель, Менеджер магазина'], ['account', 'Учётная запись', ''],
+         ['state', 'Состояние', 'в наличии'],
          ['status', 'Где', ''], ['source', 'Найдено', '']],
   memory: [['text', 'Факт', ''], ['source', 'Источник', ''], ['at', 'Когда', '']],
 };
@@ -4975,9 +4978,8 @@ const KN_LISTS = {
   roles: {cols: ['name', 'capabilities', 'account'], filters: () => [
     ['acc', 'Учётная запись', yesNo('привязана', 'не привязана'), (x, v) => !!x.account === (v === 'yes')],
     ['cap', 'Возможности', yesNo('описаны', 'не описаны'), (x, v) => !!x.capabilities === (v === 'yes')]]},
-  data: {cols: ['name', 'state', 'role', 'account', 'status', 'source'], filters: () => [
+  data: {cols: ['name', 'state', 'details', 'status', 'source'], filters: () => [
     ['entity', 'Категория', [['', 'все'], ...knCategories().map(e => [e, e || 'без категории'])], (x, v) => (x.entity || '') === v],
-    ['acc', 'Учётная запись', yesNo('есть', 'нет'), (x, v) => !!x.account === (v === 'yes')],
     ['status', 'Где', [['', 'все'], ['stand', 'на стенде'], ['needed', 'нужны сценариям']], (x, v) => (x.status === 'needed') === (v === 'needed')],
     ['src', 'Источник', [['', 'все'], ['manual', 'вручную'], ['auto', 'найдено автоматически']], (x, v) => !!x.source === (v === 'auto')]]},
   memory: {cols: ['text', 'source', 'at'], filters: () => [
@@ -5019,7 +5021,8 @@ async function loadKnowledge() {
   if (!PID) return;
   if (KN && KN_PID === PID && KN_DIRTY) { renderKnowledge(); return; }   // what was typed stays until it is saved
   let doc;
-  try { doc = await api('GET', `/api/projects/${PID}/knowledge`); } catch (e) { $('#knMsg').textContent = e.message; return; }
+  try { doc = await api('GET', `/api/projects/${PID}/knowledge`); await refreshProject(); }   // users found by tests are accounts
+  catch (e) { $('#knMsg').textContent = e.message; return; }
   if (KN_PID !== PID) Object.keys(KN_UI).forEach(k => delete KN_UI[k]);
   KN = doc; KN_PID = PID; KN_DIRTY = false; KN_DUPS = null;
   renderKnowledge();
@@ -5108,20 +5111,15 @@ function knCategories() {
   const order = KN.entities.map(e => e.name), have = new Set(KN.data.map(d => d.entity || ''));
   return [...order.filter(n => have.has(n)), ...[...have].filter(n => !order.includes(n)).sort((a, b) => !a - !b || a.localeCompare(b))];
 }
-// a user one can log in as: a record of a role, with an email, or of an entity of users
-const KN_USERISH = /польз|user|аккаунт|account|учётн|учетн|игрок|player|клиент|customer|покупател|сотрудник|employee|участник|member|админ/i;
-const knIsUser = x => !!x.account || KN_USERISH.test(x.entity || '') || /\S+@\S+\.\w+/.test(`${x.name} ${x.details}`);
 function knRenderCats() {
   const st = knUi('data'), cats = knCategories(), n = c => KN.data.filter(d => (d.entity || '') === c).length;
-  const accs = KN.data.filter(d => d.account).length;
   $('#knCats-data').innerHTML = KN.data.length < 2 ? '' :
-    `<button class="${!st.f.entity && !st.f.acc ? 'on' : ''}" data-cat="*">Все · ${KN.data.length}</button>` +
-    `<button class="cat-acc ${st.f.acc === 'yes' ? 'on' : ''}" data-cat="#acc" title="Записи, под которыми тесты входят в приложение">Учётные записи · ${accs}</button>` +
-    cats.map(c => `<button class="${st.f.entity === c && !st.f.acc ? 'on' : ''}" data-cat="${esc(c)}">${esc(c || 'без категории')} · ${n(c)}</button>`).join('');
+    `<button class="${!st.f.entity ? 'on' : ''}" data-cat="*">Все · ${KN.data.length}</button>` +
+    cats.map(c => `<button class="${st.f.entity === c ? 'on' : ''}" data-cat="${esc(c)}">${esc(c || 'без категории')} · ${n(c)}</button>`).join('');
   $$('#knCats-data [data-cat]').forEach(b => b.onclick = () => {
     readKnowledge();
     const c = b.dataset.cat;
-    st.f = c === '*' ? {} : c === '#acc' ? {acc: 'yes'} : {entity: c}; st.page = 0;
+    st.f = c === '*' ? {} : {entity: c}; st.page = 0;
     knBar('data'); knRenderList('data');
   });
 }
@@ -5131,6 +5129,7 @@ $('#knSort').onclick = async () => {
   try {
     await knSaveFirst();
     const r = await api('POST', `/api/projects/${PID}/knowledge/sort`, {all: true});
+    await refreshProject();
     KN = r; renderKnowledge();
     const s = r.sorting;
     $('#knSortMsg').innerHTML = !s.checked ? 'Разбирать нечего: у всех записей понятный раздел.'
@@ -5140,19 +5139,6 @@ $('#knSort').onclick = async () => {
 function knGoSorted() {      // the updates the sorting asks a person about
   const st = knUi('pending'); st.f = {match: 'sort'}; st.q = ''; st.page = 0;
   showSub('data', 'pending'); knBar('pending'); knRenderList('pending');
-}
-function knDataAccount(i) {     // a user found on the stand becomes a project account of its role
-  readKnowledge();
-  const x = KN.data[i], email = `${x.name} ${x.details}`.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/)?.[0] || '';
-  showSub('data', 'accounts');
-  editAccount('');
-  ACC_LINK = x.id;
-  $('#accName').value = x.name; $('#pLogin').value = email; $('#accDefault').checked = false;
-  const names = (x.role || '').split(/[,;]/).map(r => r.trim().toLowerCase()).filter(Boolean);   // a user may have several
-  const ids = KN.roles.filter(r => names.includes((r.name || '').toLowerCase())).map(r => r.id);
-  $$('#accRolePick input').forEach(c => { if (ids.includes(c.value)) c.checked = true; });
-  $('#pcMsg').textContent = `Учётная запись для «${x.name}»: введите пароль и сохраните.`;
-  (email ? $('#pPass') : $('#pLogin')).focus();
 }
 
 function knRenderList(list) {
@@ -5183,7 +5169,6 @@ function knRenderList(list) {
       return head(x) + `<tr class="${open ? 'sel' : ''}">${cols.map(k => `<td class="cut" title="${esc(knText(k, x[k]))}">${k !== 'name' ? esc(knText(k, x[k]))
           : `<a href="#" onclick="knToggle('${list}', '${x.id}'); return false">${esc(knText(k, x[k]) || '(без названия)')}</a>`}</td>`).join('')}
         <td style="white-space:nowrap;text-align:right">${pend.has(x.id) ? `<a href="#" class="badge warn" onclick="knGoPending('${list}', '${x.id}'); return false" title="Есть обновление, ожидающее подтверждения">обновление</a>` : ''}
-          ${list === 'data' && !x.account && knIsUser(x) && canRole('owner') ? `<button class="linkbtn" onclick="knDataAccount(${i})" title="Сделать учётной записью проекта своей роли">→ учётная запись</button>` : ''}
           <button class="linkbtn" onclick="knToggle('${list}', '${x.id}')">${open ? 'свернуть' : 'изменить'}</button>
           <button class="linkbtn" onclick="knDel('${list}', ${i})">удалить</button></td></tr>` +
         (open ? `<tr class="kn-edit"><td colspan="${cols.length + 1}">${knEditor(list, x, i)}</td></tr>` : '');
@@ -5260,13 +5245,14 @@ function knRenderPending() {
             : p.match === 'sort' ? '<span class="badge warn" title="Разбор по разделам: модель не уверена, куда отнести запись">разбор: нужно подтверждение</span>' : '<span class="badge">то же имя</span>'}
           ${t ? '' : '<span class="badge bad" title="Запись удалили после находки: «Обновить» добавит её заново">запись удалена</span>'}
           <span class="muted grow" style="font-size:12px;text-align:right">${esc(p.source || '')} · ${fmtTime(p.at)}</span></div>
-        <table class="diff"><thead><tr><th>Поле</th><th>Сейчас</th><th>Станет</th></tr></thead><tbody>${Object.entries(p.changes).map(([k, v]) =>
-          `<tr><td>${knColLabel(p.kind, k)}</td><td class="old">${esc(knText(k, t ? t[k] : p.before?.[k]) || '—')}</td><td class="new">${esc(knText(k, v) || '—')}</td></tr>`).join('')}</tbody></table>
+        <table class="diff"><thead><tr><th>Поле</th><th>Сейчас</th><th>Станет</th></tr></thead><tbody>${Object.entries(p.changes).map(([k, v]) => k === 'move'
+          ? `<tr><td>Раздел</td><td class="old">Данные стенда</td><td class="new">Учётные записи${p.roles?.length ? ` (роли: ${esc(p.roles.join(', '))})` : ''}</td></tr>`
+          : `<tr><td>${knColLabel(p.kind, k)}</td><td class="old">${esc(knText(k, t ? t[k] : p.before?.[k]) || '—')}</td><td class="new">${esc(knText(k, v) || '—')}</td></tr>`).join('')}</tbody></table>
         ${p.reason ? `<div class="hint">Почему: ${esc(p.reason)}</div>` : ''}
         <div class="row" style="margin-top:6px;gap:6px"><span class="grow"></span>
           ${p.match === 'similar' ? `<button class="btn small" onclick="knResolve('separate', ['${p.id}'])" title="Похожее имя означает другой объект: добавить его новой записью">Добавить отдельно</button>` : ''}
-          <button class="btn small" onclick="knResolve('reject', ['${p.id}'])">Отклонить</button>
-          <button class="btn small primary" onclick="knResolve('accept', ['${p.id}'])">Обновить</button></div></div>`;
+          <button class="btn small" onclick="knResolve('reject', ['${p.id}'])">${'move' in p.changes ? 'Оставить в данных' : 'Отклонить'}</button>
+          <button class="btn small primary" onclick="knResolve('accept', ['${p.id}'])">${'move' in p.changes ? 'Перенести в учётные записи' : 'Обновить'}</button></div></div>`;
     }).join('') + pager;
   knWirePager('pending');
 }
@@ -5279,6 +5265,7 @@ async function knResolve(action, ids) {
   try {
     await knSaveFirst();
     KN = await api('POST', `/api/projects/${PID}/knowledge/pending`, ids ? {action, ids} : {action, all: true});
+    await refreshProject();      // a user moved from the stand data is a project account now
     renderKnowledge();
     $('#knMsg').textContent = `${{accept: 'Обновлено', reject: 'Отклонено', separate: 'Добавлено отдельно'}[action]}: ${n}`;
   } catch (e) { alert(e.message); }
