@@ -356,7 +356,7 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 - `testgen/mutations.py` — мутационное тестирование проверок: мутанты `noop_action`, `assertion`,
   `api_500` применяются хуками раннера, у API-теста — `api_field`/`api_status` (ответ подменяется в
   `steps.run_api` через `options["mutate_response"]`); результат в `test["verify"]`; `improvement_task()` — задача агенту.
-- `testgen/explorer.py` — Planner: обход сайта по ссылкам (только GET, без форм; `SKIP` — выход,
+- `testgen/explorer.py` — Planner: обход по ссылкам только переданной страницы и дочерних (`_in_scope`: путь под начальным; от корня — весь сайт; запросы страниц — в каталог API, `explore["api"]`; только GET, без форм; `SKIP` — выход,
   удаление, файлы), карта в `data/projects/<id>/explore/`, `to_requirements()` для сценариев,
   `coverage()` — страницы без тестов.
 - `testgen/traffic.py` — XHR/fetch сессии автора: маскирование, HAR в `data/projects/<id>/traffic/`,

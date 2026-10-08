@@ -6,7 +6,9 @@ fields, buttons, links and a text excerpt. The map becomes plain-text
 "requirements" that go into the usual scenarios.generate, so the rest of the
 pipeline (authoring, runs, publishing) works as with a Jira ticket.
 
-It only ever follows <a href> links with GET on the same site: no clicks, no
+Only the given page and its child pages are explored: links of the same site
+whose path lies under the start path (/catalog -> /catalog/42, not /admin); from
+the site root that is the whole site. It only ever follows <a href> links with GET: no clicks, no
 form submissions, and links that look like they change state (log out, delete,
 unsubscribe...) or download files are skipped - the same "no irreversible
 actions" rule the authoring agent follows. To explore behind a login, the
@@ -78,6 +80,18 @@ def _same_site(url: str, start: str) -> bool:
     return urlparse(url).netloc == urlparse(start).netloc
 
 
+def _in_scope(url: str, start: str) -> bool:
+    """The start page or one of its child pages: the same site, the path under the start path
+    (a file such as /app/index.html stands for its folder /app)."""
+    if not _same_site(url, start):
+        return False
+    base = urlparse(start).path.rstrip("/")
+    if "." in base.rsplit("/", 1)[-1]:
+        base = base.rsplit("/", 1)[0]
+    path = urlparse(url).path.rstrip("/")
+    return not base or path == base or path.startswith(base + "/")
+
+
 def _dir(pid: str):
     return projects.path(pid) / "explore"
 
@@ -121,7 +135,7 @@ async def learn_model(project: dict, result: dict, log=None) -> None:
 
 
 async def explore(project: dict, url: str = "", log=None, state: dict | None = None, learn: bool = False) -> dict:
-    """Crawl the site -> the map (also saved as the project's latest map). `learn`: then the
+    """Crawl the start page and its child pages -> the map (also saved as the project's latest map). `learn`: then the
     application model learns from it (learn_model)."""
     cfg = project["pipeline"]["explore"]
     start = _norm(url or project.get("base_url") or "")
@@ -147,7 +161,7 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
             if link in seen:
                 continue
             seen.add(link)
-            if not _same_site(link, start) or SKIP.search(link):
+            if not _in_scope(link, start) or SKIP.search(link):
                 result["skipped"] += 1
                 continue
             page = {"url": link, "depth": depth}
@@ -227,7 +241,7 @@ def to_requirements(result: dict) -> str:
         if p.get("buttons"):
             block.append("Кнопки: " + ", ".join(p["buttons"]))
         targets = sorted({urlparse(a["href"]).path or "/" for a in p.get("links", [])
-                          if _same_site(a["href"], result["start"])} - {path})
+                          if _in_scope(a["href"], result["start"])} - {path})
         if targets:
             block.append("Ссылки на: " + ", ".join(targets[:30]))
         if p.get("text"):
