@@ -985,6 +985,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="card">
           <h3>Эндпоинты</h3>
           <div class="muted">Запросы, которые приложение делает в UI-тестах (запись трафика при генерации) и при обходе Planner, сгруппированные по методу и пути (<code>{id}</code> — идентификатор объекта). Их получают генерация API-сценариев и агент, который пишет API-тест. Значения полей не хранятся — только их названия и статусы ответов.</div>
+          <div class="row" style="margin-top:8px">
+            <input id="apiFilter" class="grow" placeholder="Поиск по пути и полям: orders, status, {id}…">
+            <select id="apiFilterMethod" style="width:auto"><option value="">все методы</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+            <select id="apiFilterStatus" style="width:auto"><option value="">все ответы</option><option value="ok">успешные (2xx/3xx)</option><option value="err">с ошибками (4xx/5xx)</option></select>
+            <span class="muted" id="apiFilterCount" style="font-size:12px"></span></div>
           <div id="apiEndpoints" style="margin-top:8px"></div>
         </div>
       </div>
@@ -3985,14 +3990,29 @@ async function loadApi() {
   API_AUTH_SHOWN();
   const can = canRole('editor');
   $$('[data-subpanel="api"] input, [data-subpanel="api"] select, [data-subpanel="api"] textarea, #apiSave, #apiCheck, #apiTokenClear').forEach(x => x.disabled = !can);
+  $$('#apiFilter, #apiFilterMethod, #apiFilterStatus').forEach(x => x.disabled = false);     // filtering is for everyone
   $('#apiMsg').textContent = can ? '' : 'Настройки API меняют редакторы проекта.';
-  const eps = d.endpoints;
-  $('#apiEndpoints').innerHTML = eps.length ? `<table><thead><tr><th>Запрос</th><th>Ответы</th><th>Поля запроса</th><th>Поля ответа</th></tr></thead><tbody>` +
-    eps.map(e => `<tr><td class="loc"><b>${esc(e.method)}</b> ${esc(e.path)}${e.query.length ? `<span class="muted">?${esc(e.query.join('&'))}</span>` : ''}</td>
-      <td>${e.statuses.map(x => `<span class="badge ${x >= 400 ? 'bad' : 'ok'}">${x}</span>`).join(' ')}</td>
-      <td class="muted">${esc(e.request.join(', '))}</td><td class="muted">${esc(e.response.join(', '))}</td></tr>`).join('') + '</tbody></table>'
-    : '<div class="hint">Пока пусто: эндпоинты появятся, когда агент запишет UI-тест (встроенный движок) или Planner исследует сайт.</div>';
+  API_EPS = d.endpoints;
+  renderApiEndpoints();
 }
+// the endpoints table with its filter: text (path, query and field names), method, answers
+let API_EPS = [];
+function renderApiEndpoints() {
+  const q = $('#apiFilter').value.trim().toLowerCase(), method = $('#apiFilterMethod').value, st = $('#apiFilterStatus').value;
+  const eps = API_EPS.filter(e => (!method || e.method === method)
+    && (!st || (st === 'err' ? e.statuses.some(x => x >= 400) : e.statuses.some(x => x < 400)))
+    && (!q || [e.path, ...e.query, ...e.request, ...e.response].some(x => String(x).toLowerCase().includes(q))));
+  $('#apiFilterCount').textContent = API_EPS.length ? `показано ${eps.length} из ${API_EPS.length}` : '';
+  $$('#apiFilter, #apiFilterMethod, #apiFilterStatus').forEach(x => x.closest('.row').classList.toggle('hidden', !API_EPS.length));
+  $('#apiEndpoints').innerHTML = !API_EPS.length
+    ? '<div class="hint">Пока пусто: эндпоинты появятся, когда агент запишет UI-тест (встроенный движок) или Planner исследует сайт.</div>'
+    : !eps.length ? '<div class="hint">Под фильтр ничего не подходит.</div>'
+    : `<table><thead><tr><th>Запрос</th><th>Ответы</th><th>Поля запроса</th><th>Поля ответа</th></tr></thead><tbody>` +
+      eps.map(e => `<tr><td class="loc"><b>${esc(e.method)}</b> ${esc(e.path)}${e.query.length ? `<span class="muted">?${esc(e.query.join('&'))}</span>` : ''}</td>
+        <td>${e.statuses.map(x => `<span class="badge ${x >= 400 ? 'bad' : 'ok'}">${x}</span>`).join(' ')}</td>
+        <td class="muted">${esc(e.request.join(', '))}</td><td class="muted">${esc(e.response.join(', '))}</td></tr>`).join('') + '</tbody></table>';
+}
+$('#apiFilter').oninput = $('#apiFilterMethod').onchange = $('#apiFilterStatus').onchange = renderApiEndpoints;
 function apiBody() {
   return {base_url: $('#apiBase').value.trim(), auth: $('#apiAuth').value, header: $('#apiHeader').value.trim(), token: $('#apiToken').value,
     login: {method: $('#apiLoginMethod').value, path: $('#apiLoginPath').value.trim(), body: $('#apiLoginBody').value.trim(),
