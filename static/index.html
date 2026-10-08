@@ -4513,7 +4513,7 @@ async function toggleSkill(name, cb) {
   } catch (e) { cb.checked = !cb.checked; $('#skMsg').textContent = e.message; }
 }
 $('#skEnabled').onchange = () => SKILL?.name && toggleSkill(SKILL.name, $('#skEnabled'));
-function renderSlots(used, editable) {
+function renderSkillSlots(used, editable) {
   $('#skSlots').innerHTML = Object.entries(SKILL_SLOTS).map(([k, t]) =>
     `<label class="inline"><input type="checkbox" value="${k}" ${used.includes(k) ? 'checked' : ''} ${editable ? '' : 'disabled'}> ${esc(t)}</label>`).join('');
 }
@@ -4548,7 +4548,7 @@ async function openSkill(name, version) {
   $('#skGroup').title = readonly ? 'Группу встроенного скилла можно поменять в его локальной копии' : '';
   $('#skEnabled').checked = info.enabled; $('#skEnabled').disabled = !owner;
   $('#skEnabled').parentElement.classList.remove('hidden');
-  renderSlots(info.used_in, owner);
+  renderSkillSlots(info.used_in, owner);
   $('#skSlotsHint').textContent = 'Отметка сразу сохраняется в настройках процесса проекта.';
   $('#skBadges').innerHTML = !SKILL.builtin ? '<span class="badge ok">скилл проекта</span>'
     : SKILL.local ? '<span class="badge warn">локальная копия</span>' : '<span class="badge off">встроенный · только чтение</span>';
@@ -4589,7 +4589,7 @@ function newSkill(name, text) {
   $('#skGroup').value = text ? (text.match(/^group:\s*([^\r\n]+)/m)?.[1].trim() || group) : group;
   $('#skText').value = withGroup($('#skText').value, $('#skGroup').value);
   $('#skEnabled').parentElement.classList.add('hidden');
-  renderSlots([], true);
+  renderSkillSlots([], true);
   $('#skSlotsHint').textContent = 'Отмеченные этапы получат скилл после сохранения.';
   $('#skBadges').innerHTML = ''; $('#skDelete').classList.add('hidden'); $('#skDownload').classList.add('hidden');
   $('#skSave').classList.remove('hidden'); $('#skClone').classList.add('hidden');
