@@ -244,6 +244,25 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .kn-cats{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .kn-cats button{padding:3px 10px;font-size:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);cursor:pointer}
 .kn-cats button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.lc-box{margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto}
+.lc-row{display:flex;gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px dashed var(--line)}
+.lc-row:last-child{border-bottom:none}
+.lc-row>b{min-width:140px;cursor:pointer}
+.lc-chain{display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin:2px 0}
+.lc-st{font-size:11px;padding:1px 7px;border:1px solid var(--accent);border-radius:10px;color:var(--accent);white-space:nowrap}
+.lc-chain i{font-style:normal;color:var(--muted);font-size:11px}
+.lc-graph{position:relative;display:inline-flex;gap:56px;align-items:center;min-width:100%}
+.lc-col{display:flex;flex-direction:column;gap:14px}
+.lc-node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:var(--panel);min-width:150px;max-width:280px;cursor:pointer;font-size:13px}
+.lc-node>b{display:block}
+.lc-node:hover{border-color:var(--accent)}
+.lc-node.missing{border-style:dashed;color:var(--muted);cursor:default}
+.lc-node .muted,.lc-node .lc-f{font-size:12px}
+.lc-f b{font-weight:600;color:var(--muted)}
+.lc-svg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.lc-svg path{fill:none;stroke:var(--muted);stroke-width:1.3}
+.lc-svg marker path{fill:var(--muted);stroke:none}
+.lc-svg text{font-size:11px;fill:var(--warn);paint-order:stroke;stroke:var(--panel);stroke-width:4px}
 .kn-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:10px 0 4px}
 .kn-tile{border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;background:none;text-align:left;font:inherit;color:inherit}
 .kn-tile:hover{border-color:var(--accent)}
@@ -1148,6 +1167,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="card" id="knConfirmBox">
             <h3>Подтверждение жизненного цикла системы</h3>
             <div class="hint">Перед генерацией тестов человек проверяет и подтверждает модель: сущности и их зависимости, статусы и переходы (кто их выполняет), роли с возможностями и ограничениями. Без подтверждения конвейер ждёт, а «Тест в Studio» из сценария не запускается. Изменение сущностей, жизненного цикла или ролей требует нового подтверждения; данные стенда и память меняются свободно.</div>
+            <div class="kn-cats" id="lcLevels" title="Детализация диаграммы"></div>
+            <div id="lcDiagram" class="lc-box"></div>
             <div class="row" style="margin-top:8px"><span class="grow" id="knConfirmState"></span><button class="btn primary" id="knConfirm">Подтвердить жизненный цикл</button></div>
           </div>
         </div>
@@ -5011,8 +5032,114 @@ function renderKnConfirm() {
   $('#knConfirm').textContent = c.state === 'confirmed' ? 'Подтвердить заново' : 'Подтвердить жизненный цикл';
 }
 
+// the lifecycle of the system as a diagram, from the simplest view to the one with dependencies and settings:
+// simple - the states of every entity; deps - entities in the order they are created, arrows from what must exist
+// first; full - plus the settings of dependencies («Товар (в наличии)»), who creates, rules, roles
+const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: настройки и роли']];
+const lcNorm = s => (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[«»"'“”]/g, '').trim();
+const lcStem = s => lcNorm(s).replace(/[аеиоуыьяйю]+$/, '');
+const lcChains = text => (text || '').split(/[;\n]+/)
+  .map(seg => seg.split(/\s*(?:→|->|=>)\s*/).map(s => s.trim()).filter(Boolean)).filter(c => c.length);
+function lcDep(text) {      // «Товар (в наличии)» -> the entity and the setting it must have
+  const m = text.match(/^(.*?)\s*\((.*)\)\s*$/);
+  return m ? {name: m[1].trim(), setting: m[2].trim()} : {name: text.trim(), setting: ''};
+}
+function lcFind(name) {
+  const n = lcNorm(name), s = lcStem(name);
+  return KN.entities.find(e => lcNorm(e.name) === n) || (s.length > 2 && KN.entities.find(e => lcStem(e.name) === s)) || null;
+}
+function lcChainHtml(text) {
+  const chains = lcChains(text);
+  return chains.length ? chains.map(c => `<div class="lc-chain">${c.map(s => `<span class="lc-st">${esc(s)}</span>`).join('<i>→</i>')}</div>`).join('')
+    : '<span class="muted" style="font-size:12px">жизненный цикл не описан</span>';
+}
+// entities in columns: an entity stands to the right of everything it requires; unknown requirements are dashed nodes
+function lcLayout() {
+  const nodes = KN.entities.filter(e => e.name).map(e => ({e, id: e.id, deps: []})), byId = {}, missing = {};
+  nodes.forEach(n => byId[n.id] = n);
+  for (const n of nodes) for (const d of n.e.depends_on || []) {
+    const {name, setting} = lcDep(d), to = lcFind(name);
+    if (to && to.id === n.id) continue;
+    let from = to && byId[to.id];
+    if (!from) from = missing[lcNorm(name)] ||= {missing: true, id: 'x' + Object.keys(missing).length, name, deps: []};
+    n.deps.push({from, setting});
+  }
+  const all = [...nodes, ...Object.values(missing)], level = new Map();
+  const depth = (n, seen = new Set()) => {
+    if (level.has(n)) return level.get(n);
+    if (seen.has(n)) return 0;          // a cycle: stop here
+    seen.add(n);
+    const l = n.deps.length ? 1 + Math.max(...n.deps.map(d => depth(d.from, seen))) : 0;
+    level.set(n, l); return l;
+  };
+  all.forEach(n => depth(n));
+  const cols = [];
+  all.forEach(n => (cols[level.get(n)] ||= []).push(n));
+  const pos = new Map();
+  cols.forEach(col => {          // fewer crossings: a node goes near the average place of what it requires
+    const at = n => n.deps.length ? n.deps.reduce((s, d) => s + (pos.get(d.from) ?? 0), 0) / n.deps.length : -1;
+    col.sort((a, b) => at(a) - at(b));
+    col.forEach((n, i) => pos.set(n, i));
+  });
+  return cols.filter(Boolean);
+}
+function lcNode(n, level) {
+  if (n.missing) return `<div class="lc-node missing" data-lc="${n.id}" title="Такой сущности нет в модели: добавьте её в разделе «Сущности»">${esc(n.name)}<div style="font-size:11px">нет в модели</div></div>`;
+  const e = n.e, f = (label, v) => v ? `<div class="lc-f"><b>${label}:</b> ${esc(v)}</div>` : '';
+  return `<div class="lc-node" data-lc="${n.id}" onclick="knOpenEntity('${e.id}')" title="Открыть сущность">
+    <b>${esc(e.name)}</b>${level === 'full' && e.description ? `<div class="muted">${esc(e.description)}</div>` : ''}
+    ${lcChainHtml(e.lifecycle)}
+    ${level === 'full' ? f('Требует', (e.depends_on || []).join(', ')) + f('Кто создаёт', e.create) + f('Правила', e.rules) : ''}</div>`;
+}
+function lcRender() {
+  if (!KN) return;
+  const level = store.get('tg_lc_level') || 'simple', box = $('#lcDiagram');
+  $('#lcLevels').innerHTML = LC_LEVELS.map(([k, t]) => `<button class="${k === level ? 'on' : ''}" data-lc-level="${k}">${t}</button>`).join('');
+  $$('#lcLevels [data-lc-level]').forEach(b => b.onclick = () => { store.set('tg_lc_level', b.dataset.lcLevel); readKnowledge(); lcRender(); });
+  if (!KN.entities.some(e => e.name)) {
+    box.innerHTML = '<div class="hint">Сущностей пока нет: постройте модель из требований или добавьте их в разделе «Сущности».</div>';
+    return;
+  }
+  const cols = lcLayout();
+  if (level === 'simple') {
+    box.innerHTML = cols.flat().filter(n => !n.missing).map(n => `<div class="lc-row"><b onclick="knOpenEntity('${n.e.id}')" title="Открыть сущность">${esc(n.e.name)}</b>
+      <div>${lcChainHtml(n.e.lifecycle)}</div></div>`).join('');
+    return;
+  }
+  const roles = level === 'full' && KN.roles.length ? `<table class="kn-table" style="margin-top:12px"><thead><tr><th>Роль</th><th>Может</th><th>Не может</th><th>Учётная запись</th></tr></thead><tbody>${
+    KN.roles.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.capabilities || '')}</td><td>${esc(r.restrictions || '')}</td><td>${esc(knText('account', r.account)) || '<span class="badge warn">нет</span>'}</td></tr>`).join('')}</tbody></table>` : '';
+  box.innerHTML = `<div class="lc-graph">${cols.map(col => `<div class="lc-col">${col.map(n => lcNode(n, level)).join('')}</div>`).join('')}
+    <svg class="lc-svg"><defs><marker id="lcArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs></svg></div>` + roles;
+  const graph = box.querySelector('.lc-graph');
+  graph._edges = cols.flat().flatMap(n => n.deps.map(d => [d.from.id, n.id, level === 'full' ? d.setting : '']));
+  lcEdges(graph);
+  (window.LC_RO ||= new ResizeObserver(es => es.forEach(x => lcEdges(x.target)))).observe(graph);
+}
+function lcEdges(graph) {      // arrows from what must exist first to what requires it, drawn once the boxes have a size
+  const svg = graph.querySelector('svg'), g = graph.getBoundingClientRect();
+  if (!svg || !g.width) return;
+  svg.setAttribute('width', graph.scrollWidth); svg.setAttribute('height', graph.scrollHeight);
+  const r = id => graph.querySelector(`[data-lc="${id}"]`).getBoundingClientRect();
+  svg.querySelectorAll('.lc-e').forEach(x => x.remove());
+  svg.insertAdjacentHTML('beforeend', graph._edges.map(([from, to, setting]) => {
+    const a = r(from), b = r(to), x1 = a.right - g.left, y1 = a.top + a.height / 2 - g.top, x2 = b.left - g.left - 2, y2 = b.top + b.height / 2 - g.top;
+    const dx = Math.max(20, (x2 - x1) / 2);
+    return `<path class="lc-e" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}" marker-end="url(#lcArrow)"/>` +
+      (setting ? `<text class="lc-e" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle">${esc(setting)}</text>` : '');
+  }).join(''));
+}
+function knOpenEntity(id) {     // a node of the diagram opens its entity for editing
+  readKnowledge();
+  const st = knUi('entities'), x = KN.entities.find(e => e.id === id);
+  if (!x) return;
+  st.f = {}; st.q = x.name || ''; st.page = 0; st.open.add(id);
+  showSub('data', 'entities');
+  knBar('entities'); knRenderList('entities');
+}
+
 function showKnSec(sec) {
   KN_SEC = sec;
+  if (sec === 'overview' && KN && KN_PID === PID) { readKnowledge(); lcRender(); }
   $$('[data-kn-sec]').forEach(p => p.classList.toggle('hidden', p.dataset.knSec !== sec));
   $('#knSaveBar').classList.toggle('hidden', ['pending', 'dups', 'accounts'].includes(sec));
   if (sec === 'dups' && KN && KN_PID === PID) knCheckDups();
@@ -5044,7 +5171,7 @@ function renderKnowledge() {
   $('#knEnts').innerHTML = KN.entities.map(e => e.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
   $('#knRoleNames').innerHTML = KN.roles.map(r => r.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
   for (const list of ['entities', 'roles', 'data', 'memory', 'pending', 'dups']) { knBar(list); knRenderList(list); }
-  renderKnConfirm(); knCounts(); renderAccounts();
+  renderKnConfirm(); knCounts(); renderAccounts(); lcRender();
   if (!KN_DIRTY) $('#knMsg').textContent = KN.updated ? `Изменено ${fmtTime(KN.updated)}${KN.updated_by ? ' · ' + KN.updated_by : ''}` : '';
 }
 function knCounts() {
