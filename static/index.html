@@ -244,25 +244,30 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .kn-cats{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .kn-cats button{padding:3px 10px;font-size:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);cursor:pointer}
 .kn-cats button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.lc-box{margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto}
+.lc-box{margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:72vh}
 .lc-row{display:flex;gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px dashed var(--line)}
 .lc-row:last-child{border-bottom:none}
-.lc-row>b{min-width:140px;cursor:pointer}
+.lc-row>b{min-width:140px;cursor:pointer;overflow-wrap:anywhere}
+.lc-row>div{min-width:0}
 .lc-chain{display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin:2px 0}
-.lc-st{font-size:11px;padding:1px 7px;border:1px solid var(--accent);border-radius:10px;color:var(--accent);white-space:nowrap}
+.lc-st{font-size:11px;padding:1px 7px;border:1px solid var(--accent);border-radius:10px;color:var(--accent);max-width:100%;box-sizing:border-box;overflow-wrap:anywhere}
 .lc-chain i{font-style:normal;color:var(--muted);font-size:11px}
-.lc-graph{position:relative;display:inline-flex;gap:56px;align-items:center;min-width:100%}
-.lc-col{display:flex;flex-direction:column;gap:14px}
-.lc-node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:var(--panel);min-width:150px;max-width:280px;cursor:pointer;font-size:13px}
+.lc-graph{position:relative;display:inline-flex;gap:120px;align-items:center;min-width:100%;padding:16px 8px}
+.lc-col{display:flex;flex-direction:column;gap:32px}
+.lc-node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:var(--panel);width:230px;box-sizing:border-box;cursor:pointer;font-size:13px;overflow-wrap:anywhere}
 .lc-node>b{display:block}
 .lc-node:hover{border-color:var(--accent)}
 .lc-node.missing{border-style:dashed;color:var(--muted);cursor:default}
 .lc-node .muted,.lc-node .lc-f{font-size:12px}
 .lc-f b{font-weight:600;color:var(--muted)}
 .lc-svg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
-.lc-svg path{fill:none;stroke:var(--muted);stroke-width:1.3}
-.lc-svg marker path{fill:var(--muted);stroke:none}
+.lc-svg path{fill:none;stroke:var(--muted);stroke-width:1.5;transition:opacity .15s}
+.lc-svg marker path{fill:context-stroke;stroke:none}
 .lc-svg text{font-size:11px;fill:var(--warn);paint-order:stroke;stroke:var(--panel);stroke-width:4px}
+.lc-graph.focus .lc-e{opacity:.1}
+.lc-graph.focus .lc-e.on{opacity:1}
+.lc-graph.focus path.lc-e.on{stroke-width:2.6}
+.lc-graph.focus .lc-node:not(.on){opacity:.45}
 .kn-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:10px 0 4px}
 .kn-tile{border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;background:none;text-align:left;font:inherit;color:inherit}
 .kn-tile:hover{border-color:var(--accent)}
@@ -5109,24 +5114,79 @@ function lcRender() {
   const roles = level === 'full' && KN.roles.length ? `<table class="kn-table" style="margin-top:12px"><thead><tr><th>Роль</th><th>Может</th><th>Не может</th><th>Учётная запись</th></tr></thead><tbody>${
     KN.roles.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.capabilities || '')}</td><td>${esc(r.restrictions || '')}</td><td>${esc(knText('account', r.account)) || '<span class="badge warn">нет</span>'}</td></tr>`).join('')}</tbody></table>` : '';
   box.innerHTML = `<div class="lc-graph">${cols.map(col => `<div class="lc-col">${col.map(n => lcNode(n, level)).join('')}</div>`).join('')}
-    <svg class="lc-svg"><defs><marker id="lcArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs></svg></div>` + roles;
+    <svg class="lc-svg"><defs><marker id="lcArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs></svg></div>` + roles;
   const graph = box.querySelector('.lc-graph');
   graph._edges = cols.flat().flatMap(n => n.deps.map(d => [d.from.id, n.id, level === 'full' ? d.setting : '']));
   lcEdges(graph);
   (window.LC_RO ||= new ResizeObserver(es => es.forEach(x => lcEdges(x.target)))).observe(graph);
 }
-function lcEdges(graph) {      // arrows from what must exist first to what requires it, drawn once the boxes have a size
+// arrows from what must exist first to what requires it, drawn once the boxes have a size: an arrow over several
+// columns passes them through the gaps between nodes, ends of several arrows are spread along the side of a node,
+// every source has its own colour, and hovering a node leaves only its arrows and neighbours
+function lcEdges(graph) {
   const svg = graph.querySelector('svg'), g = graph.getBoundingClientRect();
   if (!svg || !g.width) return;
   svg.setAttribute('width', graph.scrollWidth); svg.setAttribute('height', graph.scrollHeight);
-  const r = id => graph.querySelector(`[data-lc="${id}"]`).getBoundingClientRect();
+  const box = el => { const r = el.getBoundingClientRect(); return {l: r.left - g.left, r: r.right - g.left, t: r.top - g.top, b: r.bottom - g.top}; };
+  const at = {}, H = graph.scrollHeight;
+  const cols = [...graph.querySelectorAll('.lc-col')].map((c, ci) => {
+    const nodes = [...c.children].map(n => (at[n.dataset.lc] = {...box(n), col: ci}));
+    const gaps = [], ys = [0, ...nodes.flatMap(n => [n.t, n.b]), H];
+    for (let i = 0; i < ys.length; i += 2) gaps.push({t: ys[i], b: ys[i + 1], used: 0});
+    return {...box(c), gaps};
+  });
+  const edges = graph._edges.filter(([f, t]) => at[f] && at[t]).map(([from, to, setting]) => ({from, to, setting, a: at[from], b: at[to]}));
+  const mid = n => (n.t + n.b) / 2, spread = (list, end, other) => {
+    const groups = {};
+    list.forEach(e => (groups[e[end]] ||= []).push(e));
+    Object.values(groups).forEach(es => {
+      es.sort((x, y) => mid(x[other]) - mid(y[other]));
+      es.forEach((e, i) => { const n = e[end === 'from' ? 'a' : 'b']; e[end === 'from' ? 'y1' : 'y2'] = n.t + (n.b - n.t) * (0.2 + 0.6 * (i + 0.5) / es.length); });
+    });
+  };
+  spread(edges, 'from', 'b'); spread(edges, 'to', 'a');
+  const sources = [...new Set(edges.map(e => e.from))];
   svg.querySelectorAll('.lc-e').forEach(x => x.remove());
-  svg.insertAdjacentHTML('beforeend', graph._edges.map(([from, to, setting]) => {
-    const a = r(from), b = r(to), x1 = a.right - g.left, y1 = a.top + a.height / 2 - g.top, x2 = b.left - g.left - 2, y2 = b.top + b.height / 2 - g.top;
-    const dx = Math.max(20, (x2 - x1) / 2);
-    return `<path class="lc-e" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}" marker-end="url(#lcArrow)"/>` +
-      (setting ? `<text class="lc-e" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle">${esc(setting)}</text>` : '');
+  svg.insertAdjacentHTML('beforeend', edges.map(e => {
+    const pts = [[e.a.r, e.y1]];
+    for (let c = e.a.col + 1; c < e.b.col; c++) {      // through the free gap of every column in between
+      const want = e.y1 + (e.y2 - e.y1) * (c - e.a.col) / (e.b.col - e.a.col), col = cols[c];
+      const gap = col.gaps.filter(x => x.b - x.t > 10).sort((x, y) =>
+        Math.abs(Math.min(Math.max(want, x.t), x.b) - want) - Math.abs(Math.min(Math.max(want, y.t), y.b) - want))[0];
+      if (!gap) continue;
+      const k = gap.used++, off = (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 6;
+      const y = Math.min(Math.max(want, gap.t + 8), gap.b - 8) + off;
+      pts.push([col.l - 4, y], [col.r + 4, y]);
+    }
+    pts.push([e.b.l - 2, e.y2]);
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 1; i < pts.length; i++) {
+      const [xa, ya] = pts[i - 1], [xb, yb] = pts[i];
+      if (i % 2 === 0) { d += ` L${xb},${yb}`; continue; }    // straight through a column
+      const dx = Math.max(20, (xb - xa) / 2);
+      d += ` C${xa + dx},${ya} ${xb - dx},${yb} ${xb},${yb}`;
+    }
+    const color = `hsl(${(sources.indexOf(e.from) * 137.5) % 360} 60% 48%)`, [lx, ly] = pts[pts.length - 2], [ex, ey] = pts[pts.length - 1];
+    return `<path class="lc-e" data-from="${e.from}" data-to="${e.to}" style="stroke:${color}" d="${d}" marker-end="url(#lcArrow)"/>` +
+      (e.setting ? `<text class="lc-e" data-from="${e.from}" data-to="${e.to}" x="${(lx + ex) / 2}" y="${(ly + ey) / 2 - 4}" text-anchor="middle">${esc(e.setting)}</text>` : '');
   }).join(''));
+  lcFocus(graph, graph._focus);
+  if (graph._hover) return;
+  graph._hover = true;
+  graph.addEventListener('mouseover', ev => lcFocus(graph, ev.target.closest('.lc-node')?.dataset.lc));
+  graph.addEventListener('mouseleave', () => lcFocus(graph, null));
+}
+function lcFocus(graph, id) {     // the node under the mouse, its arrows and neighbours; the rest fades
+  graph._focus = id;
+  graph.classList.toggle('focus', !!id);
+  graph.querySelectorAll('.on').forEach(x => x.classList.remove('on'));
+  if (!id) return;
+  const near = new Set([id]);
+  graph.querySelectorAll('.lc-e').forEach(x => {
+    if (x.dataset.from !== id && x.dataset.to !== id) return;
+    x.classList.add('on'); near.add(x.dataset.from); near.add(x.dataset.to);
+  });
+  near.forEach(k => graph.querySelector(`[data-lc="${k}"]`)?.classList.add('on'));
 }
 function knOpenEntity(id) {     // a node of the diagram opens its entity for editing
   readKnowledge();
