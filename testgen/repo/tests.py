@@ -97,6 +97,15 @@ class Sql:
                                                             .where(cls.t.c.project_id == pid))}
 
     @classmethod
+    def data_refs(cls, pid: str) -> list[dict]:
+        """Tests of the project that use or create records of the application model: {id, name, data_refs}."""
+        t = cls.t
+        refs = t.c.body["data_refs"]
+        with db.engine().connect() as c:
+            return [{"id": r.id, "name": r.name or r.id, "data_refs": list(r.refs or [])} for r in c.execute(
+                select(t.c.id, t.c.name, refs.label("refs")).where(t.c.project_id == pid, t.c.body.has_key("data_refs")))]
+
+    @classmethod
     def counts(cls) -> dict[str, int]:
         with db.engine().connect() as c:
             return dict(c.execute(select(cls.t.c.project_id, func.count()).group_by(cls.t.c.project_id)).all())

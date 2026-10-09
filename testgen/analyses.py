@@ -4,6 +4,10 @@ Every "Generate scenarios" is kept: the requirements it was given, the scenarios
 designed from them (a person may edit, add and delete them) and, for each scenario,
 the tests generated from it (in the Studio or by "Generate all", a pipeline run).
 One document per analysis: data/projects/<id>/analyses/<analysis>.json.
+
+The test data of a scenario is recorded in the application model (knowledge.need, record_needs()) with
+the scenario's ref "<analysis>:<scenario>", and each item gets the id of its record (`record_id`): an edit
+of the scenario updates the model, a deleted scenario or analysis lets its records go (knowledge.release).
 """
 from __future__ import annotations
 
@@ -16,7 +20,8 @@ from . import fs, projects, reuse
 from .catalog import LAYERS, TYPES
 
 FIELDS = ("title", "type", "layer", "priority", "role", "preconditions", "instructions", "expected_result", "gherkin")
-DATA_FIELDS = ("entity", "name", "details", "state", "role")     # test data a scenario needs (scenarios.DataNeed)
+# Test data a scenario needs (scenarios.DataNeed) and the record of the application model that holds it.
+DATA_FIELDS = ("entity", "name", "details", "state", "role", "record_id")
 PRIORITIES = ("high", "medium", "low")
 STALE = 3600     # a "running" analysis older than this was cut off (the studio restarted)
 
@@ -114,6 +119,21 @@ def data_needs(value) -> list[dict]:
             if isinstance(d, dict) and str(d.get("entity") or "").strip() and str(d.get("name") or "").strip()]
 
 
+def record_needs(pid: str, aid: str, scids: list[str] | None = None) -> None:
+    """The test data of the analysis's scenarios (`scids`; None - all of them) into the application model
+    (when the project learns it): the records keep the scenarios that need them, the scenarios - the ids
+    of the records."""
+    from . import knowledge
+    if not projects.get(pid)["pipeline"]["requirements"].get("learn_model") or not fs.exists(_path(pid, aid)):
+        return
+
+    def fn(a):
+        chosen = [s for s in a["scenarios"] if not s.get("pending") and (scids is None or s["id"] in scids)]
+        if chosen:
+            knowledge.need(pid, [s | {"ref": f"{aid}:{s['id']}"} for s in chosen])     # sets record_id in place
+    _change(pid, aid, fn)
+
+
 def _new_scenario(data: dict) -> dict:
     return _fields(data) | {"id": _id(), "test_ids": []}
 
@@ -195,7 +215,11 @@ def update_scenario(pid: str, aid: str, scid: str, data: dict) -> dict:
                 s["test_ids"].append(s["match"]["id"])
         s.update(fields)
         return s
-    return _change(pid, aid, fn)
+    out = _change(pid, aid, fn)
+    if fields.keys() & {"test_data", "title", "role"}:       # what the scenario needs changed: the model too
+        record_needs(pid, aid, [scid])
+        out = next((s for s in get(aid)["scenarios"] if s["id"] == scid), out)
+    return out
 
 
 def add_scenario(pid: str, aid: str, data: dict) -> dict:
@@ -204,7 +228,11 @@ def add_scenario(pid: str, aid: str, data: dict) -> dict:
     def fn(a):
         a["scenarios"].append(s)
         return s
-    return _change(pid, aid, fn)
+    _change(pid, aid, fn)
+    if s["test_data"] or s["role"]:
+        record_needs(pid, aid, [s["id"]])
+        return next((x for x in get(aid)["scenarios"] if x["id"] == s["id"]), s)
+    return s
 
 
 def delete_scenario(pid: str, aid: str, scid: str) -> bool:
@@ -214,7 +242,11 @@ def delete_scenario(pid: str, aid: str, scid: str) -> bool:
         n = len(a["scenarios"])
         a["scenarios"] = [s for s in a["scenarios"] if s["id"] != scid]
         return len(a["scenarios"]) < n
-    return _change(pid, aid, fn)
+    gone = _change(pid, aid, fn)
+    if gone:                            # the data only it needed leaves the model
+        from . import knowledge
+        knowledge.release(pid, f"{aid}:{scid}:")
+    return gone
 
 
 def set_validation(pid: str, aid: str, result: dict) -> None:
@@ -227,6 +259,8 @@ def delete(pid: str, aid: str) -> bool:
     if not fs.exists(_path(pid, aid)):
         return False
     fs.unlink(_path(pid, aid))
+    from . import knowledge
+    knowledge.release(pid, f"{aid}:")
     return True
 
 

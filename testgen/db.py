@@ -12,6 +12,8 @@ start under a lock unless TESTGEN_DB_MIGRATE=off):
     tests      saved tests (storage.py, repo/tests.py): columns for filters, the test in `body` (jsonb)
     tasks      the team's tasks (tasks.py, repo/tasks.py)
     usage      language model spending: a row per request (llm.py, repo/usage.py)
+    km_items   the application model of a project (knowledge.py, repo/knowledge.py): a row per entity,
+               role, stand data record, fact and pending update; km_meta - the rest of the model
     docs       everything else by path: JSON documents (projects, suites, jobs, users...), text
                (skills, notes), secrets (encrypted, vault.py) and binary files when there is no S3;
                for files in S3 only their size and time. `body` is JSON text: reports may use body::jsonb.
@@ -167,6 +169,28 @@ usage = Table(
     Column("cache_read_input_tokens", BigInteger, nullable=False, default=0),
     Column("output_tokens", BigInteger, nullable=False, default=0),
     Index("ix_usage_project_month", "project_id", "month"),
+)
+
+# The application model of a project (knowledge.py, repo/knowledge.py): a row per entity, role, stand data
+# record, fact of the memory and pending update; the rest of the model (summary, confirmation) in km_meta.
+km_items = Table(
+    "km_items", metadata,
+    Column("project_id", String(64), primary_key=True),
+    Column("kind", String(12), primary_key=True),       # entities | roles | data | memory | pending
+    Column("id", String(16), primary_key=True),
+    Column("pos", Integer, nullable=False),             # the order people see
+    Column("name", Text, nullable=False, default=""),   # the name and other names, normalized: the search
+    Column("entity", Text, nullable=False, default=""),  # data: its entity; entities: their group
+    Column("status", String(12), nullable=False, default=""),
+    Column("body", Doc, nullable=False),
+    Index("ix_km_items_list", "project_id", "kind", "pos"),
+)
+
+km_meta = Table(
+    "km_meta", metadata,
+    Column("project_id", String(64), primary_key=True),
+    Column("updated", Float),
+    Column("body", Doc, nullable=False),
 )
 
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"

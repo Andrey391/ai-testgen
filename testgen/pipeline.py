@@ -524,9 +524,14 @@ class Job:
         if cfg["scenarios"]["enabled"]:
             self._log("Проектирование сценариев…")
             res = await scenarios.generate(requirements, self.url, project=project, log=self._log,
-                                           cfg=scenarios.settings(project, **self.design))
+                                           cfg=scenarios.settings(project, **self.design), record=False)
             self.feature, self.assumptions = res.feature, res.assumptions
             self.scenarios = [s.model_dump() for s in res.scenarios]
+            if cfg["requirements"].get("learn_model") and self.scenarios:
+                # The test data they need joins the model; each item gets the id of its record (record_id).
+                doc = knowledge.need(self.project_id, self.scenarios)
+                self._log(f"Тестовые данные сценариев записаны в модель приложения: записей {len(doc['data'])}, "
+                          f"ролей {len(doc['roles'])}")
             self._log(f"Сценариев: {len(self.scenarios)}")
             if not self.scenarios:
                 self._log("По этим требованиям сценариев не получилось", "warn")
@@ -574,19 +579,35 @@ class Job:
         if not self.scenarios:
             self._log("Кейсы не найдены", "warn")
 
+    def _model_units(self) -> list[str] | None:
+        """The parts of the application model the run's scenarios need (knowledge.units_for): their groups
+        of entities and the roles; None - one of them names no entity of the model, so the whole model."""
+        doc = knowledge.get(self.project_id)
+        out: list[str] = []
+        for sc in self.scenarios:
+            units = knowledge.units_for(self.project_id, sc, doc)
+            if units is None:
+                return None
+            out += [u for u in units if u not in out]
+        return out
+
     async def _await_model(self) -> None:
         """Tests are generated only from a confirmed lifecycle of the system: entities, dependencies,
-        lifecycles, roles and their capabilities (knowledge.confirm). The run waits for a person; a
-        confirmation made anywhere (the job, "Проект → Тестовые данные", another instance) lets it go on."""
-        if knowledge.is_confirmed(self.project_id):
+        lifecycles, roles and their capabilities (knowledge.confirm) - the parts of it the scenarios need.
+        The run waits for a person; a confirmation made anywhere (the job, "Проект → Тестовые данные",
+        another instance) lets it go on."""
+        units = self._model_units()
+        if knowledge.is_confirmed(self.project_id, units):
             return
         self.status = "awaiting_model"
-        state = knowledge.confirmation(knowledge.get(self.project_id))
+        state = knowledge.confirmation(knowledge.get(self.project_id), units)
+        todo = [u["title"] for u in state["units"] if u["state"] != "confirmed" and (units is None or u["unit"] in units)]
         self._log("Подтвердите жизненный цикл системы перед генерацией тестов: сущности, зависимости, статусы, роли "
                   "и их возможности («Проект → Тестовые данные»)"
+                  + (f" — нужны части: {', '.join(todo)}" if todo and units is not None else "")
                   + (" — модель изменилась после подтверждения" if state["state"] == "changed" else "")
                   + (f". Не хватает: {'; '.join(state['missing'])}" if state["missing"] else ""), "warn")
-        while not self._cancel and not knowledge.is_confirmed(self.project_id):
+        while not self._cancel and not knowledge.is_confirmed(self.project_id, units):
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
@@ -980,9 +1001,10 @@ def retryable(item: dict, explicit: bool = False) -> bool:
 def scenario_text(sc: dict) -> str:
     """What the authoring agent is told of a designed scenario."""
     text = sc["instructions"]
+    # [id …] - the record of the application model: the agent fulfils it (test_data `fulfills`), the test keeps it.
     data = [f"{d['entity']} «{d['name']}»" + (f" ({d['state']})" if d.get("state") else "")
-            + (f" — {d['details']}" if d.get("details") else "") for d in sc.get("test_data") or []
-            if isinstance(d, dict) and d.get("entity") and d.get("name")]
+            + (f" — {d['details']}" if d.get("details") else "") + (f" [id {d['record_id']}]" if d.get("record_id") else "")
+            for d in sc.get("test_data") or [] if isinstance(d, dict) and d.get("entity") and d.get("name")]
     if data:
         text = "Тестовые данные: " + "; ".join(data) + f"\n{text}"
     if sc.get("preconditions"):

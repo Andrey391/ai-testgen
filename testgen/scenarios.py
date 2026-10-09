@@ -14,7 +14,10 @@ layers (UI tests in the browser, API tests of the backend) and the test design t
 (TECHNIQUES). The project's application model (knowledge.py: entities, their dependencies and
 lifecycles, roles with their capabilities, test data) turns into preconditions the scenarios state
 explicitly: every scenario names the role it acts as and the test data it needs (`test_data`), and
-that need is recorded in the model (knowledge.need) so the tests reuse one set of data. The plan is
+that need is recorded in the model (knowledge.need) so the tests reuse one set of data. A large model
+does not fit a request: the requests get the slice of it the requirements name (knowledge.prompt with a
+focus); the plan names the groups of the model its scenarios need, and each batch of details gets the
+slice of those groups and of its scenarios. The plan is
 compared with the scenarios and tests the project already has (reuse.py): a scenario that repeats or
 extends an earlier one carries a `match`, and a person decides to reuse, refine or create a new one.
 """
@@ -85,6 +88,7 @@ class ScenarioPlan(BaseModel):
     assumptions: list[str]
     scenarios: list[PlannedScenario]
     more: bool = False       # the plan goes on: the next part is asked for
+    groups: list[str] = []   # groups of a large application model the scenarios need (its index names them)
 
 
 class ScenarioBatch(BaseModel):
@@ -103,6 +107,9 @@ PLAN_TASK = ("First step: plan the complete list of scenarios. For each give onl
              "priority, the role it acts as and a one-line note of what it covers. Order them by importance. "
              "Give at most {page} scenarios in this answer; if the plan needs more, set `more` to true "
              "and you will be asked for the rest.")
+PLAN_GROUPS = ("\n\nThe application model is large and shown in part (its index names the rest by group). In `groups` "
+               "name the groups of the model the planned scenarios need, as the model names them; [] when what they "
+               "need is all shown.")
 PLAN_NEXT = ("Already planned (titles):\n{listing}\n\nContinue the plan: give the next scenarios (at most {page}) "
              "that are not in this list, in the same format. Set `more` to true if even more remain after them.")
 # Short answers: the plan and the details come in small parts, every request on a clean context (the
@@ -199,14 +206,14 @@ def _listing(planned: list[PlannedScenario], first: int = 0) -> str:
                      for i, s in enumerate(planned))
 
 
-async def _plan(cfg: dict, system: str, context: str, pid: str, say) -> ScenarioPlan:
+async def _plan(cfg: dict, system: str, context: str, pid: str, say, extra: str = "") -> ScenarioPlan:
     """The plan part by part: at most `page` scenarios per answer. The next part gets only the titles
     planned so far; a cut-off answer keeps its complete scenarios and the plan goes on from there."""
     plan: ScenarioPlan | None = None
     page = PLAN_PAGE
     for _ in range(PLAN_PAGES):
         task = (PLAN_TASK.format(page=page) if plan is None else PLAN_NEXT.format(
-            listing="\n".join(f"{i + 1}. {s.title}" for i, s in enumerate(plan.scenarios)), page=page))
+            listing="\n".join(f"{i + 1}. {s.title}" for i, s in enumerate(plan.scenarios)), page=page)) + extra
         try:
             part: ScenarioPlan = await _parse(cfg, system, context, task, ScenarioPlan, pid)
         except TooLong as e:
@@ -225,6 +232,7 @@ async def _plan(cfg: dict, system: str, context: str, pid: str, say) -> Scenario
         else:
             seen = {s.title.strip().lower() for s in plan.scenarios}
             plan.scenarios += [s for s in part.scenarios if s.title.strip().lower() not in seen]
+            plan.groups = list(dict.fromkeys(plan.groups + part.groups))
         if not part.more or not part.scenarios:
             break
         say(f"В плане {len(plan.scenarios)} сценариев, продолжаю план…")
@@ -233,7 +241,7 @@ async def _plan(cfg: dict, system: str, context: str, pid: str, say) -> Scenario
 
 
 async def generate(requirements: str, url: str = "", project: dict | None = None,
-                   log=None, progress=None, cfg: dict | None = None) -> ScenarioSet:
+                   log=None, progress=None, cfg: dict | None = None, record: bool = True) -> ScenarioSet:
     """`project` (optional) supplies the "scenarios" stage settings: skills, scenario
     types to cover, model and effort; `cfg` - those settings with the choice of one generation
     (settings()). `log(text)` (optional) reports progress;
@@ -253,11 +261,14 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
     earlier = reuse.candidates(pid) if project else []
     layers = cfg.get("layers") or []
     api = traffic.catalog_text(traffic.catalog(pid)) if project and "api" in layers else ""
-    context = _context(requirements, url, cfg, knowledge.prompt(pid) if project else "", reuse.listing(earlier), api)
+    # A large application model: the part the requirements name, an index of the rest (knowledge.prompt).
+    model = knowledge.prompt(pid, knowledge.focus(text=requirements)) if project else ""
+    large = bool(model) and not knowledge.fits(pid)
+    context = _context(requirements, url, cfg, model, reuse.listing(earlier), api)
 
     if progress:
         say(f"Анализ требований ({len(requirements)} символов) и план покрытия…")
-    plan = await _plan(cfg, system, context, pid, say)
+    plan = await _plan(cfg, system, context, pid, say, PLAN_GROUPS if large else "")
     matches = [reuse.resolve(earlier, s.existing, s.relation) for s in plan.scenarios]
     if any(matches):
         say(f"Похожи на созданные ранее: {sum(1 for m in matches if m)} — решите, переиспользовать, доработать "
@@ -276,6 +287,9 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
         part = plan.scenarios[start:start + count]
         task = (f"Write out in full these scenarios {start + 1}–{start + len(part)} of the test plan, in this order, "
                 f"keeping their titles, layers, types, priorities and roles:\n{_listing(part, start)}")
+        if large:       # the part of the model these scenarios need, beyond what the requirements named
+            task += "\n\nFor these scenarios - " + knowledge.prompt(
+                pid, knowledge.focus(text=_listing(part, start), groups=plan.groups))
         async with gate:
             if progress:
                 say(f"Детализация сценариев {start + 1}–{start + len(part)}: {part[0].title}…")
@@ -304,7 +318,7 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
 
     batches = await asyncio.gather(*(detail(i, BATCH) for i in range(0, len(plan.scenarios), BATCH)))
     res = ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[s for b in batches for s in b])
-    if project and project["pipeline"]["requirements"].get("learn_model"):
+    if record and project and project["pipeline"]["requirements"].get("learn_model"):
         doc = knowledge.need(pid, [sc.model_dump() for sc in res.scenarios])
         say(f"Тестовые данные сценариев записаны в модель приложения: записей {len(doc['data'])}, "
             f"ролей {len(doc['roles'])}")

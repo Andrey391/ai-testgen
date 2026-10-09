@@ -580,12 +580,20 @@ def _require_model(p: dict) -> None:
         raise HTTPException(400, "Модель не настроена: выберите её в «Проект → Модель».")
 
 
-def _require_lifecycle(p: dict) -> None:
+def _require_lifecycle(p: dict, sc: dict | None = None) -> None:
     """Tests from requirements are generated only after a person confirmed the lifecycle of the system
-    (the setting "requirements.confirm_model"; the pipeline waits for it instead)."""
-    if p["pipeline"]["requirements"].get("confirm_model") and not knowledge.is_confirmed(p["id"]):
+    (the setting "requirements.confirm_model"; the pipeline waits for it instead): the parts of it the
+    scenario `sc` needs (its groups of entities and the roles), without a scenario - all of it."""
+    if not p["pipeline"]["requirements"].get("confirm_model"):
+        return
+    doc = knowledge.get(p["id"])
+    only = knowledge.units_for(p["id"], sc, doc) if sc else None
+    state = knowledge.confirmation(doc, only)
+    if state["state"] != "confirmed":
+        todo = [u["title"] for u in state["units"] if u["state"] != "confirmed" and (only is None or u["unit"] in only)]
         raise HTTPException(409, "Сначала подтвердите жизненный цикл системы — сущности, статусы, роли и их "
-                                 "возможности — в «Проект → Тестовые данные»")
+                                 "возможности — в «Проект → Тестовые данные»"
+                                 + (f": {', '.join(todo)}" if todo and only is not None else ""))
 
 
 class ProjectBody(BaseModel):
@@ -1351,13 +1359,13 @@ async def create_session(body: NewSession, request: Request):
     engine = body.engine if body.engine in ("builtin", "playwright-mcp", "api") else ""
     if body.scenario.strip() or body.autopilot:
         _require_model(p)
-    if body.analysis_id:
-        _require_lifecycle(p)
     a = analyses.get(body.analysis_id) if body.analysis_id else None
     if a and a["project_id"] != p["id"]:
         a = None
-    # A scenario of the API layer is written without a browser.
     sc = next((x for x in (a or {}).get("scenarios") or [] if x.get("id") == body.scenario_id), None)
+    if body.analysis_id:
+        _require_lifecycle(p, sc)
+    # A scenario of the API layer is written without a browser.
     if sc and sc.get("layer") == "api":
         engine = "api"
     guest = False
@@ -2323,13 +2331,14 @@ async def gen_scenarios(body: ReqBody, request: Request):
     if not body.stream:
         try:
             learn = submit(_learn(p, body.requirements, user))
-            res = await call(scenarios.generate(body.requirements, body.url, project=p, cfg=cfg))
+            res = await call(scenarios.generate(body.requirements, body.url, project=p, cfg=cfg, record=False))
             await asyncio.wrap_future(learn)
         except Exception as e:
             analyses.finish(p["id"], a["id"], error=llm.api_error_text(e))
             raise HTTPException(502, llm.api_error_text(e))
         analyses.set_plan(p["id"], a["id"], res.feature, res.assumptions, [s.model_dump() for s in res.scenarios])
         analyses.finish(p["id"], a["id"], res.model_dump())
+        analyses.record_needs(p["id"], a["id"])     # the test data of the scenarios, with the ids of its records
         return res.model_dump() | {"analysis_id": a["id"]}
 
     # One response streams the whole generation: it stays on this instance, so no job to poll.
@@ -2362,9 +2371,13 @@ async def gen_scenarios(body: ReqBody, request: Request):
                     log(f"Проверка ТЗ: {report['score']}/100, замечаний {len(report['findings'])}")
                 except Exception as e:
                     log(f"Проверка ТЗ не удалась: {llm.api_error_text(e)}")
-            res = await scenarios.generate(body.requirements, body.url, project=p, progress=emit, cfg=cfg)
+            res = await scenarios.generate(body.requirements, body.url, project=p, progress=emit, cfg=cfg, record=False)
             await learn
-            done = analyses.finish(p["id"], a["id"], res.model_dump())
+            analyses.finish(p["id"], a["id"], res.model_dump())
+            analyses.record_needs(p["id"], a["id"])     # the test data of the scenarios, with the ids of its records
+            done = analyses.get(a["id"])
+            if p["pipeline"]["requirements"].get("learn_model") and any(x.get("test_data") for x in done["scenarios"]):
+                log("Тестовые данные сценариев записаны в модель приложения («Проект → Тестовые данные»)")
             send({"type": "done", "analysis": analyses.view(done)})
         except asyncio.CancelledError:
             learn.cancel()
@@ -2525,12 +2538,17 @@ async def merge_knowledge_duplicates(pid: str, body: DuplicatesBody, request: Re
     return knowledge.merge_duplicates(pid, groups, request.state.user)
 
 
+class ConfirmBody(BaseModel):
+    units: list[str] | None = None      # groups of entities ("@roles" - the roles); None - the whole model
+
+
 @app.post("/api/projects/{pid}/knowledge/confirm")
-async def confirm_knowledge(pid: str, request: Request):
-    """A person confirms the lifecycle of the system: runs of the pipeline waiting for it go on."""
+async def confirm_knowledge(pid: str, request: Request, body: ConfirmBody | None = None):
+    """A person confirms the lifecycle of the system (or some of its parts): runs of the pipeline waiting
+    for it go on."""
     project(pid, "editor")
     try:
-        doc = knowledge.confirm(pid, request.state.user)
+        doc = knowledge.confirm(pid, request.state.user, body.units if body else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
     for job in list(pipeline.JOBS.values()):
@@ -2579,6 +2597,7 @@ class ScenarioPatch(BaseModel):
     priority: str | None = None
     role: str | None = None
     decision: str | None = None     # a scenario similar to an earlier one: new | reuse | refine (reuse.py)
+    test_data: list[dict] | None = None     # the data it needs: the application model is updated (analyses.record_needs)
     preconditions: str | None = None
     instructions: str | None = None
     expected_result: str | None = None

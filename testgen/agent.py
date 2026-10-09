@@ -239,14 +239,18 @@ REMEMBER_TOOL = _tool(
     "remember",
     "Save a fact about the application to the project's memory, for later tests (not a test step): a rule or a "
     "behaviour you discovered (\"a paid order cannot be cancelled by the customer\"). Objects of the test data go to "
-    "`test_data`. Only facts that hold beyond this run; never passwords.", {"fact": {"type": "string"}})
+    "`test_data`. Only facts that hold beyond this run; never passwords.", {
+        "fact": {"type": "string"},
+        "about": {"type": "string", "description": "The entities and roles of the model the fact is about, by name, "
+                                                   "comma-separated (\"Order, Customer\"); or \"\"."}})
 DATA_TOOL = _tool(
     "test_data",
     "Record test data in the project's application model, so later tests reuse it instead of creating it again (not "
     "a test step): an object the scenario relies on that exists on the stand (the product «Test product A» in stock), "
     "or one this test creates and keeps, with what it requires and its lifecycle as you saw them; data the model "
-    "lists as needed becomes data on the stand. Call it when you find or create such an object; for an object "
-    "created with {{unique}} name the kind (\"a new order\") and how it is created. A user of the application the "
+    "lists as needed becomes data on the stand: give its id as `fulfills`. Call it when you find or create such an "
+    "object; for an object created anew on every run (a name with {{unique}}) give that name, `created` and how it is "
+    "created. A user of the application the "
     "test registered or found that tests can log in with is no stand data: give its `login`, `password` and `role` "
     "- it goes to the project accounts with its roles. Never put passwords into name or details.", {
         "entity": {"type": "string", "description": "Entity of the domain the object belongs to (Product, Order…); "
@@ -263,9 +267,19 @@ DATA_TOOL = _tool(
                                                    "step, placeholders included (user+{{unique}}@example.com); or \"\"."},
         "password": {"type": "string", "description": "For a user account: its password as typed in the step "
                                                       "({{faker.password}}, the literal you typed, {{password}}); "
-                                                      "or \"\". Stored encrypted, never shown to the model again."}})
+                                                      "or \"\". Stored encrypted, never shown to the model again."},
+        "fulfills": {"type": "string", "description": "The id of the needed test data this object is (the model and "
+                                                      "the scenario show it as [id …]); or \"\"."},
+        "created": {"type": "boolean", "description": "True when this test creates the object (it did not exist "
+                                                     "before the test); false when the test found it."}})
+LOOKUP_TOOL = _tool(
+    "model_lookup",
+    "Look up the project's application model (not a test step): entities with what they require first, their "
+    "lifecycles, roles, test data on the stand and facts, by name or words (\"Order\", \"delivery address\"). Use it "
+    "when the model shown to you is a part of a large one and the scenario needs something its index names.", {
+        "query": {"type": "string"}})
 # Tools that help the agent but are not recorded as steps.
-HELPERS = {"look", "find_elements", "remember", "test_data"}
+HELPERS = {"look", "find_elements", "remember", "test_data", "model_lookup"}
 
 
 def _json(d: dict) -> str:
@@ -429,6 +443,7 @@ def restored(project: dict, cp: dict) -> "StudioSession":
     s.chat = list(cp.get("chat") or []) + [{"role": "system", "text": "Сессия восстановлена после перезапуска студии: "
                                             "записанные шаги воспроизводятся в новом браузере, затем агент продолжит."}]
     s.summary, s.finish_status = cp.get("summary", ""), cp.get("finish_status", "")
+    s.data_refs = dict(cp.get("data_refs") or {})
     return s
 
 
@@ -527,11 +542,15 @@ class StudioSession:
         self.modules = [t for t in storage.all_tests(self.project_id) if t.get("role") == "module"] if builtin else []
         self.mailbox = bool((project.get("mailbox") or {}).get("kind"))
         self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY] + [REMEMBER_TOOL, DATA_TOOL]
+        large = not knowledge.fits(self.project_id)     # the agent sees a slice of the model: it may ask for more
+        if large:
+            self.tools.append(LOOKUP_TOOL)
         if builtin:
             self.tools += [FIND_TOOL, API_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
                 ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else [])
         if api:
-            self.tools = [API_TOOL] + [t for t in TOOLS if t["name"] == "finish"] + [REMEMBER_TOOL, DATA_TOOL]
+            self.tools = [API_TOOL] + [t for t in TOOLS if t["name"] == "finish"] + [REMEMBER_TOOL, DATA_TOOL] + \
+                ([LOOKUP_TOOL] if large else [])
         elif self.screenshots == "on_request":
             self.tools.append(LOOK_TOOL)
         self.repairs = 0                    # invalid answers in a row
@@ -562,6 +581,7 @@ class StudioSession:
         self.bs: BrowserSession | McpBrowser | None = None
         self.toolbox: mcp_hub.Toolbox | None = None
         self.test_id: str | None = None
+        self.data_refs: dict[str, str] = {}     # records of the model the test uses or creates: id -> uses | creates
         budget = project["pipeline"].get("budget") or {}
         self.usage = llm.Usage(budget.get("session") or 0, budget.get("currency") or "USD", "сессии")
         self.usage.on_warn = lambda text: self._say("system", text)
@@ -599,11 +619,17 @@ class StudioSession:
         return {"id": self.test_id or uuid.uuid4().hex[:10], "project_id": self.project_id,
                 "name": self.name, "url": self.url, "scenario": self.scenario, "summary": self.summary,
                 "engine": self.engine, "layer": "api" if self.engine == "api" else "ui",
-                "steps": recorded_steps(self.steps),
+                "steps": recorded_steps(self.steps), "data_refs": self.refs(),
                 "authoring_usage": self.usage.as_dict(),
                 "authoring_stats": {"model": self.model, "edits": self.edits,
                                     "timing": {k: round(v, 1) for k, v in self.timing.items()},
                                     "seconds": round(time.monotonic() - self.started, 1) if self.started else None}}
+
+    def refs(self) -> list[dict]:
+        """The records of the application model the test uses (its scenario's test data, [id …]) or creates."""
+        out = {rid: "uses" for rid in re.findall(r"\[id ([0-9a-f]{6,16})\]", self.scenario or "")}
+        out |= self.data_refs
+        return [{"id": rid, "use": use} for rid, use in out.items()]
 
     def save(self, status: str = "") -> tuple[dict, list[str]]:
         """Save the recorded test -> (test, warnings). A re-save keeps the test's id and what
@@ -762,7 +788,7 @@ class StudioSession:
         if self.mailbox:
             parts.append("The project has a test mailbox: read_email waits for a letter and saves its code as "
                          "{{vars.<name>}}.")
-        model = knowledge.prompt(self.project_id)
+        model = knowledge.prompt(self.project_id, knowledge.focus(text=self.scenario))
         if model:
             parts.append(model + "\nBefore a step that needs other data (an object it depends on, a role, a state), "
                                  "make sure that data exists: reuse the test data listed above (do not create a "
@@ -960,6 +986,7 @@ class StudioSession:
                 "id": self.id, "project_id": self.project_id, "name": self.name, "url": self.url,
                 "scenario": self.scenario, "engine": self.engine, "headless": self.headless,
                 "test_id": self.test_id, "task_id": self.task_id, "origin": self.origin, "account": self.account,
+                "data_refs": self.data_refs,
                 "steps": self.steps, "chat": chat[-300:], "summary": self.summary,
                 "finish_status": self.finish_status, "status": self.status, "own_credentials": own,
                 "created": self.created, "updated": time.time()}, indent=None)
@@ -1061,7 +1088,7 @@ class StudioSession:
             for secret in testdata.secret_values(self.credentials):
                 fact = fact.replace(secret, "***")
             try:
-                knowledge.remember(self.project_id, fact, source=f"Studio: {self.name}")
+                knowledge.remember(self.project_id, fact, source=f"Studio: {self.name}", about=str(inp.get("about") or ""))
             except ValueError as e:
                 return str(e)
             self._say("system", f"🧠 Запомнено: {fact[:300]}")
@@ -1080,9 +1107,13 @@ class StudioSession:
             item["depends_on"] = [x.strip() for x in str(inp.get("depends_on") or "").split(",") if x.strip()]
             try:
                 doc = knowledge.record(self.project_id, item, source=f"Studio: {self.name}", login=login,
-                                       password=password)
+                                       password=password, fulfills=str(inp.get("fulfills") or "").strip(),
+                                       created=bool(inp.get("created")))
             except ValueError as e:
                 return str(e)
+            if doc.get("record_id"):
+                self.data_refs[doc["record_id"]] = "creates" if inp.get("created") else \
+                    self.data_refs.get(doc["record_id"], "uses")
             if login or knowledge.is_user(item["entity"]):
                 self._say("system", f"🔑 Учётная запись «{login or item['name']}» — в «Тестовые данные → Учётные записи»"
                                     + (f" (роли: {item['role']})" if item["role"] else ""))
@@ -1097,6 +1128,8 @@ class StudioSession:
                                    if waits else ""))
             return ("Recorded. The record already existed: the update awaits a person's confirmation." if waits
                     else "Recorded in the application model of the project.")
+        if name == "model_lookup":
+            return knowledge.lookup(self.project_id, str(inp.get("query") or ""))
         if name == "find_elements":
             if not isinstance(self.bs, BrowserSession):
                 return "find_elements works with the built-in browser engine only."
