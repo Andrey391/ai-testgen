@@ -592,12 +592,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="card col">
       <div class="row" style="margin-bottom:6px">
         <b class="grow">Live View <span class="badge" id="engineBadge"></span></b>
-        <select id="mode" style="width:auto">
-          <option value="off">Режим: просмотр</option>
-          <option value="picker">Element Picker</option>
-          <option value="record">Record &amp; Play</option>
+        <select id="mode" style="width:auto" title="Что делает клик по экрану Live View">
+          <option value="off">Клик по экрану: ничего (смотреть)</option>
+          <option value="record">Record &amp; Play: записывать мои действия</option>
+          <option value="picker">Element Picker: действие или проверка элемента</option>
         </select>
-        <select id="pickAction" style="width:auto">
+        <select id="pickAction" style="width:auto" class="hidden" title="Что сделать с элементом, по которому вы кликнете">
+          <optgroup label="Действия">
           <option value="click">клик</option>
           <option value="double_click">двойной клик</option>
           <option value="fill">ввод текста</option>
@@ -605,6 +606,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <option value="select_option">выбор в списке</option>
           <option value="upload_file">загрузка файла</option>
           <option value="drag_to">перетащить (два клика: что и куда)</option>
+          </optgroup>
+          <optgroup label="Проверки">
           <option value="assert_visible">проверка: элемент виден</option>
           <option value="assert_text_present">проверка: текст на странице</option>
           <option value="assert_element_text">проверка: текст элемента</option>
@@ -613,12 +616,22 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <option value="assert_enabled">проверка: доступность элемента</option>
           <option value="assert_count">проверка: число элементов в списке</option>
           <option value="assert_screenshot">визуальная проверка элемента</option>
+          </optgroup>
         </select>
       </div>
       <div class="urlbar" id="urlbar"></div>
       <div class="live" id="live"><img id="shot" alt=""><span class="size hidden" id="shotSize" title="Размер окна браузера и масштаб, в котором он показан"></span></div>
       <div class="api-live hidden" id="apiLive"></div>
-      <div class="muted" style="font-size:12px;margin-top:6px" id="modeHint">Выберите Element Picker или Record &amp; Play, чтобы добавлять шаги кликом по экрану.</div>
+      <div class="muted" style="font-size:12px;margin-top:6px" id="modeHint"></div>
+      <details class="opt" style="margin-top:6px"><summary>Как создаётся тест</summary>
+        <div class="hint">Тест — это список шагов справа. Добавлять шаги можно тремя способами, их можно смешивать в одном тесте:</div>
+        <ol class="hint" style="margin:4px 0 0 18px;padding:0">
+          <li><b>Агент.</b> Агент читает сценарий и предлагает шаг: «Continue» выполняет его, «Отклонить» — отказ с подсказкой. С Auto-Pilot агент выполняет шаги сам, без подтверждения. Подсказку агенту можно написать в чате.</li>
+          <li><b>Вы — кликами по экрану.</b> <i>Record &amp; Play</i>: делайте то же, что пользователь. Клик по кнопке или ссылке — клик, по полю — студия спросит текст, по списку — пункт. <i>Element Picker</i>: сначала выберите, что сделать с элементом (действие или проверку: виден, текст, значение…), затем кликните по нему. Каждый клик сразу выполняется в браузере и становится шагом. Шаг, который предложил агент, при этом отменяется.</li>
+          <li><b>Вы — кнопкой «+ шаг».</b> Для шагов без элемента: открыть URL, нажать клавишу, подождать, проверить текст или URL, модуль проекта.</li>
+        </ol>
+        <div class="hint">В режиме «Клик по экрану: ничего» экран только показывает браузер — так случайный клик не добавит шаг. Описание шага можно поправить в списке, порядок — ▲▼, удалить — ✕.</div>
+      </details>
     </div>
 
     <div class="card col">
@@ -1541,7 +1554,10 @@ const api = async (method, url, body) => {
                     'сервера — после перезапуска несохранённые шаги пропадают. Запустите студию и обновите страницу.');
   }
   if (r.status === 401 && !url.startsWith('/api/auth/')) { showLogin(); throw new Error('Требуется вход'); }
-  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
+  if (!r.ok) {
+    let m = r.statusText; try { m = (await r.json()).detail || m } catch {}
+    const e = new Error(m); e.status = r.status; e.preflight = r.headers.get('X-Preflight') || ''; throw e;
+  }
   return r.status === 204 ? null : r.json();
 };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1774,15 +1790,21 @@ $('#startBtn').onclick = async () => {
   const url = $('#fUrl').value.trim(), scenario = $('#fScenario').value.trim();
   if (!url || !scenario) return alert('Укажите URL и сценарий');
   $('#startBtn').disabled = true;
+  const body = {project_id: PID, url, scenario,
+    name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
+    engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value, account: $('#fAccount').value,
+    task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked,
+    analysis_id: STUDIO_SCEN?.analysis_id || '', scenario_id: STUDIO_SCEN?.scenario_id || ''};
   try {
-    const r = await api('POST', '/api/sessions', {project_id: PID, url, scenario,
-      name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
-      engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value, account: $('#fAccount').value,
-      task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked,
-      analysis_id: STUDIO_SCEN?.analysis_id || '', scenario_id: STUDIO_SCEN?.scenario_id || ''});
+    let r;
+    try { r = await api('POST', '/api/sessions', body); }
+    catch (e) {      // only the lifecycle check stopped it: the person decides
+      if (e.preflight !== 'lifecycle' || !confirm(e.message + '\n\n' + LIFECYCLE_ANYWAY)) throw e;
+      r = await api('POST', '/api/sessions', {...body, accept_lifecycle: true});
+    }
     setStudioTask(null); setStudioScen(null);
     openSession(r.id);
-  } catch (e) { alert(e.message) } finally { $('#startBtn').disabled = false; }
+  } catch (e) { if (e.preflight !== 'lifecycle') alert(e.message) } finally { $('#startBtn').disabled = false; }
 };
 
 function openSession(sid) {
@@ -1882,9 +1904,11 @@ function render() {
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
   const mcp = s.engine !== 'builtin', apiTest = s.engine === 'api';
   $('#mode').disabled = $('#pickAction').disabled = mcp;
-  if (mcp) { $('#mode').value = 'off'; $('#live').classList.remove('picking');
+  if (!mcp && $('#mode').dataset.mcp === 'true') syncMode();     // back from an MCP or API session
+  $('#mode').dataset.mcp = mcp;
+  if (mcp) { $('#mode').value = 'off'; $('#live').classList.remove('picking'); $('#pickAction').classList.add('hidden');
     $('#modeHint').textContent = apiTest ? 'API-тест: браузера нет, каждый шаг — запрос к API. Здесь — запросы сессии и ответы на них.'
-      : 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Element Picker доступен со встроенным движком.'; }
+      : 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Record & Play и Element Picker работают со встроенным движком.'; }
   $('#live').classList.toggle('hidden', apiTest); $('#apiLive').classList.toggle('hidden', !apiTest);
   if (apiTest) renderApiLive(s.api_log || []);
   if (s.test_id && !TEST_ID) showSaved(s.test_id);
@@ -2072,39 +2096,58 @@ const sendChat = () => {
 $('#chatBtn').onclick = sendChat;
 $('#chatIn').onkeydown = e => { if (e.key === 'Enter') sendChat(); };
 
-$('#mode').onchange = () => {
+// what a click on Live View does: nothing (watch), Record & Play - what a user does with the element
+// (a button is clicked, a field asks for the text, a list for the item), Element Picker - the action or
+// check chosen in the list next to it
+const MODE_HINT = {
+  off: 'Клик по экрану ничего не делает. Чтобы добавлять шаги кликами, выберите Record & Play или Element Picker; агент и «+ шаг» работают в любом режиме.',
+  record: 'Запись: действуйте как пользователь. Клик по кнопке или ссылке — клик, по полю ввода — студия спросит текст, по списку — пункт. Каждый клик сразу выполняется в браузере и становится шагом.',
+  picker: 'Выберите в списке, что сделать с элементом (действие или проверку), и кликните по нему: действие выполнится и запишется шагом.',
+};
+function syncMode() {
   const m = $('#mode').value;
   $('#live').classList.toggle('picking', m !== 'off');
-  $('#modeHint').textContent = m === 'off' ? 'Выберите Element Picker или Record & Play, чтобы добавлять шаги кликом по экрану.'
-    : m === 'picker' ? 'Кликните по элементу — выбранное действие выполнится и запишется как шаг.'
-    : 'Запись: каждый клик по экрану выполняется в браузере и записывается. Для ввода текста выберите «ввод текста».';
-};
+  $('#pickAction').classList.toggle('hidden', m !== 'picker');
+  DRAG_FROM = null;
+  $('#modeHint').textContent = MODE_HINT[m];
+}
+$('#mode').onchange = syncMode;
 let DRAG_FROM = null;   // drag_to in the picker: the first click chooses the element, the second the target
+syncMode();
 $('#shot').onclick = async e => {
   const mode = $('#mode').value; if (mode === 'off' || !SID) return;
   const img = e.target, r = img.getBoundingClientRect();
   const x = (e.clientX - r.left) * img.naturalWidth / r.width;
   const y = (e.clientY - r.top) * img.naturalHeight / r.height;
-  const action = $('#pickAction').value;
+  const action = mode === 'record' ? 'auto' : $('#pickAction').value;
   let value = '', extra = {};
   if (action === 'drag_to') {
     if (!DRAG_FROM) { DRAG_FROM = {x, y}; $('#modeHint').textContent = 'Теперь кликните туда, куда перетащить элемент.'; return; }
     extra = {x: DRAG_FROM.x, y: DRAG_FROM.y, target_x: x, target_y: y};
     DRAG_FROM = null; $('#modeHint').textContent = 'Перетаскивание: первый клик — что, второй — куда.';
   }
-  if (action === 'fill' || action === 'select_option') {
-    value = prompt(action === 'fill' ? 'Текст для ввода:' : 'Пункт списка:');
-    if (value === null) return;
-  }
-  if (action === 'upload_file') {
-    if (!PROJ.files?.length) return alert('Загрузите файлы для тестов: Проект → Общие → Файлы для тестов');
-    value = prompt('Имя файла проекта (' + PROJ.files.join(', ') + '):', PROJ.files[0]);
-    if (value === null) return;
-  }
-  try { await api('POST', `/api/sessions/${SID}/pick`, {x, y, action, value, source: mode, ...extra}); }
-  catch (err) { alert(err.message); }
+  try {
+    let a = action;
+    if (a !== 'auto') { value = askPickValue(a); if (value === null) return; }
+    let r = await api('POST', `/api/sessions/${SID}/pick`, {x, y, action: a, value, source: mode, ...extra});
+    if (r?.need) {         // Record & Play clicked a field or a list: the value first, then the step
+      value = askPickValue(r.need, r.name);
+      if (value === null) return;
+      await api('POST', `/api/sessions/${SID}/pick`, {x, y, action: r.need, value, source: mode});
+    }
+  } catch (err) { alert(err.message); }
   poll();
 };
+function askPickValue(action, name) {    // '' - the action needs no value, null - the person cancelled
+  const of = name ? ` («${name}»)` : '';
+  if (action === 'fill') return prompt(`Текст для ввода${of}:`);
+  if (action === 'select_option') return prompt(`Пункт списка${of}:`);
+  if (action === 'upload_file') {
+    if (!PROJ.files?.length) { alert('Загрузите файлы для тестов: Проект → Общие → Файлы для тестов'); return null; }
+    return prompt(`Имя файла проекта${of} (${PROJ.files.join(', ')}):`, PROJ.files[0]);
+  }
+  return '';
+}
 $('#pickAction').onchange = () => { DRAG_FROM = null; if ($('#pickAction').value === 'drag_to') $('#modeHint').textContent = 'Перетаскивание: первый клик — что, второй — куда.'; };
 
 const AS_HINT = {
@@ -3701,6 +3744,8 @@ function jobItemRow([it, i]) {
     <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
     <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${quality}</td><td>${z}</td>
     <td>${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
+      ${!it.test_id && it.status === 'needs_attention' && it.preflight?.length && it.preflight.every(p => p.kind === 'lifecycle')
+        ? `<button class="btn small" onclick="runAnyway(${i})" title="Проверка по жизненному циклу ошиблась или сценарий так и задуман: сгенерировать тест без неё (учётная запись роли проверяется)">Запустить всё равно</button>` : ''}
       ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
 }
 function jobItemsTable(rows, key) {
@@ -3795,6 +3840,11 @@ async function retryJob() {
   const n = failedItems(JOB).length;
   if (!confirm(`Перезапустить генерацию ${n} сценариев с ошибкой? Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.`)) return;
   try { await api('POST', `/api/jobs/${JOB.id}/retry`, {}); openJob(JOB.id); } catch (e) { alert(e.message); }
+}
+const LIFECYCLE_ANYWAY = 'Сгенерировать тест всё равно? Проверка по жизненному циклу будет пропущена для этого сценария — сделайте так, если она ошиблась (например, приняла тестовые данные за нарушение правил) или сценарий так и задуман.';
+async function runAnyway(i) {    // the lifecycle check stopped the item: a person runs it anyway
+  if (!confirm(`«${JOB.items[i].title}»\n\n${JOB.items[i].error}\n\n${LIFECYCLE_ANYWAY}`)) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices: [i], accept_lifecycle: true}); openJob(JOB.id); } catch (e) { alert(e.message); }
 }
 async function applyReuse() {
   const decisions = Object.fromEntries($$('#jobBox select[data-reuse]').map(el => [el.dataset.reuse, el.value]).filter(([, v]) => v));

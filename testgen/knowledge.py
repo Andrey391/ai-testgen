@@ -394,7 +394,9 @@ PREFLIGHT = """You check a test scenario against the confirmed model of the appl
 - the role of the scenario does what its restrictions forbid (or what is not among its capabilities) AND the scenario expects it to succeed;
 - the scenario expects a state transition of an entity that its lifecycle does not allow, or a transition made by a role the lifecycle does not give it to;
 - the scenario works with an entity without the entities it depends on, or relies on data in a state that does not allow the action (e.g. cancels an order that is already shipped and expects success).
-A negative scenario that expects the action to be denied, hidden or rejected follows the rules - it is NOT a violation. Do not report missing details, style, or rules the model does not state. Return an empty list when nothing is broken. Write `rule`, `problem` and `fix` in Russian."""
+A negative scenario that expects the action to be denied, hidden or rejected follows the rules - it is NOT a violation. Do not report missing details, style, or rules the model does not state. Test data is NOT a violation: a concrete login, email, password, name or other value the scenario uses, an account or object not listed among the stand data or the accounts - the test finds or creates its data itself, and the accounts of the roles are checked separately. `rule` quotes a restriction, capability, lifecycle, dependency or rule written in the model above; with no such rule there is no violation. Return an empty list when nothing is broken. Write `rule`, `problem` and `fix` in Russian."""
+# The answers kept in preflight.json are of this prompt: a new one checks the scenarios again.
+PREFLIGHT_VERSION = hashlib.sha256(PREFLIGHT.encode()).hexdigest()[:8]
 
 
 async def lifecycle_violations(project: dict, role: str, text: str) -> list[dict]:
@@ -406,7 +408,8 @@ async def lifecycle_violations(project: dict, role: str, text: str) -> list[dict
     if not any(e["lifecycle"] or e["depends_on"] or e["rules"] for e in doc["entities"]) \
             and not any(r["capabilities"] or r["restrictions"] for r in doc["roles"]):
         return []
-    key = hashlib.sha256(json.dumps([signature(doc), role, text], ensure_ascii=False).encode()).hexdigest()[:24]
+    key = hashlib.sha256(json.dumps([PREFLIGHT_VERSION, signature(doc), role, text],
+                                    ensure_ascii=False).encode()).hexdigest()[:24]
     cache_path = projects.path(pid) / "preflight.json"
     cached = (fs.read_json(cache_path) or {}).get(key)
     if isinstance(cached, list):
@@ -426,10 +429,11 @@ async def lifecycle_violations(project: dict, role: str, text: str) -> list[dict
     return found
 
 
-async def preflight(project: dict, sc: dict) -> dict:
+async def preflight(project: dict, sc: dict, lifecycle: bool = True) -> dict:
     """Before a test of the scenario starts. account - the account the scenario's role logs in with
     ("" - the default one), guest - the role needs no login; problems - what a person fixes first:
-    an account for the role, a scenario that breaks the restrictions or the lifecycle."""
+    an account for the role, a scenario that breaks the restrictions or the lifecycle. lifecycle=False -
+    a person has looked at the scenario and runs it anyway: only the account of the role is checked."""
     pid = project["id"]
     doc = get(pid)
     role_name = " ".join(str(sc.get("role") or "").split())
@@ -455,10 +459,15 @@ async def preflight(project: dict, sc: dict) -> dict:
                                          "записи — добавьте роль и привяжите учётную запись в «Проект → Тестовые данные»"})
     else:
         account = account_for(pid, text)
-    violations = await lifecycle_violations(project, role_name, text) if text else []
+    violations = await lifecycle_violations(project, role_name, text) if text and lifecycle else []
     problems += [{"kind": "lifecycle", "text": f"{v['problem']} (правило: {v['rule']})"
                   + (f"; как исправить: {v['fix']}" if v.get("fix") else ""), **v} for v in violations]
     return {"ok": not problems, "account": account, "guest": guest, "role": role_name, "problems": problems}
+
+
+def lifecycle_only(res: dict) -> bool:
+    """Only the lifecycle check stopped the test: a person may run it anyway (preflight(lifecycle=False))."""
+    return bool(res["problems"]) and all(p["kind"] == "lifecycle" for p in res["problems"])
 
 
 def preflight_text(res: dict) -> str:
