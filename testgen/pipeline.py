@@ -305,6 +305,10 @@ class Job:
         # This run's choice for test design: kinds of checks, layers, techniques (scenarios.settings)
         self.design = {k: list(v) for k, v in (design or {}).items() if k in ("types", "layers", "techniques")}
         self.validation: dict | None = None     # the specification checked against the documentation standard
+        # The analysis of requirements that keeps the scenarios this run designed: the ones not chosen for
+        # automation stay in the common list of scenarios for a later run or the Studio.
+        self.analysis_id = ""
+        self.preselect: list[int] = []          # scenarios checked when a person chooses ("scenarios.select")
         self.sessions = sessions
         # running | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
         self.status = "running"
@@ -322,13 +326,15 @@ class Job:
         self._wake = asyncio.Event()        # the application model may have been confirmed
         self._cancel = False
         self._session: StudioSession | None = None
+        self._task: asyncio.Task | None = None
+        self._current: dict | None = None       # the item being processed: a person may cancel it alone
 
     # ---------- control (call on the worker loop) ----------
 
     def select(self, indices: list[int]) -> None:
         if self.status != "awaiting_selection":
             return
-        self.items = [self._item(self.scenarios[i]) for i in sorted(set(indices))
+        self.items = [self._item(self.scenarios[i]) | {"scenario_index": i} for i in sorted(set(indices))
                       if 0 <= i < len(self.scenarios)]
         self._selected.set()
 
@@ -345,7 +351,7 @@ class Job:
         for i, d in decisions.items():
             if 0 <= i < len(self.items) and self.items[i].get("match") and d in reuse.DECISIONS:
                 self.items[i]["match"]["decision"] = d
-                sc = self.given[i] if self.given and len(self.given) == len(self.items) else {}
+                sc = self._origin(i)
                 if sc.get("analysis_id"):       # the Requirements tab shows the same decision
                     try:
                         analyses.update_scenario(self.project_id, sc["analysis_id"], sc["scenario_id"], {"decision": d})
@@ -355,11 +361,35 @@ class Job:
         self._wake.set()
 
     def cancel(self) -> None:
+        """Every stage stops: a wait for a person ends, the requirements and the test design (one long
+        request to the model, or the Planner) are interrupted at once, authoring stops its agent."""
         self._cancel = True
         self._selected.set()
         self._wake.set()
         if self._session:
             self._session.autopilot = False
+        if self._task and not self._task.done() and self.stage in ("requirements", "scenarios") and not self.items:
+            self._task.cancel()
+
+    def cancel_item(self, index: int, user: str = "") -> bool:
+        """One scenario is cancelled: a queued one is not processed, the one in work stops after its current
+        stage (authoring stops its agent). It stays cancelled when the run goes on; "Перезапустить" by name
+        brings it back."""
+        if not 0 <= index < len(self.items):
+            return False
+        item = self.items[index]
+        if item["status"] in DONE_ITEMS or item.get("skipped"):
+            return False
+        item["skipped"] = user or "студия"
+        if item is self._current:
+            if self._session:
+                self._session.autopilot = False
+            self._log(f"«{item['title']}»: отмена ({user or 'студия'}) — остановится после текущего этапа", "warn")
+        else:
+            item["status"], item["error"] = "cancelled", ""
+            self._log(f"«{item['title']}»: отменён ({user or 'студия'})", "warn")
+        self.save()
+        return True
 
     # ---------- state ----------
 
@@ -367,7 +397,7 @@ class Job:
         return {k: getattr(self, k) for k in (
             "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
             "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage",
-            "design", "validation")}
+            "design", "validation", "analysis_id", "preselect")}
 
     @classmethod
     def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
@@ -378,11 +408,12 @@ class Job:
                   user=j.get("user") or user, explore=j.get("explore", False), cases=j.get("cases"),
                   design=j.get("design"))
         job.id, job.created = j["id"], j["created"]
-        for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation"):
+        for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation", "analysis_id",
+                  "preselect"):
             setattr(job, k, j.get(k) or getattr(job, k))
         job.requirements = j.get("requirements") or [] if job.scenarios else []
         for item in job.items:
-            if item["status"] not in DONE_ITEMS:
+            if item["status"] not in DONE_ITEMS and not item.get("skipped"):
                 item["status"], item["error"] = "queued", ""
         job._log(f"Конвейер продолжен ({user or 'студия'}): готовые сценарии не повторяются")
         return job
@@ -396,7 +427,7 @@ class Job:
         job = cls.resumed(project, j, sessions, user)
         for i in indices:
             item = job.items[i]
-            item.update(status="queued", error="", session_id=None, summary="", bug=False)
+            item.update(status="queued", error="", session_id=None, summary="", bug=False, skipped="")
             if accept_lifecycle:
                 item["lifecycle_accepted"] = user or "студия"
         job._log(f"Перезапуск генерации ({user or 'студия'}): сценариев {len(indices)} — "
@@ -415,17 +446,24 @@ class Job:
         return {"title": sc["title"], "priority": sc.get("priority", ""), "type": sc.get("type", ""),
                 "layer": sc.get("layer") or "ui", "match": reuse.clean(sc.get("match")),
                 "status": "queued", "session_id": None, "test_id": None, "summary": "",
-                "run": None, "verify": None, "publish": None, "error": ""}
+                "run": None, "verify": None, "publish": None, "error": "",
+                # the scenario of a requirements analysis it came from: the test is shown under it
+                "analysis_id": sc.get("analysis_id") or "", "scenario_id": sc.get("scenario_id") or ""}
 
     # ---------- the process ----------
 
     async def run(self) -> None:
+        self._task = asyncio.current_task()
         budget = (projects.get(self.project_id) or {}).get("pipeline", {}).get("budget") or {}
         with llm.usage_scope(budget.get("job") or 0, budget.get("currency") or "USD", "запуска конвейера",
                              on_warn=lambda text: self._log(text, "warn")) as usage:
             try:
                 await self._run()
                 self.status = "cancelled" if self._cancel else "done"
+            except asyncio.CancelledError:
+                if not self._cancel:
+                    raise
+                self.status = "cancelled"       # stopped by a person in the middle of a stage
             except Exception as e:
                 self.status, self.error = "error", _err(e)
                 self._log(self.error, "error")
@@ -463,7 +501,7 @@ class Job:
                 return
         if not self.items:
             await self._select(cfg["scenarios"]["select"])
-            if self._cancel:
+            if self._cancel or not self.items:
                 return
         await self._await_reuse()
         if self._cancel:
@@ -475,7 +513,8 @@ class Job:
             pairs = zip(self.items, self.scenarios)
         else:
             by_title = {s["title"]: s for s in self.scenarios}
-            pairs = ((item, by_title[item["title"]]) for item in self.items)
+            pairs = ((item, self.scenarios[item["scenario_index"]] if "scenario_index" in item
+                      else by_title[item["title"]]) for item in self.items)
         await self._process_all(project, pairs)
 
     async def _design(self, project: dict, cfg: dict) -> None:
@@ -505,41 +544,41 @@ class Job:
         if not parts:
             raise ValueError("Нет требований: укажите ссылки, текст или включите исследование сайта")
         requirements = "\n\n---\n\n".join(parts)
+        # The designed scenarios are kept in the history of analyses (the Requirements tab): the ones not
+        # chosen for this run stay there, in the common list of scenarios, to be automated later.
+        if cfg["scenarios"]["enabled"]:
+            self.analysis_id = analyses.create(self.project_id, requirements, self.url, self.user)["id"]
+        try:
+            await self._design_from(project, cfg, requirements, spec if self.explore else requirements)
+        except BaseException as e:
+            if self.analysis_id:
+                cancelled = isinstance(e, asyncio.CancelledError)
+                analyses.finish(self.project_id, self.analysis_id, error="Остановлено" if cancelled else _err(e),
+                                status="cancelled" if cancelled else "")
+            raise
 
+    async def _design_from(self, project: dict, cfg: dict, requirements: str, learn_from: str) -> None:
         # The specification against the documentation standard, and what it says about the application
         if cfg["requirements"]["validate"]:
             self._log("Проверка ТЗ на соответствие стандарту документации…")
             try:
                 self.validation = await validation.validate(project, requirements)
+                if self.analysis_id:
+                    analyses.set_validation(self.project_id, self.analysis_id, self.validation)
                 self._log(f"Проверка ТЗ: {self.validation['score']}/100, замечаний {len(self.validation['findings'])}"
                           f" — {self.validation['summary']}", "info" if self.validation["verdict"] == "ready" else "warn")
             except Exception as e:
                 self._log(f"Проверка ТЗ не удалась: {_err(e)}", "warn")
         learn = None
         if cfg["requirements"].get("learn_model") and (self.links or self.text):
-            learn = asyncio.create_task(knowledge.extract(project, spec if self.explore else requirements, self.user))
+            learn = asyncio.create_task(knowledge.extract(project, learn_from, self.user))
 
-        # 2. Scenarios
-        self.stage = "scenarios"
-        if cfg["scenarios"]["enabled"]:
-            self._log("Проектирование сценариев…")
-            res = await scenarios.generate(requirements, self.url, project=project, log=self._log,
-                                           cfg=scenarios.settings(project, **self.design), record=False)
-            self.feature, self.assumptions = res.feature, res.assumptions
-            self.scenarios = [s.model_dump() for s in res.scenarios]
-            if cfg["requirements"].get("learn_model") and self.scenarios:
-                # The test data they need joins the model; each item gets the id of its record (record_id).
-                doc = knowledge.need(self.project_id, self.scenarios)
-                self._log(f"Тестовые данные сценариев записаны в модель приложения: записей {len(doc['data'])}, "
-                          f"ролей {len(doc['roles'])}")
-            self._log(f"Сценариев: {len(self.scenarios)}")
-            if not self.scenarios:
-                self._log("По этим требованиям сценариев не получилось", "warn")
-        else:
-            self.scenarios = [{"title": self.requirements[0]["title"] or "Сценарий", "type": "", "priority": "",
-                               "preconditions": "", "instructions": requirements, "expected_result": "",
-                               "gherkin": ""}]
-            self.items = [self._item(self.scenarios[0])]
+        try:
+            await self._scenarios(project, cfg, requirements)
+        except BaseException:
+            if learn:
+                learn.cancel()      # stopped or failed: the model does not go on learning in the background
+            raise
         if learn:
             try:
                 doc = await learn
@@ -548,21 +587,63 @@ class Job:
                 self._log(f"Модель приложения не обновлена: {_err(e)}", "warn")
         self.save()
 
+    async def _scenarios(self, project: dict, cfg: dict, requirements: str) -> None:
+        # 2. Scenarios
+        self.stage = "scenarios"
+        if cfg["scenarios"]["enabled"]:
+            self._log("Проектирование сценариев…")
+            aid, pid = self.analysis_id, self.project_id
+
+            def progress(event: dict) -> None:
+                # The analysis fills in as the scenarios come: stopped midway, the detailed ones stay.
+                if event["type"] == "plan":
+                    analyses.set_plan(pid, aid, event["feature"], event["assumptions"], event["scenarios"])
+                elif event["type"] == "batch":
+                    analyses.set_batch(pid, aid, event["start"], event["scenarios"])
+            res = await scenarios.generate(requirements, self.url, project=project, log=self._log, progress=progress,
+                                           cfg=scenarios.settings(project, **self.design), record=False)
+            self.feature, self.assumptions = res.feature, res.assumptions
+            analyses.finish(pid, aid, res.model_dump())
+            # The test data they need joins the model; each scenario keeps the ids of its records (record_id).
+            analyses.record_needs(pid, aid)
+            a = analyses.get(aid)
+            self.scenarios = [{k: sc.get(k) or "" for k in analyses.FIELDS}
+                              | {"test_data": sc.get("test_data") or [], "match": sc.get("match"),
+                                 "analysis_id": aid, "scenario_id": sc["id"]} for sc in a["scenarios"]]
+            if cfg["requirements"].get("learn_model") and any(sc["test_data"] for sc in self.scenarios):
+                self._log("Тестовые данные сценариев записаны в модель приложения («Проект → Тестовые данные»)")
+            self._log(f"Сценариев: {len(self.scenarios)} — сохранены в истории анализа требований")
+            if not self.scenarios:
+                self._log("По этим требованиям сценариев не получилось", "warn")
+        else:
+            self.scenarios = [{"title": self.requirements[0]["title"] or "Сценарий", "type": "", "priority": "",
+                               "preconditions": "", "instructions": requirements, "expected_result": "",
+                               "gherkin": ""}]
+            self.items = [self._item(self.scenarios[0])]
+
     async def _process_all(self, project: dict, pairs) -> None:
         """(item, scenario) one after another; an error of one scenario does not stop the others."""
         for item, sc in pairs:
-            if item["status"] in DONE_ITEMS:
+            if item["status"] in DONE_ITEMS or item.get("skipped"):
+                if item.get("skipped") and item["status"] not in DONE_ITEMS:
+                    item["status"] = "cancelled"
                 continue
             if self._cancel:
                 item["status"] = "cancelled"
                 continue
+            self._current = item
             try:
                 await self._process(project, item, sc)
             except Exception as e:
                 item["status"], item["error"] = "error", _err(e)
                 self._log(f"«{item['title']}»: {item['error']}", "error")
-            if item.get("test_id") and sc.get("analysis_id"):
-                analyses.link_test(self.project_id, sc["analysis_id"], sc["scenario_id"], item["test_id"])
+            finally:
+                self._current = None
+            if item.get("skipped") and item["status"] not in DONE_ITEMS:
+                item["status"] = "cancelled"
+            aid, scid = item.get("analysis_id") or sc.get("analysis_id"), item.get("scenario_id") or sc.get("scenario_id")
+            if item.get("test_id") and aid and scid:
+                analyses.link_test(self.project_id, aid, scid, item["test_id"])
             self.save()
 
     async def _import_cases(self, project: dict) -> None:
@@ -641,10 +722,16 @@ class Job:
                 for it in self.items if it.get("match") and it["match"].get("decision")))
             self.save()
 
+    def _origin(self, i: int) -> dict:
+        """The scenario of a requirements analysis item `i` came from: {analysis_id, scenario_id} or {}."""
+        it = self.items[i]
+        if it.get("analysis_id") and it.get("scenario_id"):
+            return {"analysis_id": it["analysis_id"], "scenario_id": it["scenario_id"]}
+        return self.given[i] if self.given and len(self.given) == len(self.items) else {}
+
     def _decisions_from_analyses(self) -> None:
-        if not self.given or len(self.given) != len(self.items):
-            return
-        for it, sc in zip(self.items, self.given):
+        for i, it in enumerate(self.items):
+            sc = self._origin(i)
             if reuse.pending(it.get("match")) and sc.get("analysis_id"):
                 a = analyses.get(sc["analysis_id"]) or {}
                 s = next((x for x in a.get("scenarios") or [] if x["id"] == sc.get("scenario_id")), None)
@@ -652,14 +739,27 @@ class Job:
                     it["match"]["decision"] = s["match"]["decision"]
 
     async def _select(self, mode: str) -> None:
+        """The scenarios (or manual cases) to automate: "manual" - a person chooses them (all but the
+        low-priority ones are checked to begin with), "all" / "high" - chosen at once. The ones not chosen
+        stay in the analysis for a later run."""
+        rest = " — остальные остаются в списке «Сценарии из анализа требований»" if self.analysis_id else ""
+        what = "кейсы" if self.cases else "сценарии"
         if mode == "manual":
+            self.preselect = [i for i, s in enumerate(self.scenarios) if s.get("priority") != "low"]
             self.status = "awaiting_selection"
-            self._log("Выберите сценарии для генерации тестов")
+            self._log(f"Выберите {what} для автоматизации: {len(self.scenarios)}"
+                      + (" — не выбранные останутся в списке «Сценарии из анализа требований»" if self.analysis_id else ""))
             await self._selected.wait()
+            if self._cancel:
+                return
             self.status = "running"
+            if not self.items:
+                self._log("Ничего не выбрано для автоматизации", "warn")
         else:
-            chosen = [s for s in self.scenarios if mode == "all" or s["priority"] == "high"]
-            self.items = [self._item(s) for s in chosen]
+            self.items = [self._item(s) | {"scenario_index": i} for i, s in enumerate(self.scenarios)
+                          if mode == "all" or s.get("priority") == "high"]
+            if mode == "high" and len(self.items) < len(self.scenarios):
+                self._log(f"Отобраны {what} с высоким приоритетом: {len(self.items)} из {len(self.scenarios)}{rest}")
 
     async def _author(self, project: dict, item: dict, s: StudioSession, started: bool = False) -> str:
         """Run an authoring session to its end -> done | error | stalled | timeout | cancelled.
@@ -712,6 +812,8 @@ class Job:
                 return
 
         run = None
+        if self._stopped(item):
+            return
         if cfg["run"]["enabled"] and item.get("run"):
             run = runs.get(item["run"].get("run_id") or "")
         elif cfg["run"]["enabled"]:
@@ -726,11 +828,15 @@ class Job:
             self.save()
         passed = item["run"]["passed"] if item.get("run") else True
 
+        if self._stopped(item):
+            return
         if cfg["verify"]["enabled"] and passed and not item.get("verify"):
             self.stage = item["status"] = "verifying"
             await self._verify(project, item, test)
             self.save()
 
+        if self._stopped(item):
+            return
         if cfg["publish"]["enabled"] and not (item.get("publish") or {}).get("status") == "ok":
             self.stage = item["status"] = "publishing"
             self._log(f"«{sc['title']}»: публикация в {publisher.title_of(project)}")
@@ -747,6 +853,13 @@ class Job:
                 item["publish"] = {"status": "failed", "summary": _err(e)}
                 self._log(f"«{sc['title']}»: публикация не удалась: {_err(e)}", "error")
         item["status"] = "done"
+
+    def _stopped(self, item: dict) -> bool:
+        """The run or this scenario was cancelled: the next stages of the scenario are not started."""
+        if self._cancel or item.get("skipped"):
+            item["status"] = "cancelled"
+            return True
+        return False
 
     async def _create_test(self, project: dict, item: dict, sc: dict) -> dict | None:
         """Authoring of an item -> the saved test, or None when a person is needed. A session
@@ -913,7 +1026,7 @@ class Job:
         start = time.time()
         while True:
             await asyncio.sleep(1)
-            if self._cancel:
+            if self._cancel or (self._current or {}).get("skipped"):
                 return "cancelled"
             if s.status == "done":
                 return "done"
@@ -943,7 +1056,8 @@ def _saved_item(state: dict, sid: str, test: dict) -> bool:
             item.update(status="done", test_id=test["id"], error="", bug=False,
                         summary=f"Тест сохранён в Studio: «{test['name']}»")
             found = True
-            sc = given[i] if len(given) == len(state["items"]) else {}
+            sc = (item if item.get("analysis_id") and item.get("scenario_id")
+                  else given[i] if len(given) == len(state["items"]) else {})
             if sc.get("analysis_id"):
                 analyses.link_test(state["project_id"], sc["analysis_id"], sc["scenario_id"], test["id"])
     return found
@@ -993,9 +1107,9 @@ def reconcile(jid: str, state: dict, sessions: dict) -> dict:
 def retryable(item: dict, explicit: bool = False) -> bool:
     """An item whose authoring failed - an error of the agent, the agent stopped, gave up or was stopped:
     "Перезапустить" generates it again. A possible defect (the agent saw the application differ from the
-    scenario) is retried only when a person names it."""
+    scenario) or a scenario a person cancelled is retried only when a person names it."""
     return (not item.get("test_id") and item.get("status") in ("error", "needs_attention", "cancelled")
-            and (explicit or not item.get("bug")))
+            and (explicit or not item.get("bug") and not item.get("skipped")))
 
 
 def scenario_text(sc: dict) -> str:

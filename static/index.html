@@ -1139,7 +1139,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <label class="inline"><input type="checkbox" data-p="scenarios.enabled"> включён</label></div>
           <div class="hint">Количество сценариев не ограничено — его определяет покрытие требований. Выключен — все требования целиком уходят агенту как один сценарий.</div>
           <div class="grid3">
-            <div><label>Отбор сценариев</label>
+            <div><label title="Вручную — конвейер ждёт выбора человека; не выбранные сценарии остаются в истории анализа требований">Отбор сценариев</label>
               <select data-p="scenarios.select">
                 <option value="manual">Вручную</option>
                 <option value="all">Все автоматически</option>
@@ -1551,12 +1551,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 <script>
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const api = async (method, url, body) => {
+const api = async (method, url, body, signal) => {
   let r;
   try {
-    r = await fetch(url, {method, headers: {'Content-Type': 'application/json'},
+    r = await fetch(url, {method, headers: {'Content-Type': 'application/json'}, signal,
                           body: body ? JSON.stringify(body) : undefined});
-  } catch {
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
     throw new Error('Сервер студии не отвечает: он остановлен или перезапущен. Сессии Studio хранятся в памяти ' +
                     'сервера — после перезапуска несохранённые шаги пропадают. Запустите студию и обновите страницу.');
   }
@@ -3266,18 +3267,34 @@ $('#reqValidate').onclick = async () => {
   const requirements = $('#reqText').value.trim();
   if (!requirements) { $('#reqStatus').textContent = 'Вставьте текст требований'; return; }
   const box = $('#reqValidation'), btn = $('#reqValidate');
+  const stop = new AbortController();
   btn.disabled = true; box.classList.remove('hidden');
-  box.innerHTML = '<div class="row"><span class="dot run"></span><b class="grow">Проверка ТЗ на соответствие стандарту…</b></div>';
+  box.innerHTML = '<div class="row"><span class="dot run"></span><b class="grow">Проверка ТЗ на соответствие стандарту…</b><button class="btn small" id="reqValidateStop">Отменить</button></div>';
+  $('#reqValidateStop').onclick = () => stop.abort();
   try {
-    const v = await api('POST', '/api/requirements/validate', {project_id: PID, requirements});
+    const v = await api('POST', '/api/requirements/validate', {project_id: PID, requirements}, stop.signal);
     box.innerHTML = `<div class="row"><h3 class="grow" style="margin:0">Проверка ТЗ</h3><button class="btn small" onclick="$('#reqValidation').classList.add('hidden')">✕</button></div>` + validationHtml(v);
-  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  } catch (e) {
+    if (e.name === 'AbortError') box.classList.add('hidden');
+    else box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
   finally { btn.disabled = false; }
 };
+// A validation of an analysis in progress: the same button cancels it.
+let AN_VALIDATE = null;
 async function validateAnalysis(btn) {
-  btn.disabled = true; btn.textContent = 'Проверка…';
-  try { AN.validation = await api('POST', '/api/requirements/validate', {project_id: PID, analysis_id: AN.id}); renderAnalysis(); }
-  catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Проверить ТЗ'; }
+  if (AN_VALIDATE) return AN_VALIDATE.abort();
+  AN_VALIDATE = new AbortController();
+  btn.textContent = 'Отменить проверку';
+  try { AN.validation = await api('POST', '/api/requirements/validate', {project_id: PID, analysis_id: AN.id}, AN_VALIDATE.signal); AN_VALIDATE = null; renderAnalysis(); }
+  catch (e) { if (e.name !== 'AbortError') alert(e.message); btn.textContent = 'Проверить ТЗ'; }
+  finally { AN_VALIDATE = null; }
+}
+async function showAnalysis(aid) {      // the analysis that keeps a run's scenarios, open in the Requirements tab
+  showTab('req');
+  await loadAnalyses();
+  const d = $(`details.an[data-aid="${aid}"]`);
+  if (d) { d.open = true; d.scrollIntoView({block: 'start'}); }
 }
 async function learnFromAnalysis(btn) {
   btn.disabled = true; btn.textContent = 'Анализ…';
@@ -3748,10 +3765,13 @@ function jobItemRow([it, i]) {
     : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
   const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужно подтверждение</span>' : '';
   return `<tr class="${kind === 'bug' ? 'hl-bad' : kind === 'attention' ? 'hl-warn' : ''}"><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span> ${flag}
-      ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}</td>
+      ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}
+      ${it.skipped ? `<div class="hint">Отменён (${esc(it.skipped)})${it.status !== 'cancelled' ? ' — остановится после текущего этапа' : ''}</div>` : ''}</td>
     <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
     <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${quality}</td><td>${z}</td>
-    <td>${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
+    <td>${LIVE_JOB.includes(JOB.status) && !it.skipped && !['done', 'needs_attention', 'cancelled'].includes(it.status)
+        ? `<button class="btn small" onclick="cancelJobItem(${i})" title="${it.status === 'queued' ? 'Не генерировать тест по этому сценарию в этом запуске' : 'Остановить работу по этому сценарию после текущего этапа'}">Отменить</button>` : ''}
+      ${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
       ${!it.test_id && it.status === 'needs_attention' && it.preflight?.length && it.preflight.every(p => p.kind === 'lifecycle')
         ? `<button class="btn small" onclick="runAnyway(${i})" title="Проверка по жизненному циклу ошиблась или сценарий так и задуман: сгенерировать тест без неё (учётная запись роли проверяется)">Запустить всё равно</button>` : ''}
       ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
@@ -3785,11 +3805,13 @@ function renderJob() {
   if (j.status === 'awaiting_model') {
     html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите жизненный цикл системы — сущности, статусы и переходы, роли и их возможности. Тесты генерируются только по подтверждённой модели.</span>
       <button class="btn" onclick="openSettings('data', 'overview')">Открыть модель</button>
+      <button class="btn" onclick="cancelJob()">Отменить запуск</button>
       <button class="btn primary" onclick="confirmModelFromJob()">Подтвердить</button></div></div>`;
   }
   if (j.status === 'awaiting_reuse') {
     const rows = j.items.map((it, i) => [it, i]).filter(([it]) => it.match && !it.match.decision && !['done', 'needs_attention'].includes(it.status));
     html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: эти сценарии похожи на созданные ранее — создать новый тест, переиспользовать или доработать прежний?</span>
+      <button class="btn" onclick="cancelJob()">Отменить запуск</button>
       <button class="btn primary" onclick="applyReuse()">Применить</button></div>
       <table class="scen-list"><thead><tr><th>#</th><th>Новый сценарий</th><th>Похож на</th><th>Решение</th></tr></thead><tbody>${rows.map(([it, i]) => `<tr>
         <td class="num">${i + 1}</td><td>${esc(it.title)}</td>
@@ -3798,11 +3820,13 @@ function renderJob() {
   }
   if (j.status === 'awaiting_selection') {
     if (JOB_PICK.id !== j.id) JOB_PICK = {id: j.id, open: new Set(),
-      sel: new Set(j.scenarios.map((s, i) => s.priority !== 'low' ? i : -1).filter(i => i >= 0))};
-    const n = JOB_PICK.sel.size, all = j.scenarios.length;
-    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: выберите сценарии для генерации тестов</span>
-      <span class="muted">Сценариев: ${all}</span>
-      <button class="btn primary" onclick="selectScenarios()" ${n ? '' : 'disabled'}>${n === all ? `Сгенерировать все (${all})` : `Сгенерировать выбранные (${n})`}</button></div>
+      sel: new Set(j.preselect || j.scenarios.map((s, i) => s.priority !== 'low' ? i : -1).filter(i => i >= 0))};
+    const n = JOB_PICK.sel.size, all = j.scenarios.length, what = j.cases ? 'кейсы' : 'сценарии';
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: выберите ${what} для автоматизации
+      ${j.analysis_id ? `<div class="hint">Не выбранные останутся в истории анализа требований и в списке «Сценарии из анализа требований» — их можно автоматизировать позже.</div>` : ''}</span>
+      <span class="muted">Всего: ${all}</span>
+      <button class="btn" onclick="cancelJob()">Отменить запуск</button>
+      <button class="btn primary" onclick="selectScenarios()" ${n ? '' : 'disabled'}>${n === all ? `Автоматизировать все (${all})` : `Автоматизировать выбранные (${n})`}</button></div>
       <table class="scen-list" data-key="job-pick"><thead><tr><th class="chk"><input type="checkbox" onchange="pickAllJob(this.checked)" title="Отметить все"
         ${n && n === all ? 'checked' : ''}></th><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th></tr></thead>
         <tbody>${j.scenarios.map(jobScenRow).join('') || '<tr><td colspan="5" class="muted">Сценариев нет.</td></tr>'}</tbody></table></div>`;
@@ -3815,8 +3839,9 @@ function renderJob() {
   html += group('bug', 'bad', 'Возможные дефекты', 'приложение ведёт себя не так, как ожидает сценарий: проверьте и заведите дефект') +
     group('active', '', 'В работе', '');
   const fold = (g, title) => groups[g].length ? `<details class="job-group" data-g="${g}" ${opened.has(g) ? 'open' : ''}><summary>${title} (${groups[g].length})</summary>${jobItemsTable(groups[g], 'job-' + g)}</details>` : '';
-  html += fold('done', 'Готово') + fold('waiting', live ? 'В очереди' : 'Не начато или прервано');
-  const about = (j.requirements.length ? `<div class="hint">Требования: ${j.requirements.map(r => esc(r.title || r.source)).join(' · ')}</div>` : '') +
+  html += fold('done', 'Готово') + fold('waiting', live ? 'В очереди или отменено' : 'Не начато, прервано или отменено');
+  const about = (j.analysis_id ? `<div class="hint">Сценарии запуска сохранены в истории анализа требований: <a href="#" onclick="showAnalysis('${j.analysis_id}');return false">открыть анализ</a></div>` : '') +
+    (j.requirements.length ? `<div class="hint">Требования: ${j.requirements.map(r => esc(r.title || r.source)).join(' · ')}</div>` : '') +
     (j.feature ? `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>` : '') +
     (j.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>` : '');
   if (about) html += `<details class="opt" data-g="about" ${opened.has('about') ? 'open' : ''}><summary>Требования и допущения</summary>${about}</details>`;
@@ -3872,8 +3897,14 @@ async function resumeJob() {
   try { await api('POST', `/api/jobs/${JOB.id}/resume`); openJob(JOB.id); } catch (e) { alert(e.message); }
 }
 async function cancelJob() {
-  if (!confirm('Остановить конвейер?')) return;
-  await api('POST', `/api/jobs/${JOB.id}/cancel`); openJob(JOB.id);
+  if (!confirm('Остановить конвейер? Текущий этап прерывается; спроектированные сценарии остаются в истории анализа требований, запуск можно продолжить.')) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/cancel`); } catch (e) { alert(e.message); }
+  openJob(JOB.id);
+}
+async function cancelJobItem(i) {
+  if (!confirm(`Отменить «${JOB.items[i].title}» в этом запуске? Сценарий остаётся в истории анализа требований.`)) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/items/${i}/cancel`); } catch (e) { alert(e.message); }
+  openJob(JOB.id);
 }
 
 // ---- projects page and the new project wizard

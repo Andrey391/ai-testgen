@@ -227,13 +227,21 @@ async def _plan(cfg: dict, system: str, context: str, pid: str, say, extra: str 
             say(f"Ответ модели оборвался на лимите: сохранено сценариев {len(got)}, продолжаю частями по {page}…")
             part = ScenarioPlan(feature=_field(e.text, "feature", ""), assumptions=_field(e.text, "assumptions", []),
                                 scenarios=got, more=True)
+        # A title planned already (in this part too) is the same scenario: a model that repeats itself
+        # with `more` set brings nothing new, and the plan ends there instead of at the guard.
+        seen = {s.title.strip().lower() for s in plan.scenarios} if plan else set()
+        new = []
+        for s in part.scenarios:
+            if s.title.strip().lower() not in seen:
+                seen.add(s.title.strip().lower())
+                new.append(s)
         if plan is None:
             plan = part
+            plan.scenarios = new
         else:
-            seen = {s.title.strip().lower() for s in plan.scenarios}
-            plan.scenarios += [s for s in part.scenarios if s.title.strip().lower() not in seen]
+            plan.scenarios += new
             plan.groups = list(dict.fromkeys(plan.groups + part.groups))
-        if not part.more or not part.scenarios:
+        if not part.more or not new:
             break
         say(f"В плане {len(plan.scenarios)} сценариев, продолжаю план…")
     plan.more = False
