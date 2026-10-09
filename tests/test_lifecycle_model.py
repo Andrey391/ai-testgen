@@ -429,7 +429,7 @@ def test_a_user_a_test_registers_is_an_account_not_stand_data():
 def test_a_model_of_an_earlier_version_moves_its_users_to_the_accounts():
     pid = _project()["id"]
     knowledge.save(pid, SHOP)
-    raw = fs.read_json(knowledge._path(pid))
+    raw = knowledge.get(pid)            # the model as a document of the old layout, written back below
     main = projects.save_account(pid, {"name": "Основная", "username": "admin@test.com"})["id"]
     raw["data"] = [
         {"id": "u1", "entity": "User", "name": "admin@test.com", "details": "вход по email", "role": "Менеджер",

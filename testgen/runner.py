@@ -133,7 +133,10 @@ async def analyze(test: dict, report: dict, cfg: dict | None = None, project_id:
         text += ("\nThe test was re-run immediately and PASSED the second time.\n" if retry["passed"] else
                  f"\nThe test was re-run immediately and failed again: "
                  f"{next((r['error'] for r in retry['results'] if r['status'] == 'failed'), '')}\n")
-    model = knowledge.prompt(project_id) if project_id else ""
+    # The part of the application model this test needs: its scenario, the failed step, the records it uses.
+    model = knowledge.prompt(project_id, knowledge.focus(
+        text=f"{test.get('scenario', '')}\n{failed['description']}\n{failed.get('error') or ''}",
+        records=[r.get("id") for r in test.get("data_refs") or []])) if project_id else ""
     if model:
         # A missing precondition (no club, no role, an object in another state) is the environment, not a bug.
         text += (f"\n{model}\nConsider whether a dependency of the test (data, role, state of an object) was "

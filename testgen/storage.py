@@ -233,6 +233,24 @@ def names(project_id: str) -> dict[str, str]:
     return repo.Sql.names(project_id)
 
 
+def data_refs(project_id: str) -> list[dict]:
+    """Tests that use or create records of the application model (knowledge.py): {id, name, data_refs}."""
+    return repo.Sql.data_refs(project_id)
+
+
+def remap_data_refs(project_id: str, ids: dict[str, str]) -> None:
+    """Records of the model merged into others (duplicates): the tests refer to the kept ones."""
+    for t in repo.Sql.data_refs(project_id):
+        if any(r.get("id") in ids for r in t["data_refs"]):
+            def change(x: dict) -> None:
+                out = {}
+                for r in x.get("data_refs") or []:
+                    rid = ids.get(r.get("id"), r.get("id"))
+                    out.setdefault(rid, r | {"id": rid})
+                x["data_refs"] = list(out.values())
+            update(t["id"], change)
+
+
 def counts() -> dict[str, int]:
     """{project id: number of tests}."""
     return repo.Sql.counts()

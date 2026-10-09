@@ -1,6 +1,6 @@
-"""Repositories: tables of their own for runs, tests, tasks and model spending (db.py) - columns for
-filters and reports, the document itself in jsonb. Each module has a class `Sql` with the methods
-the logic (runs.py, storage.py, tasks.py, llm.py) calls.
+"""Repositories: tables of their own for runs, tests, tasks, model spending and the application model
+(db.py) - columns for filters and reports, the document itself in jsonb. Each module has a class `Sql`
+with the methods the logic (runs.py, storage.py, tasks.py, llm.py, knowledge.py) calls.
 
 Everything else (projects, skills, suites, jobs, users...) is documents by path (fs.py); the files of
 a run (screenshots, trace) and the versions of a test are files by path too.
@@ -15,7 +15,7 @@ import contextlib
 import json
 from typing import Iterator
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from .. import db
 
@@ -34,6 +34,8 @@ def drop_project(pid: str) -> None:
     with db.engine().begin() as c:
         for t in (db.runs, db.tests, db.tasks, db.usage):
             c.execute(t.delete().where(t.c.project_id == pid))
+        from .knowledge import Sql
+        Sql.drop(c, pid)
 
 
 def _parts(key: str) -> list[str] | None:
@@ -91,5 +93,10 @@ def export_docs(c, prefix: str = "") -> Iterator[tuple[str, str]]:
     from . import runs, tasks, tests, usage
     for module in (tests, tasks, runs, usage):
         for key, doc in module.Sql.export(c):
+            if not prefix or key.startswith(prefix.rstrip("/") + "/"):
+                yield key, json.dumps(doc, ensure_ascii=False, indent=1)
+    if inspect(c).has_table("km_meta"):     # not before migration 0004 (the downgrade of 0003 reads this too)
+        from .knowledge import Sql
+        for key, doc in Sql.export(c):
             if not prefix or key.startswith(prefix.rstrip("/") + "/"):
                 yield key, json.dumps(doc, ensure_ascii=False, indent=1)

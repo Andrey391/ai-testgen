@@ -1176,6 +1176,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <h3>Модель приложения и тестовые данные</h3>
             <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Модель строится сама: из требований, из карты сайта (Planner) и при записи тестов (инструмент агента <code>test_data</code>). Запись, которая уже есть (то же или похожее имя), не дублируется и не меняется молча: обновление ждёт подтверждения в разделе «Обновления».</div>
             <div class="kn-tiles" id="knTiles"></div>
+            <div id="knLimits"></div>
             <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Интернет-магазин: каталог, категории, товары, корзина, заказы, оплата, доставка, покупатели"></textarea>
             <details class="opt" style="margin-top:8px"><summary>Построить из требований (ИИ дополнит модель; изменения существующих записей придут на подтверждение)</summary>
               <textarea id="knReq" rows="5" placeholder="Вставьте текст требований или оставьте пустым — возьмётся последний анализ требований"></textarea>
@@ -1187,13 +1188,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div class="hint">Перед генерацией тестов человек проверяет и подтверждает модель: сущности и их зависимости, статусы и переходы (кто их выполняет), роли с возможностями и ограничениями. Без подтверждения конвейер ждёт, а «Тест в Studio» из сценария не запускается. Изменение сущностей, жизненного цикла или ролей требует нового подтверждения; данные стенда и память меняются свободно.</div>
             <div class="kn-cats" id="lcLevels" title="Детализация диаграммы"></div>
             <div id="lcDiagram" class="lc-box"></div>
+            <div id="knUnits"></div>
             <div class="row" style="margin-top:8px"><span class="grow" id="knConfirmState"></span><button class="btn primary" id="knConfirm">Подтвердить жизненный цикл</button></div>
           </div>
         </div>
         <div data-kn-sec="pending" class="hidden">
           <div class="card">
             <h3>Обновления существующих записей</h3>
-            <div class="hint">Анализ требований, Planner, тест в Studio или человек нашли запись, которая уже есть в модели (то же или похожее имя). Чтобы не плодить дубли, новая запись не добавляется, а предлагает обновить существующую: проверьте каждое изменение («было → станет») и обновите или отклоните его — по одному или все сразу. «Добавить отдельно» — если похожее имя означает другой объект.</div>
+            <div class="hint">Анализ требований, Planner, тест в Studio или человек нашли запись, которая уже есть в модели (то же или похожее имя). Чтобы не плодить дубли, новая запись не добавляется, а предлагает обновить существующую: проверьте каждое изменение («было → станет») и обновите или отклоните его — по одному или все сразу. «Добавить отдельно» — если похожее имя означает другой объект. Новая сущность или роль, найденная автоматически после подтверждения жизненного цикла («новая запись»), тоже ждёт здесь: подтверждённая модель без человека не меняется.</div>
             <div class="kn-bar" id="knBar-pending"></div>
             <div id="knList-pending" data-nopage></div>
           </div>
@@ -3120,7 +3122,8 @@ function reuseHtml(s, attrs) {
     <select ${attrs} style="width:auto;padding:1px 4px;font-size:12px">${reuseOptions(m)}</select></div>`;
 }
 const roleBadge = s => s.role ? ` <span class="badge" title="Роль, от которой выполняется сценарий">${esc(s.role)}</span>` : '';
-const scDataText = s => (s.test_data || []).map(d => `${d.entity} «${d.name}»` + (d.state ? ` (${d.state})` : '') + (d.details ? ` — ${d.details}` : '') + (d.role ? `; роль: ${d.role}` : '')).join('\n');
+// ids: [id …] of the records of the application model - the agent fulfils them, the test keeps them (Studio)
+const scDataText = (s, ids) => (s.test_data || []).map(d => `${d.entity} «${d.name}»` + (d.state ? ` (${d.state})` : '') + (d.details ? ` — ${d.details}` : '') + (d.role ? `; роль: ${d.role}` : '') + (ids && d.record_id ? ` [id ${d.record_id}]` : '')).join('\n');
 const AN_STATUS = {running: ['генерация…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
 const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
 const isReady = s => !s.pending;
@@ -3551,7 +3554,7 @@ function toStudio(id) {
   const url = AN.url || $('#reqUrl').value;
   if (url) { $('#fUrl').value = url; delete $('#fUrl').dataset.auto; }
   $('#fName').value = sc.title;
-  const data = scDataText(sc).replace(/\n/g, '; ');
+  const data = scDataText(sc, true).replace(/\n/g, '; ');
   $('#fScenario').value = (sc.role ? `Роль: ${sc.role}\n` : '') + (sc.preconditions ? `Предусловия: ${sc.preconditions}\n` : '') +
     (data ? `Тестовые данные: ${data}\n` : '') +
     (sc.layer === 'api' ? 'Тест API (бэкенд): проверяй через запросы api_request — статус и поля ответа, без действий в интерфейсе.\n' : '') +
@@ -5019,7 +5022,8 @@ $('#skDelete').onclick = async () => {
 // (the same or a similar name) waits in «Обновления» for a person; «Дубли» merges similar records
 let KN = null, KN_PID = null, KN_DIRTY = false, KN_SEC = 'overview', KN_DUPS = null;
 const KN_FIELDS = {
-  entities: [['name', 'Сущность', 'Заказ'], ['description', 'Что это', ''], ['depends_on', 'Требует (через запятую)', 'Товар (в наличии), Покупатель (с адресом)'],
+  entities: [['name', 'Сущность', 'Заказ'], ['description', 'Что это', ''], ['group', 'Группа (часть приложения)', 'Заказы'],
+             ['aliases', 'Другие названия (через запятую)', 'заявка, покупка'], ['depends_on', 'Требует (через запятую)', 'Товар (в наличии), Покупатель (с адресом)'],
              ['lifecycle', 'Жизненный цикл', 'новый → оплачен → отправлен → доставлен; новый → отменён'], ['create', 'Кто и как создаёт', 'покупатель: корзина → оформление заказа'],
              ['rules', 'Правила', 'отправленный заказ нельзя отменить']],
   roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Описание', ''], ['account', 'Учётная запись проекта', ''],
@@ -5027,11 +5031,12 @@ const KN_FIELDS = {
   data: [['entity', 'Сущность', 'Товар'], ['name', 'Объект', 'Тестовый товар А'], ['details', 'Подробности', 'категория «Категория 1», цена 1000'],
          ['state', 'Состояние', 'в наличии'],
          ['status', 'Где', ''], ['source', 'Найдено', '']],
-  memory: [['text', 'Факт', ''], ['source', 'Источник', ''], ['at', 'Когда', '']],
+  memory: [['text', 'Факт', ''], ['about', 'О чём', ''], ['source', 'Источник', ''], ['at', 'Когда', '']],
 };
 const KN_KIND = {entities: 'Сущность', roles: 'Роль', data: 'Данные'};
 const KN_KINDS = {entities: 'Сущности', roles: 'Роли', data: 'Данные стенда'};
-const KN_STATUS = {'': 'на стенде', needed: 'нужны сценариям'};
+const KN_STATUS = {'': 'на стенде', needed: 'нужны сценариям', recipe: 'создаётся тестом'};
+const KN_LIST_FIELDS = ['depends_on', 'aliases'];      // edited as text, comma-separated
 const KN_CONFIRM = {none: ['не подтверждён', 'warn'], changed: ['изменён после подтверждения', 'warn'], confirmed: ['подтверждён', 'ok']};
 const KN_UI = {};      // list -> {q, f: {filter: value}, page, size, open: ids being edited, sel: group -> record to keep}
 const knUi = list => KN_UI[list] ||= {q: '', f: {}, page: 0, size: +store.get('pageSize') || 25, open: new Set(), sel: {}};
@@ -5048,7 +5053,9 @@ function knText(k, v) {
 }
 const yesNo = (yes, no) => [['', 'все'], ['yes', yes], ['no', no]];
 const KN_LISTS = {
-  entities: {cols: ['name', 'depends_on', 'lifecycle'], filters: () => [
+  entities: {cols: ['name', 'group', 'depends_on', 'lifecycle'], filters: () => [
+    ['group', 'Группа', [['', 'все'], ...[...new Set(KN.entities.map(e => e.group || ''))].sort().map(g => [g, g || 'без группы'])],
+     (x, v) => (x.group || '') === v],
     ['lc', 'Жизненный цикл', yesNo('описан', 'не описан'), (x, v) => !!x.lifecycle === (v === 'yes')],
     ['dep', 'Зависимости', yesNo('есть', 'нет'), (x, v) => !!x.depends_on?.length === (v === 'yes')]]},
   roles: {cols: ['name', 'capabilities', 'account'], filters: () => [
@@ -5056,21 +5063,24 @@ const KN_LISTS = {
     ['cap', 'Возможности', yesNo('описаны', 'не описаны'), (x, v) => !!x.capabilities === (v === 'yes')]]},
   data: {cols: ['name', 'state', 'details', 'status', 'source'], filters: () => [
     ['entity', 'Категория', [['', 'все'], ...knCategories().map(e => [e, e || 'без категории'])], (x, v) => (x.entity || '') === v],
-    ['status', 'Где', [['', 'все'], ['stand', 'на стенде'], ['needed', 'нужны сценариям']], (x, v) => (x.status === 'needed') === (v === 'needed')],
+    ['status', 'Где', [['', 'все'], ['stand', 'на стенде'], ['needed', 'нужны сценариям'], ['recipe', 'создаётся тестом']],
+     (x, v) => (x.status || 'stand') === v],
+    ['tests', 'Тесты', yesNo('используют', 'не используют'), (x, v) => !!(KN.data_tests || {})[x.id]?.length === (v === 'yes')],
     ['src', 'Источник', [['', 'все'], ['manual', 'вручную'], ['auto', 'найдено автоматически']], (x, v) => !!x.source === (v === 'auto')]]},
   memory: {cols: ['text', 'source', 'at'], filters: () => [
     ['src', 'Источник', [['', 'все'], ...[...new Set(KN.memory.map(m => knSourceKind(m.source)).filter(Boolean))].sort().map(s => [s, s])],
      (x, v) => knSourceKind(x.source) === v]]},
   pending: {filters: () => [
     ['kind', 'Раздел', [['', 'все'], ...Object.entries(KN_KINDS)], (p, v) => p.kind === v],
-    ['match', 'Совпадение', [['', 'все'], ['same', 'то же имя'], ['similar', 'похожее имя'], ['sort', 'разбор по разделам']], (p, v) => p.match === v],
+    ['match', 'Совпадение', [['', 'все'], ['new', 'новая запись'], ['same', 'то же имя'], ['similar', 'похожее имя'], ['sort', 'разбор по разделам']], (p, v) => p.match === v],
     ['src', 'Кто нашёл', [['', 'все'], ...[...new Set(KN.pending.map(p => knSourceKind(p.source)).filter(Boolean))].sort().map(s => [s, s])],
      (p, v) => knSourceKind(p.source) === v]]},
   dups: {filters: () => [['kind', 'Раздел', [['', 'все'], ...Object.entries(KN_KINDS)], (g, v) => g.kind === v]]},
 };
 
 function knStatusSelect(i, value) {
-  return `<select data-kn="data" data-i="${i}" data-k="status"><option value="">на стенде</option><option value="needed" ${value === 'needed' ? 'selected' : ''}>нужны сценариям</option></select>`;
+  return `<select data-kn="data" data-i="${i}" data-k="status">${Object.entries(KN_STATUS).map(([v, t]) =>
+    `<option value="${v}" ${(value || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
 }
 function knAccountSelect(kind, i, value) {
   const accs = PROJ.accounts || [];
@@ -5078,8 +5088,17 @@ function knAccountSelect(kind, i, value) {
     ? `<option value="none" ${value === 'none' ? 'selected' : ''}>без входа (гость)</option>` : ''}${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
 }
 function renderKnConfirm() {
-  const c = KN.confirmation || {state: 'none', missing: []};
+  const c = KN.confirmation || {state: 'none', missing: [], units: []};
   const [label, cls] = KN_CONFIRM[c.state];
+  const units = c.units || [];
+  $('#knUnits').innerHTML = units.length < 2 ? '' :
+    `<table class="kn-table" style="margin-top:10px"><thead><tr><th>Часть модели</th><th>Сущностей</th><th>Состояние</th><th></th></tr></thead><tbody>${units.map(u => {
+      const [l, k] = KN_CONFIRM[u.state];
+      return `<tr><td>${esc(u.title)}</td><td>${u.unit === '@roles' ? (KN.roles || []).length + ' ролей' : u.entities}</td>
+        <td><span class="badge ${k}">${l}</span>${u.at ? ` <span class="muted" style="font-size:12px">${fmtTime(u.at)}${u.by ? ' · ' + esc(u.by) : ''}</span>` : ''}</td>
+        <td style="text-align:right">${u.state === 'confirmed' ? '' : `<button class="btn small" onclick="knConfirmUnits(${esc(JSON.stringify([u.unit]))})">Подтвердить</button>`}</td></tr>`;
+    }).join('')}</tbody></table>
+    <div class="hint">Тест сценария ждёт подтверждения только тех частей, которые нужны его сущностям (с тем, что они требуют), и ролей.</div>`;
   $('#knConfirmState').innerHTML = `<span class="badge ${cls}">Жизненный цикл ${label}</span>` +
     (c.at ? ` <span class="muted" style="font-size:12px">${fmtTime(c.at)}${c.by ? ' · ' + esc(c.by) : ''}</span>` : '') +
     (c.missing?.length ? `<div class="hint">Не хватает: ${c.missing.map(esc).join('; ')}</div>` : '') +
@@ -5109,13 +5128,15 @@ function lcChainHtml(text) {
     : '<span class="muted" style="font-size:12px">жизненный цикл не описан</span>';
 }
 // entities in columns: an entity stands to the right of everything it requires; unknown requirements are dashed nodes
-function lcLayout() {
-  const nodes = KN.entities.filter(e => e.name).map(e => ({e, id: e.id, deps: []})), byId = {}, missing = {};
+function lcLayout(group) {       // group: only its entities; what they require from other groups - grey nodes
+  const nodes = KN.entities.filter(e => e.name && (group === undefined || (e.group || '') === group)).map(e => ({e, id: e.id, deps: []}));
+  const byId = {}, missing = {};
   nodes.forEach(n => byId[n.id] = n);
   for (const n of nodes) for (const d of n.e.depends_on || []) {
     const {name, setting} = lcDep(d), to = lcFind(name);
     if (to && to.id === n.id) continue;
     let from = to && byId[to.id];
+    if (!from && to) from = missing['@' + to.id] ||= {missing: true, outside: to.group || 'без группы', id: 'x' + Object.keys(missing).length, name: to.name, deps: []};
     if (!from) from = missing[lcNorm(name)] ||= {missing: true, id: 'x' + Object.keys(missing).length, name, deps: []};
     n.deps.push({from, setting});
   }
@@ -5139,6 +5160,7 @@ function lcLayout() {
   return cols.filter(Boolean);
 }
 function lcNode(n, level) {
+  if (n.outside) return `<div class="lc-node missing" data-lc="${n.id}" title="Сущность другой группы">${esc(n.name)}<div style="font-size:11px">группа «${esc(n.outside)}»</div></div>`;
   if (n.missing) return `<div class="lc-node missing" data-lc="${n.id}" title="Такой сущности нет в модели: добавьте её в разделе «Сущности»">${esc(n.name)}<div style="font-size:11px">нет в модели</div></div>`;
   const e = n.e, f = (label, v) => v ? `<div class="lc-f"><b>${label}:</b> ${esc(v)}</div>` : '';
   return `<div class="lc-node" data-lc="${n.id}" onclick="knOpenEntity('${e.id}')" title="Открыть сущность">
@@ -5155,7 +5177,17 @@ function lcRender() {
     box.innerHTML = '<div class="hint">Сущностей пока нет: постройте модель из требований или добавьте их в разделе «Сущности».</div>';
     return;
   }
-  const cols = lcLayout();
+  const groups = [...new Set(KN.entities.filter(e => e.name).map(e => e.group || ''))].sort();
+  // a large model is shown one group at a time; '*' - all of them (a small one)
+  const many = KN.entities.length > 40;
+  let group = store.get('tg_lc_group');
+  if (groups.length < 2 || group === '*' && !many) group = undefined;
+  else if (!groups.includes(group)) group = many ? groups[0] : undefined;
+  $('#lcLevels').insertAdjacentHTML('beforeend', groups.length < 2 ? '' : ' <span class="muted" style="font-size:12px;align-self:center">группа:</span>' +
+    (many ? '' : `<button class="${group === undefined ? 'on' : ''}" data-lc-group="*">все</button>`) +
+    groups.map(g => `<button class="${g === group ? 'on' : ''}" data-lc-group="${esc(g)}">${esc(g || 'без группы')}</button>`).join(''));
+  $$('#lcLevels [data-lc-group]').forEach(b => b.onclick = () => { store.set('tg_lc_group', b.dataset.lcGroup); readKnowledge(); lcRender(); });
+  const cols = lcLayout(group);
   if (level === 'simple') {
     box.innerHTML = cols.flat().filter(n => !n.missing).map(n => `<div class="lc-row"><b onclick="knOpenEntity('${n.e.id}')" title="Открыть сущность">${esc(n.e.name)}</b>
       <div>${lcChainHtml(n.e.lifecycle)}</div></div>`).join('');
@@ -5280,6 +5312,8 @@ function renderKnowledge() {
   if (!$('#knEnts')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knEnts"></datalist><datalist id="knRoleNames"></datalist>');
   $('#knEnts').innerHTML = KN.entities.map(e => e.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
   $('#knRoleNames').innerHTML = KN.roles.map(r => r.name).filter(Boolean).map(n => `<option value="${esc(n)}">`).join('');
+  if (!$('#knGroups')) document.body.insertAdjacentHTML('beforeend', '<datalist id="knGroups"></datalist>');
+  $('#knGroups').innerHTML = [...new Set(KN.entities.map(e => e.group).filter(Boolean))].map(g => `<option value="${esc(g)}">`).join('');
   for (const list of ['entities', 'roles', 'data', 'memory', 'pending', 'dups']) { knBar(list); knRenderList(list); }
   renderKnConfirm(); knCounts(); renderAccounts(); lcRender();
   if (!KN_DIRTY) $('#knMsg').textContent = KN.updated ? `Изменено ${fmtTime(KN.updated)}${KN.updated_by ? ' · ' + KN.updated_by : ''}` : '';
@@ -5294,6 +5328,8 @@ function knCounts() {
     b.textContent = c[k] || ''; b.classList.toggle('warn', warn);
     if (k === 'accounts') b.title = c.noacc ? `Ролей без учётной записи: ${c.noacc}` : '';
   });
+  const full = Object.entries(KN.limits || {}).filter(([, [n, max]]) => n >= max).map(([k]) => KN_KINDS[k] || k);
+  $('#knLimits').innerHTML = full.length ? `<div class="warn" style="margin-top:8px">Достигнут предел записей: ${full.map(esc).join(', ')} — новые не сохраняются. Объедините дубли или удалите лишнее.</div>` : '';
   const alert = c.pending + c.dups + c.noacc;
   $('#knNavAlert').textContent = alert || ''; $('#knNavAlert').classList.toggle('warn', alert > 0);
   $('#knNavAlert').title = alert ? `Ожидают решения: обновлений ${c.pending}, групп дублей ${c.dups}, ролей без учётной записи ${c.noacc}` : '';
@@ -5415,25 +5451,32 @@ function knRenderList(list) {
 function knEditor(kind, item, i) {
   return `<div class="grid3">${KN_FIELDS[kind].map(([k, label, ph]) => `<div><label>${label}</label>${k === 'account' ? knAccountSelect(kind, i, item.account)
       : k === 'status' ? knStatusSelect(i, item.status)
-      : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : k === 'role' ? 'list="knRoleNames"' : ''} placeholder="${esc(ph)}" value="${esc(k === 'depends_on' ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
-    ${kind === 'data' && item.needed_by?.length ? `<div class="hint">Нужны сценариям: ${item.needed_by.map(t => '«' + esc(t) + '»').join(', ')}</div>` : ''}`;
+      : `<input data-kn="${kind}" data-i="${i}" data-k="${k}" ${k === 'entity' ? 'list="knEnts"' : k === 'role' ? 'list="knRoleNames"' : k === 'group' ? 'list="knGroups"' : ''} placeholder="${esc(ph)}" value="${esc(KN_LIST_FIELDS.includes(k) ? (item[k] || []).join(', ') : item[k] || '')}">`}</div>`).join('')}</div>
+    ${kind === 'data' && item.needed_by?.length ? `<div class="hint">Нужны сценариям: ${item.needed_by.map(t => '«' + esc(t) + '»').join(', ')}</div>` : ''}
+    ${kind === 'data' && (KN.data_tests || {})[item.id]?.length ? `<div class="hint">Используют тесты: ${KN.data_tests[item.id].map(t =>
+      `<a href="#" onclick="openTest('${esc(t.id)}'); return false">«${esc(t.name)}»</a>${t.use === 'creates' ? ' (создаёт)' : ''}`).join(', ')}</div>` : ''}`;
 }
 function knRenderMemory() {
   const box = $('#knList-memory');
   const rows = knFiltered('memory', KN.memory.map((x, i) => [x, i]).reverse());
   const [shown, pager] = knPage('memory', rows);
   box.innerHTML = !KN.memory.length ? KN_EMPTY : !rows.length ? KN_NOTHING :
-    `<table class="kn-table"><thead><tr><th>Факт</th><th>Источник</th><th>Когда</th><th></th></tr></thead><tbody>${shown.map(([m]) =>
-      `<tr><td>${esc(m.text)}</td><td class="muted">${esc(m.source || '')}</td><td class="muted" style="white-space:nowrap">${fmtTime(m.at)}</td>
+    `<table class="kn-table"><thead><tr><th>Факт</th><th>О чём</th><th>Источник</th><th>Когда</th><th></th></tr></thead><tbody>${shown.map(([m]) =>
+      `<tr><td>${esc(m.text)}</td><td class="muted">${esc(knAbout(m))}</td><td class="muted">${esc(m.source || '')}</td><td class="muted" style="white-space:nowrap">${fmtTime(m.at)}</td>
        <td><button class="linkbtn" onclick="knDelFact('${esc(m.id)}')">удалить</button></td></tr>`).join('')}</tbody></table>` + pager;
   knWirePager('memory');
+}
+function knAbout(m) {          // the entities and roles a fact is tagged with, by name
+  const names = [...(m.entities || []).map(id => KN.entities.find(e => e.id === id)?.name),
+                 ...(m.roles || []).map(id => KN.roles.find(r => r.id === id)?.name)].filter(Boolean);
+  return names.join(', ');
 }
 function readKnowledge() {
   if (!KN) return;
   KN.summary = $('#knSummary').value;
   $$('[data-kn]').forEach(el => {
     const item = KN[el.dataset.kn][+el.dataset.i];
-    if (item) item[el.dataset.k] = el.dataset.k === 'depends_on' ? el.value.split(',').map(x => x.trim()).filter(Boolean) : el.value;
+    if (item) item[el.dataset.k] = KN_LIST_FIELDS.includes(el.dataset.k) ? el.value.split(',').map(x => x.trim()).filter(Boolean) : el.value;
   });
 }
 function knToggle(list, id) { readKnowledge(); const o = knUi(list).open; o.has(id) ? o.delete(id) : o.add(id); knRenderList(list); }
@@ -5478,9 +5521,10 @@ function knRenderPending() {
     shown.map(([p]) => {
       const t = KN[p.kind].find(x => x.id === p.target);
       return `<div class="kn-card"><div class="row" style="gap:6px;flex-wrap:wrap"><b>${KN_KIND[p.kind]} ${esc(knLabel(p.kind, t || p.item))}</b>
-          ${p.match === 'similar' ? `<span class="badge warn" title="Найдена запись с похожим, но не тем же именем">похожее имя: ${esc(knLabel(p.kind, p.item))}</span>`
+          ${p.match === 'new' ? '<span class="badge warn" title="Найдена после подтверждения жизненного цикла: подтверждённая модель не меняется без человека">новая запись</span>'
+            : p.match === 'similar' ? `<span class="badge warn" title="Найдена запись с похожим, но не тем же именем">похожее имя: ${esc(knLabel(p.kind, p.item))}</span>`
             : p.match === 'sort' ? '<span class="badge warn" title="Разбор по разделам: модель не уверена, куда отнести запись">разбор: нужно подтверждение</span>' : '<span class="badge">то же имя</span>'}
-          ${t ? '' : '<span class="badge bad" title="Запись удалили после находки: «Обновить» добавит её заново">запись удалена</span>'}
+          ${t || p.match === 'new' ? '' : '<span class="badge bad" title="Запись удалили после находки: «Обновить» добавит её заново">запись удалена</span>'}
           <span class="muted grow" style="font-size:12px;text-align:right">${esc(p.source || '')} · ${fmtTime(p.at)}</span></div>
         <table class="diff"><thead><tr><th>Поле</th><th>Сейчас</th><th>Станет</th></tr></thead><tbody>${Object.entries(p.changes).map(([k, v]) => k === 'move'
           ? `<tr><td>Раздел</td><td class="old">Данные стенда</td><td class="new">Учётные записи${p.roles?.length ? ` (роли: ${esc(p.roles.join(', '))})` : ''}</td></tr>`
@@ -5489,7 +5533,7 @@ function knRenderPending() {
         <div class="row" style="margin-top:6px;gap:6px"><span class="grow"></span>
           ${p.match === 'similar' ? `<button class="btn small" onclick="knResolve('separate', ['${p.id}'])" title="Похожее имя означает другой объект: добавить его новой записью">Добавить отдельно</button>` : ''}
           <button class="btn small" onclick="knResolve('reject', ['${p.id}'])">${'move' in p.changes ? 'Оставить в данных' : 'Отклонить'}</button>
-          <button class="btn small primary" onclick="knResolve('accept', ['${p.id}'])">${'move' in p.changes ? 'Перенести в учётные записи' : 'Обновить'}</button></div></div>`;
+          <button class="btn small primary" onclick="knResolve('accept', ['${p.id}'])">${'move' in p.changes ? 'Перенести в учётные записи' : p.match === 'new' ? 'Добавить' : 'Обновить'}</button></div></div>`;
     }).join('') + pager;
   knWirePager('pending');
 }
@@ -5581,15 +5625,17 @@ async function knDismissDup(id) {
   } catch (e) { alert(e.message); }
 }
 
-$('#knConfirm').onclick = async () => {
+async function knConfirmUnits(units) {      // null - the whole model
   readKnowledge();
   try {
     await api('PUT', `/api/projects/${PID}/knowledge`, KN);      // what is on the screen is what gets confirmed
     KN_DIRTY = false;
-    KN = await api('POST', `/api/projects/${PID}/knowledge/confirm`);
-    renderKnowledge(); $('#knMsg').textContent = 'Жизненный цикл подтверждён: тесты генерируются по этой модели';
+    KN = await api('POST', `/api/projects/${PID}/knowledge/confirm`, units ? {units} : {});
+    renderKnowledge();
+    $('#knMsg').textContent = units ? 'Часть модели подтверждена: тесты её сценариев генерируются по ней' : 'Жизненный цикл подтверждён: тесты генерируются по этой модели';
   } catch (e) { $('#knMsg').textContent = e.message; KN = await api('GET', `/api/projects/${PID}/knowledge`).catch(() => KN); renderKnConfirm(); }
-};
+}
+$('#knConfirm').onclick = () => knConfirmUnits(null);
 $('#knSave').onclick = async () => {
   readKnowledge();
   const before = new Set(KN.pending.map(p => p.id));

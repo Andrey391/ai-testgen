@@ -259,7 +259,7 @@ def test_application_model_learns_from_the_site_map_and_from_tests(fake_llm):
 
     # The authoring agent records what a test found or created: the record is refreshed, the entity learns.
     say = []
-    fake = SimpleNamespace(project_id=pid, name="Оформление заказа", credentials={"password": "pw-secret"},
+    fake = SimpleNamespace(project_id=pid, name="Оформление заказа", credentials={"password": "pw-secret"}, data_refs={},
                            _say=lambda who, msg: say.append(msg),
                            project={"id": pid, "pipeline": {"requirements": {"learn_model": False}}})
     out = arun(StudioSession._helper(fake, "test_data", {
