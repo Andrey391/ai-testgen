@@ -2415,8 +2415,22 @@ class ValidateBody(BaseModel):
     standard: str = ""          # empty = the project's ("requirements.standard")
 
 
+async def _while_connected(request: Request, coro):
+    """Run on the worker loop while the page waits: the page went away («Отменить») - the work is cancelled,
+    the model is not paid for an answer nobody reads."""
+    future = submit(coro)
+    result = asyncio.wrap_future(future)
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(result), 0.5)
+        except asyncio.TimeoutError:
+            if await request.is_disconnected():
+                future.cancel()
+                raise asyncio.CancelledError()
+
+
 @app.post("/api/requirements/validate")
-async def validate_requirements(body: ValidateBody):
+async def validate_requirements(body: ValidateBody, request: Request):
     """The specification against the documentation standard: sections, quality of requirements, questions."""
     p = project(body.project_id, "editor")
     _require_model(p)
@@ -2427,7 +2441,9 @@ async def validate_requirements(body: ValidateBody):
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
     try:
-        report = await call(validation.validate(p, text, body.standard))
+        report = await _while_connected(request, validation.validate(p, text, body.standard))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Проверка отменена")
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
     if a:
@@ -2849,6 +2865,20 @@ async def cancel_job(jid: str):
     if not job:
         raise HTTPException(404, "Запуск не найден")
     WORKER.call_soon_threadsafe(job.cancel)
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{jid}/items/{index}/cancel")
+async def cancel_job_item(jid: str, index: int, request: Request):
+    """One scenario of a run is cancelled: queued - skipped, in work - stopped after its current stage."""
+    job = pipeline.JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Запуск не найден")
+
+    async def cancel():
+        return job.cancel_item(index, request.state.user or "")
+    if not await call(cancel()):
+        raise HTTPException(409, "Сценарий уже обработан или отменён")
     return {"ok": True}
 
 
