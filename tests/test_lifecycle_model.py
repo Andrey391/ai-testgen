@@ -540,6 +540,12 @@ def test_a_scenario_breaking_the_lifecycle_does_not_start(fake_llm, monkeypatch)
                                             "scenario": "Шаги", "analysis_id": a["id"], "scenario_id": added["id"]})
     assert r.status_code == 409 and "Тест не запущен" in r.json()["detail"]
     assert "не видит чужие заказы" in r.json()["detail"]
+    assert r.headers.get("X-Preflight") == "lifecycle"      # the studio offers to run it anyway
+
+    # A person runs it anyway: only the account of the role is checked, the model is not asked.
+    n = len(asked)
+    res = arun(knowledge.preflight(p, sc, lifecycle=False))
+    assert res["ok"] and res["account"] == doc["roles"][0]["account"] and len(asked) == n
 
     # The pipeline: the item waits for a person, no session is started.
     job = pipeline.Job(p, [], "", "", {}, scenarios=[sc], feature="Заказы")
@@ -548,3 +554,8 @@ def test_a_scenario_breaking_the_lifecycle_does_not_start(fake_llm, monkeypatch)
     assert item["status"] == "needs_attention" and "не видит чужие заказы" in item["error"]
     assert item["preflight"][0]["kind"] == "lifecycle" and not item["session_id"]
     assert pipeline.retryable(item)          # fixed scenario or model: «Перезапустить сбойные»
+    # «Запустить всё равно»: the retried item skips the lifecycle check, the others keep it.
+    job.items = [item, job._item(sc)]
+    again = pipeline.Job.retried(projects.get(pid), job.state(), {}, [0], user="ann", accept_lifecycle=True)
+    assert again.items[0]["lifecycle_accepted"] == "ann" and again.items[0]["status"] == "queued"
+    assert not again.items[1].get("lifecycle_accepted")

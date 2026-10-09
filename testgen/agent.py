@@ -464,6 +464,22 @@ def has_assertion(steps: list[dict]) -> bool:
                and st.get("status") != "failed" for st in steps)
 
 
+# Record & Play: the action follows from the element a person clicks, as a user would use it.
+VALUE_ACTIONS = ("fill", "select_option", "upload_file")
+NOT_TYPED = ("button", "submit", "reset", "checkbox", "radio", "image", "range", "color", "hidden")
+
+
+def auto_action(info: dict) -> str:
+    tag, kind, role = info.get("tag") or "", (info.get("type") or "").lower(), info.get("role") or ""
+    if tag == "select" or role in ("combobox", "listbox") and tag != "input":
+        return "select_option"
+    if tag == "input" and kind == "file":
+        return "upload_file"
+    if tag == "textarea" or tag == "input" and kind not in NOT_TYPED or role in ("textbox", "searchbox"):
+        return "fill"
+    return "click"
+
+
 class StudioSession:
     """One authoring session: a browser, a conversation with the LLM, the steps.
 
@@ -872,6 +888,10 @@ class StudioSession:
                 raise ValueError("No element at this point")
             ref = info["ref"]
             name = info.get("name") or info.get("placeholder") or info.get("tag", "element")
+            if action == "auto":            # Record & Play: what a user does with this element
+                action = auto_action(info)
+                if action in VALUE_ACTIONS and not value:
+                    return {"need": action, "name": name}     # nothing is done: the studio asks for the value
             if action == "assert_text_present":
                 value = value or name
             if not description:

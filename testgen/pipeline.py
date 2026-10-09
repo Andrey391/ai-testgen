@@ -388,13 +388,17 @@ class Job:
         return job
 
     @classmethod
-    def retried(cls, project: dict, j: dict, sessions: dict, indices: list[int], user: str = "") -> "Job":
+    def retried(cls, project: dict, j: dict, sessions: dict, indices: list[int], user: str = "",
+                accept_lifecycle: bool = False) -> "Job":
         """The run goes on (as resumed()) and the given items whose authoring failed start over: a fresh
-        session, no error; the caller has closed their old sessions."""
+        session, no error; the caller has closed their old sessions. accept_lifecycle - a person has looked
+        at what the lifecycle check found and runs the items anyway."""
         job = cls.resumed(project, j, sessions, user)
         for i in indices:
             item = job.items[i]
             item.update(status="queued", error="", session_id=None, summary="", bug=False)
+            if accept_lifecycle:
+                item["lifecycle_accepted"] = user or "студия"
         job._log(f"Перезапуск генерации ({user or 'студия'}): сценариев {len(indices)} — "
                  + ", ".join(f"«{job.items[i]['title']}»" for i in indices[:10]) + ("…" if len(indices) > 10 else ""))
         return job
@@ -752,7 +756,8 @@ class Job:
         if cfg["requirements"].get("preflight"):
             # Before the test: the role has an account, the scenario keeps to the restrictions and lifecycles.
             item["status"] = "preflight"
-            check = await knowledge.preflight(project, sc)
+            # A person ran it anyway («Запустить всё равно»): only the account of the role is checked.
+            check = await knowledge.preflight(project, sc, lifecycle=not item.get("lifecycle_accepted"))
             item["preflight"] = check["problems"]
             if not check["ok"]:
                 item["status"], item["error"] = "needs_attention", knowledge.preflight_text(check)

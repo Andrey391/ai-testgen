@@ -1320,6 +1320,7 @@ class NewSession(BaseModel):
     analysis_id: str = ""  # the scenario of a requirements analysis the test is made from: linked on save
     scenario_id: str = ""
     fresh_login: bool = False   # do not start with the project's saved login (e.g. a new login test)
+    accept_lifecycle: bool = False   # a person runs the scenario although the lifecycle check stopped it
 
 
 def _start_session(s: StudioSession, autopilot: bool) -> None:
@@ -1363,13 +1364,14 @@ async def create_session(body: NewSession, request: Request):
     if sc and p["pipeline"]["requirements"].get("preflight"):
         # The scenario's role has an account and the scenario keeps to the restrictions and lifecycles.
         try:
-            check = await knowledge.preflight(p, sc)
+            check = await knowledge.preflight(p, sc, lifecycle=not body.accept_lifecycle)
         except llm.BudgetExceeded as e:
             raise HTTPException(429, str(e))
         except Exception as e:
             raise HTTPException(502, f"Проверка сценария перед тестом не удалась: {llm.api_error_text(e)}")
-        if not check["ok"]:
-            raise HTTPException(409, knowledge.preflight_text(check))
+        if not check["ok"]:   # only the lifecycle check: the studio offers to run it anyway
+            raise HTTPException(409, knowledge.preflight_text(check),
+                                headers={"X-Preflight": "lifecycle"} if knowledge.lifecycle_only(check) else None)
         if not body.account and not any(creds.values()):     # no account chosen: the role's one
             account, guest = check["account"], check["guest"]
             creds = {} if guest else projects.account_credentials(p["id"], account)
@@ -2749,6 +2751,7 @@ async def resume_job(jid: str, request: Request):
 
 class RetryBody(BaseModel):
     indices: list[int] | None = None    # items to generate again; None = every one that failed (pipeline.retryable)
+    accept_lifecycle: bool = False      # a person runs them although the lifecycle check stopped them
 
 
 @app.post("/api/jobs/{jid}/retry")
@@ -2774,7 +2777,8 @@ async def retry_job(jid: str, body: RetryBody, request: Request):
             await call(SESSIONS.pop(sid).close(discard=True))
         elif sid:
             agent_mod.drop_checkpoint(p["id"], sid)
-    job = pipeline.Job.retried(p, j, SESSIONS, indices, user=request.state.user or "")
+    job = pipeline.Job.retried(p, j, SESSIONS, indices, user=request.state.user or "",
+                               accept_lifecycle=body.accept_lifecycle)
     pipeline.JOBS[job.id] = job
     job.save()
     if INSTANCE_URL:

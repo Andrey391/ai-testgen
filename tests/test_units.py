@@ -267,3 +267,18 @@ def test_explorer_scope_is_start_page_and_children():
     assert _in_scope("https://app.test/anything", "https://app.test/")             # from the root: the whole site
     assert _in_scope("https://app.test/app/list.html", "https://app.test/app/index.html")
     assert not _in_scope("https://app.test/list.html", "https://app.test/app/index.html")
+
+def test_record_and_play_acts_as_a_user_would():
+    """Record & Play: the action follows from the element clicked; a field and a list ask for the value."""
+    from testgen.agent import VALUE_ACTIONS, auto_action
+    assert auto_action({"tag": "button", "role": "button"}) == "click"
+    assert auto_action({"tag": "a", "role": "link"}) == "click"
+    assert auto_action({"tag": "input", "type": "checkbox", "role": "checkbox"}) == "click"
+    assert auto_action({"tag": "input", "type": "submit"}) == "click"
+    assert auto_action({"tag": "input", "type": ""}) == "fill"
+    assert auto_action({"tag": "input", "type": "email", "role": "textbox"}) == "fill"
+    assert auto_action({"tag": "textarea"}) == "fill"
+    assert auto_action({"tag": "div", "role": "textbox"}) == "fill"
+    assert auto_action({"tag": "select", "role": "combobox"}) == "select_option"
+    assert auto_action({"tag": "input", "type": "file"}) == "upload_file"
+    assert {"fill", "select_option", "upload_file"} == set(VALUE_ACTIONS)
