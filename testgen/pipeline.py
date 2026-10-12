@@ -1,6 +1,9 @@
 """The full, configurable test generation process of a project:
 
-    requirements (Jira / Confluence via MCP, .md, text, or the Planner's site map)
+    requirements (Jira / Confluence via MCP, .md, text, or the Planner's site map; or requirements already
+                  reviewed in the Requirements tab)
+      -> review (the reviewer subagent, review.py: defects of the document and conflicts with the lifecycle
+                 of the system; findings that block test design wait for a person)
       -> scenarios (test design by the LLM + skills; manual or automatic selection)
       -> authoring (agent in a real browser: built-in Playwright or Playwright MCP)
       -> run (replay with self-healing, re-run of failures, failure analysis)
@@ -25,7 +28,7 @@ import uuid
 from urllib.parse import urlparse
 
 from . import (analyses, audit, explorer, fs, knowledge, llm, mcp_hub, mutations, notify, projects, publisher, reuse,
-               runner, runs, scenarios, sources, storage, validation, vault)
+               review, runner, runs, scenarios, sources, storage, vault)
 from . import agent
 from .agent import StudioSession, has_assertion
 
@@ -292,7 +295,8 @@ def _err(e: Exception) -> str:
 class Job:
     def __init__(self, project: dict, links: list[str], text: str, url: str, sessions: dict,
                  user: str = "", explore: bool = False, cases: dict | None = None,
-                 scenarios: list[dict] | None = None, feature: str = "", design: dict | None = None):
+                 scenarios: list[dict] | None = None, feature: str = "", design: dict | None = None,
+                 review_id: str = ""):
         self.id = uuid.uuid4().hex[:10]
         self.project_id = project["id"]
         self.links = [l.strip() for l in links if l.strip()]
@@ -305,12 +309,19 @@ class Job:
         # This run's choice for test design: kinds of checks, layers, techniques (scenarios.settings)
         self.design = {k: list(v) for k, v in (design or {}).items() if k in ("types", "layers", "techniques")}
         self.validation: dict | None = None     # the specification checked against the documentation standard
+        # The reviewer's report on the requirements (review.review): what blocks test design waits for a person.
+        self.review: dict | None = None
+        self.review_accepted = ""               # who let the run go on in spite of the blocking findings
+        # Requirements reviewed in the Requirements tab: the run designs the scenarios of that analysis.
+        self.review_id = review_id
+        if review_id:
+            self.review_accepted = user or "студия"     # a person read the report and sent them here
         # The analysis of requirements that keeps the scenarios this run designed: the ones not chosen for
         # automation stay in the common list of scenarios for a later run or the Studio.
         self.analysis_id = ""
         self.preselect: list[int] = []          # scenarios checked when a person chooses ("scenarios.select")
         self.sessions = sessions
-        # running | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
+        # running | awaiting_review | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
         self.status = "running"
         self.stage = "requirements"
         self.created = time.time()
@@ -339,6 +350,14 @@ class Job:
         self._selected.set()
 
     def model_confirmed(self) -> None:
+        self._wake.set()
+
+    def accept_review(self, user: str = "") -> None:
+        """A person read what the reviewer found and lets the run design tests from these requirements."""
+        if self.status != "awaiting_review":
+            return
+        self.review_accepted = user or "студия"
+        self.save()
         self._wake.set()
 
     def session_saved(self, sid: str, test: dict) -> None:
@@ -397,7 +416,7 @@ class Job:
         return {k: getattr(self, k) for k in (
             "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
             "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage",
-            "design", "validation", "analysis_id", "preselect")}
+            "design", "validation", "analysis_id", "preselect", "review", "review_id", "review_accepted")}
 
     @classmethod
     def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
@@ -406,10 +425,10 @@ class Job:
         item's authoring continues its session from the checkpoint (agent.restored)."""
         job = cls(project, j.get("links") or [], j.get("text") or "", j.get("url") or "", sessions,
                   user=j.get("user") or user, explore=j.get("explore", False), cases=j.get("cases"),
-                  design=j.get("design"))
+                  design=j.get("design"), review_id=j.get("review_id") or "")
         job.id, job.created = j["id"], j["created"]
         for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation", "analysis_id",
-                  "preselect"):
+                  "preselect", "review", "review_accepted"):
             setattr(job, k, j.get(k) or getattr(job, k))
         job.requirements = j.get("requirements") or [] if job.scenarios else []
         for item in job.items:
@@ -518,8 +537,11 @@ class Job:
         await self._process_all(project, pairs)
 
     async def _design(self, project: dict, cfg: dict) -> None:
-        """Requirements -> scenarios (or one scenario of the whole text when the stage is off)."""
+        """Requirements -> review -> scenarios (or one scenario of the whole text when the stage is off)."""
         self.requirements = []
+        if self.review_id:
+            await self._design_reviewed(project, cfg)
+            return
         # 1. Requirements
         parts = []
         for link in self.links:
@@ -531,9 +553,10 @@ class Job:
             self.requirements.append({"source": "текст", "title": self.text.split("\n")[0][:80],
                                       "chars": len(self.text)})
             parts.append(self.text)
+        spec = "\n\n---\n\n".join(parts)        # the specification itself: what the reviewer checks
         if self.explore:
             self._log(f"Planner: исследование сайта {self.url}")
-            spec = "\n\n---\n\n".join(parts)       # the model learns from the map itself (learn=True)
+            # the model learns from the map itself (learn=True)
             m = await explorer.explore(project, self.url, log=self._log, learn=True)
             if m["status"] != "done":
                 raise ValueError(f"Исследование сайта не удалось: {m['error']}")
@@ -548,8 +571,31 @@ class Job:
         # chosen for this run stay there, in the common list of scenarios, to be automated later.
         if cfg["scenarios"]["enabled"]:
             self.analysis_id = analyses.create(self.project_id, requirements, self.url, self.user)["id"]
+        await self._designing(project, cfg, requirements, spec, spec if self.links or self.text else "")
+
+    async def _design_reviewed(self, project: dict, cfg: dict) -> None:
+        """Requirements reviewed in the Requirements tab: their scenarios are designed into the same analysis;
+        the review is not repeated, the model is not taught again what it learned from them."""
+        a = analyses.get(self.review_id)
+        if not a or a["project_id"] != self.project_id:
+            raise ValueError("Анализ требований не найден")
+        if not analyses.reviewed(a):
+            raise ValueError("Требования ещё не проверены: «Проверить требования» во вкладке «Требования»")
+        self.requirements.append({"source": "Требования", "title": f"Проверенные требования: {a['title'] or 'без названия'}",
+                                  "chars": len(a["requirements"])})
+        self.review = a["review"]
+        self.validation = self.review.get("validation") or a.get("validation")
+        self._log(f"Требования проверены ревьюером: {review.summary(self.review)}",
+                  "info" if self.review.get("verdict") == "ready" else "warn")
+        if cfg["scenarios"]["enabled"]:
+            analyses.restart(self.project_id, a["id"], force=True)
+            self.analysis_id = a["id"]
+        await self._designing(project, cfg, a["requirements"], "", "" if a.get("learned") else a["requirements"])
+
+    async def _designing(self, project: dict, cfg: dict, requirements: str, spec: str, learn_from: str) -> None:
+        """_design_from; stopped or failed, the analysis says so (the scenarios detailed by then stay)."""
         try:
-            await self._design_from(project, cfg, requirements, spec if self.explore else requirements)
+            await self._design_from(project, cfg, requirements, spec, learn_from)
         except BaseException as e:
             if self.analysis_id:
                 cancelled = isinstance(e, asyncio.CancelledError)
@@ -557,20 +603,17 @@ class Job:
                                 status="cancelled" if cancelled else "")
             raise
 
-    async def _design_from(self, project: dict, cfg: dict, requirements: str, learn_from: str) -> None:
-        # The specification against the documentation standard, and what it says about the application
-        if cfg["requirements"]["validate"]:
-            self._log("Проверка ТЗ на соответствие стандарту документации…")
-            try:
-                self.validation = await validation.validate(project, requirements)
-                if self.analysis_id:
-                    analyses.set_validation(self.project_id, self.analysis_id, self.validation)
-                self._log(f"Проверка ТЗ: {self.validation['score']}/100, замечаний {len(self.validation['findings'])}"
-                          f" — {self.validation['summary']}", "info" if self.validation["verdict"] == "ready" else "warn")
-            except Exception as e:
-                self._log(f"Проверка ТЗ не удалась: {_err(e)}", "warn")
+    async def _design_from(self, project: dict, cfg: dict, requirements: str, spec: str, learn_from: str) -> None:
+        """spec - the specification the reviewer checks ("" - reviewed already, or a map of the site only);
+        learn_from - what the application model learns from ("" - nothing)."""
+        if spec and self.review is None and cfg["requirements"]["validate"]:
+            await self._review(project, spec)
+        if review.blocking(self.review) and not self.review_accepted:
+            await self._await_review()
+            if self._cancel:
+                return
         learn = None
-        if cfg["requirements"].get("learn_model") and (self.links or self.text):
+        if cfg["requirements"].get("learn_model") and learn_from:
             learn = asyncio.create_task(knowledge.extract(project, learn_from, self.user))
 
         try:
@@ -593,11 +636,13 @@ class Job:
         if cfg["scenarios"]["enabled"]:
             self._log("Проектирование сценариев…")
             aid, pid = self.analysis_id, self.project_id
+            planned: list[str] = []     # ids of this design's scenarios (the analysis may have earlier ones)
 
             def progress(event: dict) -> None:
                 # The analysis fills in as the scenarios come: stopped midway, the detailed ones stay.
                 if event["type"] == "plan":
-                    analyses.set_plan(pid, aid, event["feature"], event["assumptions"], event["scenarios"])
+                    planned[:] = [s["id"] for s in analyses.set_plan(pid, aid, event["feature"], event["assumptions"],
+                                                                     event["scenarios"])][:len(event["scenarios"])]
                 elif event["type"] == "batch":
                     analyses.set_batch(pid, aid, event["start"], event["scenarios"])
             res = await scenarios.generate(requirements, self.url, project=project, log=self._log, progress=progress,
@@ -607,9 +652,10 @@ class Job:
             # The test data they need joins the model; each scenario keeps the ids of its records (record_id).
             analyses.record_needs(pid, aid)
             a = analyses.get(aid)
+            mine = [sc for sc in a["scenarios"] if sc["id"] in planned] if planned else a["scenarios"]
             self.scenarios = [{k: sc.get(k) or "" for k in analyses.FIELDS}
                               | {"test_data": sc.get("test_data") or [], "match": sc.get("match"),
-                                 "analysis_id": aid, "scenario_id": sc["id"]} for sc in a["scenarios"]]
+                                 "analysis_id": aid, "scenario_id": sc["id"]} for sc in mine]
             if cfg["requirements"].get("learn_model") and any(sc["test_data"] for sc in self.scenarios):
                 self._log("Тестовые данные сценариев записаны в модель приложения («Проект → Тестовые данные»)")
             self._log(f"Сценариев: {len(self.scenarios)} — сохранены в истории анализа требований")
@@ -697,6 +743,33 @@ class Job:
         if not self._cancel:
             self.status = "running"
             self._log("Жизненный цикл системы подтверждён: генерация тестов")
+
+    async def _review(self, project: dict, spec: str) -> None:
+        """Stage 1: the reviewer subagent checks the specification on a clean context of its own - defects of
+        the document and conflicts with the lifecycle of the system. A failed review does not stop the run."""
+        self.stage = "requirements"
+        try:
+            self.review = await review.review(project, spec, log=self._log)
+        except Exception as e:
+            self._log(f"Проверка требований не удалась: {_err(e)}", "warn")
+            return
+        self.validation = self.review.get("validation")
+        if self.analysis_id:
+            analyses.set_review(self.project_id, self.analysis_id, self.review)
+        self.save()
+
+    async def _await_review(self) -> None:
+        """The reviewer found what blocks test design (critical findings, the document is not ready): a person
+        reads the report and lets the run go on («Продолжить генерацию») or stops it to fix the requirements."""
+        self.status = "awaiting_review"
+        self._log("Ревьюер нашёл в требованиях то, что мешает проектированию тестов: прочитайте отчёт и "
+                  "продолжите генерацию или остановите запуск, чтобы исправить ТЗ", "warn")
+        while not self._cancel and not self.review_accepted:
+            self._wake.clear()
+            await self._wake.wait()
+        if not self._cancel:
+            self.status = "running"
+            self._log(f"Генерация по требованиям с замечаниями ревьюера продолжена ({self.review_accepted})")
 
     def _undecided(self) -> list[dict]:
         return [it for it in self.items if it["status"] not in DONE_ITEMS and reuse.pending(it.get("match"))]
@@ -1039,7 +1112,7 @@ class Job:
 
 
 # A run in these states is working (or waiting for a person) in the instance that owns it.
-LIVE = ("running", "awaiting_model", "awaiting_selection", "awaiting_reuse")
+LIVE = ("running", "awaiting_review", "awaiting_model", "awaiting_selection", "awaiting_reuse")
 MODEL_POLL = 3      # seconds between checks of the application model while a run waits for its confirmation
 DONE_ITEMS = ("done", "needs_attention")     # a resumed run does not redo them
 
