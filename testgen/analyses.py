@@ -273,6 +273,40 @@ def set_review(pid: str, aid: str, report: dict) -> None:
     _change(pid, aid, fn)
 
 
+def decide(pid: str, aid: str, ids: list[str], status: str, answer: str | None = None, note: str | None = None,
+           user: str = "") -> dict:
+    """A person's decision on findings of the review (review.decide): fix by the answer, not relevant, undecided."""
+    from . import review
+
+    def fn(a):
+        if not a.get("review"):
+            raise KeyError("review")
+        review.decide(a["review"], ids, status, answer, note, user)
+    return _change(pid, aid, fn)
+
+
+def revise(pid: str, aid: str, result: dict, user: str = "") -> dict:
+    """The editor fixed the document by the findings (review.revise): the requirements become the new text, the
+    previous one is kept in `revisions` with the edits; the findings applied are fixed, the others stay to fix."""
+    from . import review
+
+    def fn(a):
+        if result["fixed"]:
+            a.setdefault("revisions", []).append({"at": time.time(), "by": user, "requirements": a["requirements"],
+                                                  "summary": result["summary"], "edits": result["edits"],
+                                                  "fixed": result["fixed"]})
+            a["requirements"] = result["requirements"][:200_000]
+            a.pop("learned", None)      # the model learns the corrected text, once every finding is settled
+            review.fixed(a["review"], result["fixed"], user)
+        res = a["review"].setdefault("resolutions", {})
+        for i, why in result["failed"].items():
+            if i in res:
+                res[i]["error"] = why
+        for i in result["fixed"]:
+            res[i].pop("error", None)
+    return _change(pid, aid, fn)
+
+
 def mark_learned(pid: str, aid: str) -> None:
     """The application model has learned from these requirements: the pipeline does not extract them again."""
     if fs.exists(_path(pid, aid)):

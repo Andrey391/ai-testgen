@@ -15,10 +15,17 @@ the Studio sessions, the scenarios or the other stages. Two checks run side by s
 
 The report (review()) is kept with the analysis; a person reads it, and the scenarios and tests are designed
 in the pipeline from the reviewed requirements. It never changes the application model itself.
+
+A person works through the findings (items()): answers how it should be (or takes the reviewer's suggestion)
+or marks a finding as not relevant; revise() - an editor on a clean context applies the answered findings to
+the document as edits of exact fragments. The application model learns from the requirements only when every
+finding is fixed or marked not relevant (resolved()): the lifecycle of the system does not take in what the
+authors have not settled. Reviewed again, the reviewer is told what the authors decided (notes()).
 """
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Literal
 
@@ -92,7 +99,7 @@ def _model_state(doc: dict) -> dict:
     return {"entities": len(doc["entities"]), "roles": len(doc["roles"]), "state": c["state"]}
 
 
-async def lifecycle(project: dict, document: str, log=None) -> dict:
+async def lifecycle(project: dict, document: str, log=None, notes: str = "") -> dict:
     """The document against the lifecycle of the system: LifecycleReport as a dict, with the model it was
     checked against (how many entities and roles, confirmed or not)."""
     pid = project["id"]
@@ -105,7 +112,7 @@ async def lifecycle(project: dict, document: str, log=None) -> dict:
             f"The application model ({'confirmed by a person' if state['state'] == 'confirmed' else 'not confirmed yet'}):\n"
             f"{model}\n")
     system = LIFECYCLE + projects.language_rule(project) + skills.prompt(pid, cfg.get("skills", []))
-    messages = [{"role": "user", "content": "Review the document against the lifecycle of the system."}]
+    messages = [{"role": "user", "content": "Review the document against the lifecycle of the system." + notes}]
     for turn in range(MAX_TURNS):
         offer = [REPORT_TOOL] if turn == MAX_TURNS - 1 else tools
         reply = await llm.chat(cfg, system=system, context=f"{head}\nThe document:\n{document[:150_000]}",
@@ -168,13 +175,14 @@ def summary(report: dict) -> str:
     return "; ".join(parts)
 
 
-async def review(project: dict, document: str, standard: str = "", log=None) -> dict:
+async def review(project: dict, document: str, standard: str = "", log=None, notes: str = "") -> dict:
     """Both checks of the subagent at once. {validation, lifecycle, errors, verdict, at}: a check that failed
-    is in `errors` (by name) and the other one is kept; both failed - the error is raised."""
+    is in `errors` (by name) and the other one is kept; both failed - the error is raised. notes - what the
+    authors decided on the findings of the previous review of the document (notes())."""
     say = log or (lambda text: None)
     say("Ревьюер требований: проверка документа по стандарту и сверка с жизненным циклом системы…")
-    v, lc = await asyncio.gather(validation.validate(project, document, standard),
-                                 lifecycle(project, document, log=log), return_exceptions=True)
+    v, lc = await asyncio.gather(validation.validate(project, document, standard, notes),
+                                 lifecycle(project, document, log=log, notes=notes), return_exceptions=True)
     for e in (v, lc):
         if isinstance(e, asyncio.CancelledError):
             raise e
@@ -192,3 +200,173 @@ async def review(project: dict, document: str, standard: str = "", log=None) -> 
 def blocking(report: dict | None) -> bool:
     """The review found what blocks test design: critical findings or the document is not ready."""
     return bool(report) and report.get("verdict") == "not_ready"
+
+
+# ---------- a person works through the findings ----------
+
+OPEN, TODO, FIXED, DISMISSED = "open", "todo", "fixed", "dismissed"
+
+
+def items(report: dict | None) -> list[dict]:
+    """The findings a person has to settle, each with a stable id within the report: defects of the document
+    (d<i>), conflicts with the lifecycle (l<i>; "new" ones are not defects and are left out) and the questions
+    to the authors (vq<i>, lq<i>). With the person's decision: status, answer, note."""
+    if not report:
+        return []
+    out = []
+    v, lc = report.get("validation") or {}, report.get("lifecycle") or {}
+    for i, f in enumerate(v.get("findings") or []):
+        out.append({"id": f"d{i}", "kind": "defect", "severity": f["severity"], "location": f["location"],
+                    "problem": f["problem"], "suggestion": f["suggestion"]})
+    for i, c in enumerate(lc.get("conflicts") or []):
+        if c["kind"] != "new":
+            out.append({"id": f"l{i}", "kind": "lifecycle", "severity": c["severity"], "location": c["location"],
+                        "problem": c["problem"], "suggestion": c["suggestion"], "model_rule": c.get("model_rule", "")})
+    for prefix, qs in (("vq", v.get("questions")), ("lq", lc.get("questions"))):
+        for i, q in enumerate(qs or []):
+            out.append({"id": f"{prefix}{i}", "kind": "question", "severity": "", "location": "", "problem": q,
+                        "suggestion": ""})
+    decided = report.get("resolutions") or {}
+    return [it | {"status": OPEN, "answer": "", "note": ""} | decided.get(it["id"], {}) for it in out]
+
+
+def unresolved(report: dict | None) -> list[dict]:
+    """Findings neither fixed in the document nor marked not relevant."""
+    return [it for it in items(report) if it["status"] not in (FIXED, DISMISSED)]
+
+
+def resolved(report: dict | None) -> bool:
+    """Every finding of the review is settled: the application model may learn from the requirements."""
+    return not unresolved(report)
+
+
+def decide(report: dict, ids: list[str], status: str, answer: str | None = None, note: str | None = None,
+           user: str = "") -> dict:
+    """A person's decision on findings: todo - fix the document (by the answer; empty - by the reviewer's
+    suggestion; a question needs an answer), dismissed - not relevant (note - why), open - undecided again.
+    Changes `report` in place."""
+    if status not in (OPEN, TODO, DISMISSED):
+        raise ValueError("Решение по замечанию: open, todo или dismissed")
+    known = {it["id"]: it for it in items(report)}
+    missing = [i for i in ids if i not in known]
+    if missing or not ids:
+        raise KeyError(", ".join(missing))
+    res = report.setdefault("resolutions", {})
+    for i in ids:
+        prev = res.get(i, {})
+        ans = (prev.get("answer", "") if answer is None else answer).strip()[:4000]
+        if status == TODO and known[i]["kind"] == "question" and not ans:
+            raise ValueError("На вопрос нужен ответ: по нему агент исправит ТЗ")
+        if status == OPEN:
+            res.pop(i, None)
+            continue
+        res[i] = {"status": status, "answer": ans,
+                  "note": (prev.get("note", "") if note is None else note).strip()[:2000], "by": user, "at": time.time()}
+    return report
+
+
+def fixed(report: dict, ids: list[str], user: str = "") -> dict:
+    """The editor applied these findings to the document (revise()). Changes `report` in place."""
+    res = report.setdefault("resolutions", {})
+    for i in ids:
+        res[i] = res.get(i, {}) | {"status": FIXED, "fixed_by": user, "fixed_at": time.time()}
+    return report
+
+
+def notes(report: dict | None) -> str:
+    """For the next review of the same requirements: what the authors decided. Findings marked not relevant are
+    not to be reported again; the answers are what the document now says."""
+    lines = []
+    for it in items(report):
+        if it["status"] == DISMISSED:
+            lines.append(f"- not relevant, do not report it again: {it['problem']}"
+                         + (f" (why: {it['note']})" if it["note"] else ""))
+        elif it["status"] == FIXED and it["answer"]:
+            lines.append(f"- settled by the authors: {it['problem']} -> {it['answer']}")
+    return ("\n\nDecisions of the authors on the findings of the previous review:\n" + "\n".join(lines)) if lines else ""
+
+
+class Edit(BaseModel):
+    item: str                # the id of the finding the edit settles
+    find: str                # an exact fragment of the document
+    replace: str             # what it becomes
+
+
+class Revision(BaseModel):
+    summary: str
+    edits: list[Edit]
+
+
+REVISE = """You are the editor of a specification (ТЗ, SRS, user stories). A reviewer found defects in it and the authors answered how it should be. Apply each finding you are given to the document as edits.
+
+Every edit replaces an exact fragment of the document: `find` - a fragment copied verbatim from the document, long enough to occur once (a sentence, a list item, a requirement); `replace` - the new text of that fragment. To add text, find the fragment it goes after and replace it with that fragment followed by the new text. `item` - the id of the finding the edit settles; a finding may need several edits.
+
+The answer of the authors is how it must be: follow it over the reviewer's suggestion; with no answer, apply the suggestion. Change only what the findings need; keep the numbering, the language and the style of the document; do not invent requirements beyond the answers. Every finding gets at least one edit. `summary` - one or two sentences on what changed."""
+
+ATTEMPTS = 2        # a finding whose fragment was not found is asked once more
+
+
+def _locate(document: str, fragment: str) -> tuple[int, int] | None:
+    """Where the fragment is: verbatim, or with any whitespace between its words (line breaks of the model)."""
+    if not fragment.strip():
+        return None
+    i = document.find(fragment)
+    if i >= 0:
+        return i, i + len(fragment)
+    m = re.search(r"\s+".join(map(re.escape, fragment.split())), document)
+    return (m.start(), m.end()) if m else None
+
+
+def _revise_task(todo: list[dict]) -> str:
+    out = []
+    for it in todo:
+        line = f"[{it['id']}] {it['problem']}"
+        if it.get("location"):
+            line += f"\n  where: {it['location']}"
+        if it.get("model_rule"):
+            line += f"\n  the lifecycle of the system says: {it['model_rule']}"
+        if it.get("suggestion"):
+            line += f"\n  the reviewer suggests: {it['suggestion']}"
+        line += f"\n  the answer of the authors: {it['answer'] or 'none - apply the suggestion'}"
+        out.append(line)
+    return "Apply these findings to the document:\n\n" + "\n\n".join(out)
+
+
+async def revise(project: dict, document: str, report: dict) -> dict:
+    """The findings a person sent to be fixed (status todo) applied to the document by an editor on a clean
+    context. {requirements: the new text, fixed: [ids], failed: {id: why}, edits: [{item, find, replace}],
+    summary}."""
+    todo = [it for it in items(report) if it["status"] == TODO]
+    if not todo:
+        raise ValueError("Нет замечаний для исправления: ответьте на замечания или примите предложения ревьюера")
+    cfg = project["pipeline"]["requirements"]
+    system = REVISE + projects.language_rule(project)
+    doc, edits, summaries, failed, pending = document, [], [], {}, todo
+    for _ in range(ATTEMPTS):
+        reply = await llm.parse(cfg, system=system, context=f"The document:\n{doc[:150_000]}",
+                                messages=[{"role": "user", "content": _revise_task(pending)}], schema=Revision,
+                                max_tokens=16000, project_id=project["id"], stage_name="requirements")
+        if reply.parsed is None:
+            raise RuntimeError("Модель не смогла исправить документ")
+        summaries.append(reply.parsed.summary.strip())
+        asked, done = {it["id"] for it in pending}, set()
+        for e in reply.parsed.edits:
+            if e.item not in asked:
+                continue
+            at = _locate(doc, e.find)
+            if not at:
+                failed[e.item] = f"не найден фрагмент «{e.find[:120]}»"
+                continue
+            doc = doc[:at[0]] + e.replace + doc[at[1]:]
+            edits.append(e.model_dump())
+            done.add(e.item)
+        for i in asked:
+            if i in done:
+                failed.pop(i, None)
+            else:
+                failed.setdefault(i, "агент не предложил правку")
+        pending = [it for it in pending if it["id"] in failed]
+        if not pending:
+            break
+    return {"requirements": doc, "fixed": [it["id"] for it in todo if it["id"] not in failed], "failed": failed,
+            "edits": edits, "summary": " ".join(s for s in summaries if s)}

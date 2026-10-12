@@ -274,7 +274,8 @@ def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monk
     assert "стандарт и качество 55/100" in text and "жизненный цикл: не удалось" in text
     assert a["review"]["verdict"] == "ready" and a["review"]["lifecycle"] is None
     assert "Тестовые данные сценариев записаны" in text
-    assert "Модель приложения не обновлена" in text and "не выбранные останутся" in text
+    # The reviewer's findings are not settled yet: the model does not learn from these requirements.
+    assert "Модель приложения не обновляется по требованиям" in text and "не выбранные останутся" in text
 
 
 def test_automatic_selection_keeps_the_rest_in_the_list(monkeypatch, fake_llm):

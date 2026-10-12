@@ -61,13 +61,13 @@ def _task(standard: str, checklist: str) -> str:
     return text + "\nValidate the document."
 
 
-async def validate(project: dict, document: str, standard: str = "") -> dict:
+async def validate(project: dict, document: str, standard: str = "", notes: str = "") -> dict:
     """The report on `document` -> Validation as a dict, with the standard it was checked against."""
     cfg = project["pipeline"]["requirements"]
     standard = standard if standard in STANDARDS else cfg.get("standard") or "gost34"
     system = SYSTEM + projects.language_rule(project) + skills.prompt(project["id"], cfg.get("skills", []))
     reply = await llm.parse(cfg, system=system, context=f"The document:\n{document[:150_000]}",
-                            messages=[{"role": "user", "content": _task(standard, cfg.get("checklist", ""))}],
+                            messages=[{"role": "user", "content": _task(standard, cfg.get("checklist", "")) + notes}],
                             schema=Validation, max_tokens=16000, project_id=project["id"], stage_name="requirements")
     if reply.stop == "max_tokens":
         raise RuntimeError("Отчёт не поместился в лимит ответа: проверьте документ по частям.")
