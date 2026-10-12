@@ -252,6 +252,23 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .lc-chain{display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin:2px 0}
 .lc-st{font-size:11px;padding:1px 7px;border:1px solid var(--accent);border-radius:10px;color:var(--accent);max-width:100%;box-sizing:border-box;overflow-wrap:anywhere}
 .lc-chain i{font-style:normal;color:var(--muted);font-size:11px}
+.lc-chain em{font-style:normal;color:var(--warn)}
+.sm-wrap{overflow:auto}
+.sm-svg{display:block}
+.sm-svg path{fill:none;stroke:var(--muted);stroke-width:1.5;transition:opacity .15s}
+.sm-svg marker path{fill:var(--muted);stroke:none}
+.sm-start{fill:var(--ink)}
+.sm-st rect{fill:var(--panel);stroke:var(--accent);stroke-width:1.5}
+.sm-st rect.sm-in{fill:none;stroke-width:1}
+.sm-st text{font-size:13px;font-weight:600;fill:var(--ink)}
+.sm-lab{fill:var(--panel);stroke:none}
+.sm-svg g.sm-e text{font-size:11px}
+.sm-ev{fill:var(--warn);font-weight:600}
+.sm-role{fill:var(--muted)}
+.sm-svg.focus .sm-e,.sm-svg.focus .sm-st{opacity:.15}
+.sm-svg.focus .sm-e.on,.sm-svg.focus .sm-st.on{opacity:1}
+.sm-svg.focus path.sm-e.on{stroke:var(--accent);stroke-width:2.4}
+.sm-table tr.on td{background:var(--soft)}
 .lc-graph{position:relative;display:inline-flex;gap:120px;align-items:center;min-width:100%;padding:16px 8px}
 .lc-col{display:flex;flex-direction:column;gap:32px}
 .lc-node{position:relative;z-index:1;border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:var(--panel);width:230px;box-sizing:border-box;cursor:pointer;font-size:13px;overflow-wrap:anywhere}
@@ -5074,7 +5091,7 @@ let KN = null, KN_PID = null, KN_DIRTY = false, KN_SEC = 'overview', KN_DUPS = n
 const KN_FIELDS = {
   entities: [['name', 'Сущность', 'Заказ'], ['description', 'Что это', ''], ['group', 'Группа (часть приложения)', 'Заказы'],
              ['aliases', 'Другие названия (через запятую)', 'заявка, покупка'], ['depends_on', 'Требует (через запятую)', 'Товар (в наличии), Покупатель (с адресом)'],
-             ['lifecycle', 'Жизненный цикл', 'новый → оплачен → отправлен → доставлен; новый → отменён'], ['create', 'Кто и как создаёт', 'покупатель: корзина → оформление заказа'],
+             ['lifecycle', 'Жизненный цикл', 'новый → [оплатить] оплачен (покупатель) → [отправить] отправлен (менеджер) → доставлен; новый → [отменить] отменён'], ['create', 'Кто и как создаёт', 'покупатель: корзина → оформление заказа'],
              ['rules', 'Правила', 'отправленный заказ нельзя отменить']],
   roles: [['name', 'Роль', 'Менеджер магазина'], ['description', 'Описание', ''], ['account', 'Учётная запись проекта', ''],
           ['capabilities', 'Может', 'создаёт товары и категории, отправляет оплаченные заказы'], ['restrictions', 'Не может', 'оплачивать заказы, менять чужие профили']],
@@ -5159,7 +5176,7 @@ function renderKnConfirm() {
 // the lifecycle of the system as a diagram, from the simplest view to the one with dependencies and settings:
 // simple - the states of every entity; deps - entities in the order they are created, arrows from what must exist
 // first; full - plus the settings of dependencies («Товар (в наличии)»), who creates, rules, roles
-const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: настройки и роли']];
+const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: настройки и роли'], ['states', 'Состояния сущности']];
 const lcNorm = s => (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[«»"'“”]/g, '').trim();
 const lcStem = s => lcNorm(s).replace(/[аеиоуыьяйю]+$/, '');
 const lcChains = text => (text || '').split(/[;\n]+/)
@@ -5172,9 +5189,19 @@ function lcFind(name) {
   const n = lcNorm(name), s = lcStem(name);
   return KN.entities.find(e => lcNorm(e.name) === n) || (s.length > 2 && KN.entities.find(e => lcStem(e.name) === s)) || null;
 }
+// a step of a chain: «[оплатить] оплачен (покупатель)» - the event that leads into the state, the state and the role
+// that makes the transition; a step without them is just the state
+function lcSeg(text) {
+  const m = text.match(/^\s*(?:\[([^\]]*)\]\s*)?(.*?)\s*(?:\(([^()]*)\))?\s*$/) || [];
+  return {event: (m[1] || '').trim(), state: (m[2] ?? text).trim(), role: (m[3] || '').trim()};
+}
+const lcEvText = g => [g.event, g.role].filter(Boolean).join(' · ');
 function lcChainHtml(text) {
   const chains = lcChains(text);
-  return chains.length ? chains.map(c => `<div class="lc-chain">${c.map(s => `<span class="lc-st">${esc(s)}</span>`).join('<i>→</i>')}</div>`).join('')
+  return chains.length ? chains.map(c => `<div class="lc-chain">${c.map((s, i) => {
+    const g = lcSeg(s), ev = lcEvText(g);
+    return (i ? `<i>${ev ? `<em>${esc(ev)}</em> ` : ''}→</i>` : ev ? `<i><em>${esc(ev)}</em> →</i>` : '') + `<span class="lc-st">${esc(g.state || s)}</span>`;
+  }).join('')}</div>`).join('')
     : '<span class="muted" style="font-size:12px">жизненный цикл не описан</span>';
 }
 // entities in columns: an entity stands to the right of everything it requires; unknown requirements are dashed nodes
@@ -5227,6 +5254,7 @@ function lcRender() {
     box.innerHTML = '<div class="hint">Сущностей пока нет: постройте модель из требований или добавьте их в разделе «Сущности».</div>';
     return;
   }
+  if (level === 'states') { lcStates(box); return; }
   const groups = [...new Set(KN.entities.filter(e => e.name).map(e => e.group || ''))].sort();
   // a large model is shown one group at a time; '*' - all of them (a small one)
   const many = KN.entities.length > 40;
@@ -5240,7 +5268,7 @@ function lcRender() {
   const cols = lcLayout(group);
   if (level === 'simple') {
     box.innerHTML = cols.flat().filter(n => !n.missing).map(n => `<div class="lc-row"><b onclick="knOpenEntity('${n.e.id}')" title="Открыть сущность">${esc(n.e.name)}</b>
-      <div>${lcChainHtml(n.e.lifecycle)}</div></div>`).join('');
+      <div class="grow">${lcChainHtml(n.e.lifecycle)}</div>${n.e.lifecycle ? `<button class="btn small" onclick="lcShowStates('${n.e.id}')" title="Диаграмма состояний с событиями переходов">Состояния</button>` : ''}</div>`).join('');
     return;
   }
   const roles = level === 'full' && KN.roles.length ? `<table class="kn-table" style="margin-top:12px"><thead><tr><th>Роль</th><th>Может</th><th>Не может</th><th>Учётная запись</th></tr></thead><tbody>${
@@ -5319,6 +5347,177 @@ function lcFocus(graph, id) {     // the node under the mouse, its arrows and ne
     x.classList.add('on'); near.add(x.dataset.from); near.add(x.dataset.to);
   });
   near.forEach(k => graph.querySelector(`[data-lc="${k}"]`)?.classList.add('on'));
+}
+// the state diagram of one entity: its lifecycle as a state machine - states, and arrows of the transitions signed
+// with the event that makes them and the role («новый → [оплатить] оплачен (покупатель)»); a step of the text that
+// is not a state («отправленный заказ нельзя отменить») is a rule under the diagram
+function lcMachine(text) {
+  const states = new Map(), edges = [], notes = [], firsts = [];
+  const state = name => {
+    const k = lcNorm(name);
+    if (!states.has(k)) states.set(k, {id: 'st' + states.size, name, out: 0, in: 0});
+    return states.get(k);
+  };
+  const chains = lcChains(text);
+  for (const c of chains.filter(c => c.length > 1)) {
+    let prev = null;
+    for (const g of c.map(lcSeg).filter(g => g.state)) {
+      const st = state(g.state);
+      if (!prev) firsts.push({st, event: g.event, role: g.role});
+      else if (!edges.some(e => e.from === prev && e.to === st && e.event === g.event && e.role === g.role)) {
+        edges.push({from: prev, to: st, event: g.event, role: g.role}); prev.out++; st.in++;
+      }
+      prev = st;
+    }
+  }
+  for (const [s] of chains.filter(c => c.length === 1)) {    // a lone state, or a rule written in words
+    const g = lcSeg(s);
+    if (states.has(lcNorm(g.state)) || !states.size && g.state.split(/\s+/).length <= 3) state(g.state);
+    else notes.push(s);
+  }
+  // the initial states: the first ones of the chains nothing leads into (or the very first one, when all are a cycle)
+  let starts = firsts.filter(f => !f.st.in);
+  if (!starts.length && states.size) starts = [firsts[0] || {st: [...states.values()][0], event: '', role: ''}];
+  starts = starts.filter((f, i) => starts.findIndex(x => x.st === f.st) === i);
+  return {states: [...states.values()], edges, starts, notes};
+}
+let LC_MEASURE;
+function lcTextWidth(text, px, bold) {
+  const c = (LC_MEASURE ||= document.createElement('canvas').getContext('2d'));
+  c.font = `${bold ? 600 : 400} ${px}px ${getComputedStyle(document.body).fontFamily}`;
+  return c.measureText(text).width;
+}
+// states in columns by the shortest way from an initial state; an arrow to the next column goes straight, an arrow
+// back (or within a column) goes over the diagram, one further forward - under it, each in its own lane
+function lcStateSvg(m) {
+  const H = 34, VG = 54, PADX = 36, lab = e => lcEvText(e);
+  const col = new Map(), queue = [];
+  m.starts.forEach(f => { col.set(f.st, 0); queue.push(f.st); });
+  const flow = () => { while (queue.length) { const s = queue.shift(); for (const e of m.edges) if (e.from === s && !col.has(e.to)) { col.set(e.to, col.get(s) + 1); queue.push(e.to); } } };
+  flow();
+  for (const s of m.states) if (!col.has(s)) { col.set(s, 0); queue.push(s); flow(); }
+  const cols = [];
+  m.states.forEach(s => (cols[col.get(s)] ||= []).push(s));
+  for (const s of m.states) s.w = Math.max(90, lcTextWidth(s.name, 13, true) + 30);
+  // the gap after a column fits the widest label of the arrows that start there and go to the next one
+  const gapAfter = cols.map((c, i) => Math.max(110, ...m.edges.filter(e => col.get(e.from) === i && col.get(e.to) === i + 1)
+    .map(e => lcTextWidth(lab(e), 11) + 40)));
+  const colW = cols.map(c => Math.max(...c.map(s => s.w)));
+  const tallest = Math.max(...cols.map(c => c.length)) * (H + VG) - VG;
+  const kind = e => e.from === e.to ? 'self' : col.get(e.to) === col.get(e.from) + 1 ? 'next' : col.get(e.to) === col.get(e.from) ? 'side'
+    : col.get(e.to) > col.get(e.from) ? 'under' : 'over';
+  // an arrow within a column bends out to the right of it: the gap after the column makes room for it and its label
+  m.edges.filter(e => kind(e) === 'side').forEach(e => { const i = col.get(e.from); gapAfter[i] = Math.max(gapAfter[i], lcTextWidth(lab(e), 11) + 90); });
+  const over = m.edges.filter(e => kind(e) === 'over'), under = m.edges.filter(e => kind(e) === 'under');
+  const LANE = 26, selfs = m.edges.some(e => kind(e) === 'self') ? 40 : 0;
+  const top = 18 + selfs + over.length * LANE;      // the loops of a state sit right above it, the lanes above them
+  const startW = Math.max(0, ...m.starts.map(f => lcTextWidth(lcEvText(f), 11) + 10));
+  let x = Math.max(PADX + 22, startW / 2 + 34);
+  cols.forEach((c, i) => {
+    const y0 = top + (tallest - (c.length * (H + VG) - VG)) / 2;
+    c.forEach((s, k) => { s.x = x + (colW[i] - s.w) / 2; s.y = y0 + k * (H + VG); s.cx = s.x + s.w / 2; s.cy = s.y + H / 2; });
+    x += colW[i] + gapAfter[i];
+  });
+  const width = x - gapAfter[cols.length - 1] + PADX, bottom = top + tallest, height = bottom + 18 + under.length * LANE;
+  const parts = [], labels = [];
+  const label = (e, lx, ly) => {
+    const t = lab(e);
+    if (!t) return;
+    const w = lcTextWidth(t, 11) + 10;
+    labels.push(`<g class="sm-e" data-from="${e.from.id}" data-to="${e.to.id}"><rect class="sm-lab" x="${lx - w / 2}" y="${ly - 9}" width="${w}" height="16" rx="4"/>` +
+      `<text x="${lx}" y="${ly + 3}" text-anchor="middle">${e.event ? `<tspan class="sm-ev">${esc(e.event)}</tspan>` : ''}${e.role ? `<tspan class="sm-role">${e.event ? ' · ' : ''}${esc(e.role)}</tspan>` : ''}</text></g>`);
+  };
+  const path = (e, d) => parts.push(`<path class="sm-e" data-from="${e.from.id}" data-to="${e.to.id}" d="${d}" marker-end="url(#smArrow)"/>`);
+  // arrows between the same pair of columns: the ends are spread along the sides of the states
+  const ends = {};
+  m.edges.filter(e => kind(e) === 'next').forEach(e => { (ends['o' + e.from.id] ||= []).push(e); (ends['i' + e.to.id] ||= []).push(e); });
+  const yAt = (e, side) => {
+    const list = ends[side + (side === 'o' ? e.from.id : e.to.id)].slice().sort((a, b) => side === 'o' ? a.to.cy - b.to.cy : a.from.cy - b.from.cy);
+    const n = side === 'o' ? e.from : e.to;
+    return n.y + H * (list.indexOf(e) + 1) / (list.length + 1);
+  };
+  for (const e of m.edges.filter(e => kind(e) === 'next')) {
+    const x1 = e.from.x + e.from.w, y1 = yAt(e, 'o'), x2 = e.to.x - 2, y2 = yAt(e, 'i'), dx = (x2 - x1) / 2;
+    path(e, `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`);
+    label(e, (x1 + x2) / 2, (y1 + y2) / 2);
+  }
+  const lane = (e, Y, up) => {     // up from the top (or down from the bottom) of a state, along the lane, into the other
+    const s = up ? -1 : 1, a = e.from, b = e.to, y1 = up ? a.y : a.y + H, y2 = up ? b.y - 2 : b.y + H + 2;
+    const x1 = a.cx + (b.cx > a.cx ? 8 : -8), x2 = b.cx + (b.cx > a.cx ? -8 : 8), r = Math.min(12, Math.abs(x2 - x1) / 2);
+    const dir = x2 > x1 ? 1 : -1;
+    path(e, `M${x1},${y1} L${x1},${Y - s * r} Q${x1},${Y} ${x1 + dir * r},${Y} L${x2 - dir * r},${Y} Q${x2},${Y} ${x2},${Y - s * r} L${x2},${y2}`);
+    label(e, (x1 + x2) / 2, Y);
+  };
+  over.sort((a, b) => Math.abs(a.from.cx - a.to.cx) - Math.abs(b.from.cx - b.to.cx)).forEach((e, i) => lane(e, top - selfs - 16 - i * LANE, true));
+  under.sort((a, b) => Math.abs(a.from.cx - a.to.cx) - Math.abs(b.from.cx - b.to.cx)).forEach((e, i) => lane(e, bottom + 16 + i * LANE, false));
+  const sides = {};
+  for (const e of m.edges.filter(e => kind(e) === 'side')) {
+    const a = e.from, b = e.to, k = (sides[col.get(a)] = (sides[col.get(a)] || 0) + 1) - 1;
+    const xr = colW[col.get(a)] / 2 + a.cx, bend = xr + 34 + k * 22, y1 = a.cy + (b.cy > a.cy ? 6 : -6), y2 = b.cy + (b.cy > a.cy ? -6 : 6);
+    path(e, `M${a.x + a.w},${y1} C${bend},${y1} ${bend},${y2} ${b.x + b.w + 2},${y2}`);
+    label(e, bend - 8 + lcTextWidth(lab(e), 11) / 2, (y1 + y2) / 2);
+  }
+  for (const e of m.edges.filter(e => kind(e) === 'self')) {
+    const s = e.from, x1 = s.x + s.w - 22, x2 = s.x + s.w - 6;
+    path(e, `M${x1},${s.y} C${x1 - 6},${s.y - 34} ${x2 + 18},${s.y - 34} ${x2},${s.y - 2}`);
+    label(e, (x1 + x2) / 2 + 4, s.y - 30);
+  }
+  for (const f of m.starts) {      // the initial state: a dot and an arrow into it, with the event that creates the object
+    const s = f.st, x0 = s.x - 26;
+    parts.push(`<circle class="sm-start" cx="${x0}" cy="${s.cy}" r="6"/><path class="sm-e sm-init" data-from="${s.id}" data-to="${s.id}" d="M${x0 + 6},${s.cy} L${s.x - 2},${s.cy}" marker-end="url(#smArrow)"/>`);
+    if (f.event || f.role) label({...f, from: s, to: s}, x0, s.y - 6);
+  }
+  const nodes = m.states.map(s => `<g class="sm-st${s.out ? '' : ' final'}" data-st="${s.id}"><rect x="${s.x}" y="${s.y}" width="${s.w}" height="${H}" rx="${H / 2}"/>` +
+    (s.out || !m.edges.length ? '' : `<rect class="sm-in" x="${s.x + 3}" y="${s.y + 3}" width="${s.w - 6}" height="${H - 6}" rx="${H / 2 - 3}"/>`) +
+    `<text x="${s.cx}" y="${s.cy + 4.5}" text-anchor="middle">${esc(s.name)}</text><title>${esc(s.name)}${s.out ? '' : ' — конечное состояние'}</title></g>`).join('');
+  return `<svg class="sm-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><marker id="smArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs>` +
+    parts.join('') + nodes + labels.join('') + '</svg>';
+}
+function lcShowStates(id) {
+  store.set('tg_lc_entity', id); store.set('tg_lc_level', 'states');
+  readKnowledge(); lcRender();
+}
+function lcStates(box) {
+  const ents = KN.entities.filter(e => e.name).sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.name.localeCompare(b.name));
+  let e = ents.find(x => x.id === store.get('tg_lc_entity')) || ents.find(x => x.lifecycle) || ents[0];
+  const groups = [...new Set(ents.map(x => x.group || ''))];
+  const opts = list => list.map(x => `<option value="${x.id}"${x === e ? ' selected' : ''}>${esc(x.name)}${x.lifecycle ? '' : ' — без жизненного цикла'}</option>`).join('');
+  $('#lcLevels').insertAdjacentHTML('beforeend', ` <span class="muted" style="font-size:12px;align-self:center">сущность:</span>
+    <select id="lcEntity" style="width:auto;max-width:280px">${groups.length < 2 ? opts(ents)
+      : groups.map(g => `<optgroup label="${esc(g || 'без группы')}">${opts(ents.filter(x => (x.group || '') === g))}</optgroup>`).join('')}</select>`);
+  $('#lcEntity').onchange = ev => lcShowStates(ev.target.value);
+  const m = lcMachine(e.lifecycle), field = (label, v) => v ? `<div class="lc-f"><b>${label}:</b> ${esc(v)}</div>` : '';
+  const head = `<div class="row" style="margin-bottom:6px"><b class="grow">${esc(e.name)}${e.group ? ` <span class="muted" style="font-weight:400">· ${esc(e.group)}</span>` : ''}</b>
+    <button class="btn small" onclick="knOpenEntity('${e.id}')">Изменить жизненный цикл</button></div>`;
+  if (!m.states.length) {
+    box.innerHTML = head + `<div class="hint">Жизненный цикл не описан. Запишите его в сущности: состояния через «→», событие перехода — в квадратных скобках перед состоянием, роль — в скобках после: <code>новый → [оплатить] оплачен (покупатель) → [отправить] отправлен (менеджер) → доставлен; новый → [отменить] отменён</code>.</div>`;
+    return;
+  }
+  const rows = m.edges.map(t => `<tr data-from="${t.from.id}" data-to="${t.to.id}"><td>${esc(t.from.name)}</td><td>${t.event ? esc(t.event) : '<span class="muted">—</span>'}</td><td>${esc(t.to.name)}</td><td>${esc(t.role)}</td></tr>`).join('');
+  const noEvents = m.edges.length && m.edges.every(t => !t.event);
+  box.innerHTML = head + `<div class="sm-wrap">${lcStateSvg(m)}</div>` +
+    (noEvents ? `<div class="hint">События переходов не указаны. Допишите их в жизненный цикл в квадратных скобках перед состоянием: <code>новый → [оплатить] оплачен (покупатель)</code>.</div>` : '') +
+    (m.edges.length ? `<table class="kn-table sm-table" style="margin-top:10px"><thead><tr><th>Из состояния</th><th>Событие</th><th>В состояние</th><th>Кто выполняет</th></tr></thead><tbody>${rows}</tbody></table>` : '') +
+    (m.notes.length ? `<div class="lc-f" style="margin-top:8px"><b>Ограничения переходов:</b> ${m.notes.map(esc).join('; ')}</div>` : '') +
+    field('Правила', e.rules) + field('Кто создаёт', e.create) + field('Требует', (e.depends_on || []).join(', '));
+  // hovering a state or a row of the table leaves only its transitions
+  const wrap = box.querySelector('.sm-wrap'), svg = wrap.querySelector('svg');
+  const focus = (st, pair) => {
+    svg.classList.toggle('focus', !!(st || pair));
+    svg.querySelectorAll('.on').forEach(x => x.classList.remove('on'));
+    box.querySelectorAll('.sm-table tr.on').forEach(x => x.classList.remove('on'));
+    const hit = x => st ? x.dataset.from === st || x.dataset.to === st : x.dataset.from === pair[0] && x.dataset.to === pair[1];
+    if (!st && !pair) return;
+    svg.querySelectorAll('.sm-e').forEach(x => { if (hit(x)) { x.classList.add('on'); svg.querySelector(`[data-st="${x.dataset.from}"]`)?.classList.add('on'); svg.querySelector(`[data-st="${x.dataset.to}"]`)?.classList.add('on'); } });
+    if (st) svg.querySelector(`[data-st="${st}"]`)?.classList.add('on');
+    box.querySelectorAll('.sm-table tbody tr').forEach(x => x.classList.toggle('on', hit(x)));
+  };
+  svg.addEventListener('mouseover', ev => focus(ev.target.closest('[data-st]')?.dataset.st));
+  svg.addEventListener('mouseleave', () => focus());
+  box.querySelectorAll('.sm-table tbody tr').forEach(tr => {
+    tr.onmouseenter = () => focus(null, [tr.dataset.from, tr.dataset.to]);
+    tr.onmouseleave = () => focus();
+  });
 }
 function knOpenEntity(id) {     // a node of the diagram opens its entity for editing
   readKnowledge();

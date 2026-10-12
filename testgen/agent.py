@@ -276,7 +276,7 @@ DATA_TOOL = _tool(
         "details": {"type": "string", "description": "What matters for tests: price, settings, links to other objects."},
         "state": {"type": "string", "description": "Its state in the lifecycle: in stock, paid, blocked…; or \"\"."},
         "depends_on": {"type": "string", "description": "Entities that must exist before it, comma-separated; or \"\"."},
-        "lifecycle": {"type": "string", "description": "States and transitions seen: \"new → paid → shipped\"; or \"\"."},
+        "lifecycle": {"type": "string", "description": "States and transitions seen, the event of a transition in brackets before the state: \"new → [pay] paid → [ship] shipped\"; or \"\"."},
         "create": {"type": "string", "description": "How and by which role it is created; or \"\"."},
         "role": {"type": "string", "description": "For a user: its roles from the model, comma-separated when several; "
                                                   "or \"\" (an object has no role)."},
