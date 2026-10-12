@@ -1,8 +1,9 @@
 """History of requirement analyses (the Requirements tab).
 
-Every "Generate scenarios" is kept: the requirements it was given, the scenarios
-designed from them (a person may edit, add and delete them) and, for each scenario,
-the tests generated from it (in the Studio or by "Generate all", a pipeline run).
+Every review of requirements is kept: the requirements, the report of the reviewer (review.py: defects of
+the document and its conflicts with the lifecycle of the system), then the scenarios the pipeline designed
+from them (a person may edit and delete them) and, for each scenario, the tests generated from it. A run of
+the pipeline without a review keeps its scenarios here too (/api/scenarios as well).
 One document per analysis: data/projects/<id>/analyses/<analysis>.json.
 
 The test data of a scenario is recorded in the application model (knowledge.need, record_needs()) with
@@ -60,7 +61,7 @@ def get(aid: str) -> dict | None:
 
 
 def _stale(a: dict) -> dict:
-    if a["status"] == "running" and time.time() - a["created"] > STALE:
+    if a["status"] == "running" and time.time() - (a.get("started") or a["created"]) > STALE:
         a["status"], a["error"] = "error", a["error"] or "Генерация была прервана"
     return a
 
@@ -81,9 +82,11 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
         except ValueError:
             continue
         ready = [s for s in a["scenarios"] if not s.get("pending")]
+        rv = a.get("review") or {}
         out.append({k: a.get(k) for k in ("id", "created", "finished", "user", "title", "feature", "status", "error",
                                           "url")}
-                   | {"scenarios": len(ready), "tests": sum(len(s.get("test_ids") or []) for s in ready)})
+                   | {"scenarios": len(ready), "tests": sum(len(s.get("test_ids") or []) for s in ready),
+                      "review": {"verdict": rv.get("verdict"), "at": rv.get("at")} if rv else None})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:limit]
 
 
@@ -139,10 +142,12 @@ def _new_scenario(data: dict) -> dict:
 
 
 def set_plan(pid: str, aid: str, feature: str, assumptions: list[str], planned: list[dict]) -> list[dict]:
+    """The planned scenarios (to be detailed) go first; the ready ones of an earlier design of the same
+    requirements, with their tests, stay after them."""
     def fn(a):
         a["feature"], a["assumptions"] = feature, list(assumptions)
         a["scenarios"] = [_new_scenario(s) | {"covers": s.get("covers", ""), "pending": True} for s in planned] + \
-            [s for s in a["scenarios"] if not s.get("pending") and s.get("added")]
+            [s for s in a["scenarios"] if not s.get("pending")]
         return a["scenarios"]
     return _change(pid, aid, fn)
 
@@ -253,6 +258,40 @@ def set_validation(pid: str, aid: str, result: dict) -> None:
     """The validation of the analysis's specification against the documentation standard (validation.py)."""
     if fs.exists(_path(pid, aid)):
         _change(pid, aid, lambda a: a.update(validation=result))
+
+
+def set_review(pid: str, aid: str, report: dict) -> None:
+    """The reviewer's finished report (review.review); its check of the document is the analysis's
+    validation as well. A review stopped midway writes nothing: the previous report stays."""
+    if not fs.exists(_path(pid, aid)):
+        return
+
+    def fn(a):
+        a["review"] = report
+        if report.get("validation"):
+            a["validation"] = report["validation"]
+    _change(pid, aid, fn)
+
+
+def mark_learned(pid: str, aid: str) -> None:
+    """The application model has learned from these requirements: the pipeline does not extract them again."""
+    if fs.exists(_path(pid, aid)):
+        _change(pid, aid, lambda a: a.update(learned=time.time()))
+
+
+def reviewed(a: dict) -> bool:
+    """The reviewer has a report on the requirements of the analysis."""
+    return bool(a.get("review"))
+
+
+def restart(pid: str, aid: str, force: bool = False) -> dict:
+    """The analysis is in work again: its requirements are reviewed again, or the pipeline designs scenarios
+    from them. force - a run of the pipeline that goes on after a restart of the studio."""
+    def fn(a):
+        if _stale(a)["status"] == "running" and not force:
+            raise Conflict("Анализ уже в работе: дождитесь окончания проверки или генерации")
+        a.update(status="running", started=time.time(), error="", finished=None)
+    return _change(pid, aid, fn)
 
 
 def delete(pid: str, aid: str) -> bool:

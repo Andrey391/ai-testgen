@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
-                     publisher, reports, reuse, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
+                     publisher, reports, reuse, review, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
 from testgen import worker as worker_mod
 from testgen import agent as agent_mod
@@ -2303,7 +2303,7 @@ class ReqBody(BaseModel):
     types: list[str] | None = None
     layers: list[str] | None = None
     techniques: list[str] | None = None
-    validate_spec: bool | None = None   # validate the specification first (None = "requirements.validate")
+    validate_spec: bool = False     # validate the specification first (the Requirements tab reviews it: review.py)
 
 
 async def _learn(p: dict, requirements: str, user: str, log=None) -> None:
@@ -2323,12 +2323,14 @@ async def _learn(p: dict, requirements: str, user: str, log=None) -> None:
 
 @app.post("/api/scenarios")
 async def gen_scenarios(body: ReqBody, request: Request):
-    """Requirements -> scenarios; every generation is kept in the project's analysis history."""
+    """Requirements -> scenarios at once, for API clients; every generation is kept in the project's analysis
+    history. The studio itself reviews requirements first (/api/requirements/review) and designs scenarios in
+    the pipeline."""
     p = project(body.project_id, "editor")
     _require_model(p)
     a = analyses.create(p["id"], body.requirements, body.url, request.state.user)
     cfg = scenarios.settings(p, body.types, body.layers, body.techniques)
-    check = p["pipeline"]["requirements"]["validate"] if body.validate_spec is None else body.validate_spec
+    check = body.validate_spec
     user = request.state.user
     if not body.stream:
         try:
@@ -2451,6 +2453,88 @@ async def validate_requirements(body: ValidateBody, request: Request):
     if a:
         analyses.set_validation(p["id"], a["id"], report)
     return report
+
+
+class ReviewBody(BaseModel):
+    project_id: str
+    requirements: str = ""
+    analysis_id: str = ""       # review again the requirements of this analysis (the new report replaces the old)
+    standard: str = ""          # empty = the project's ("requirements.standard")
+
+
+@app.post("/api/requirements/review")
+async def review_requirements(body: ReviewBody, request: Request):
+    """The first job of the Requirements tab: the reviewer subagent (review.py), on a clean context of its own,
+    finds the defects of the specification and where it disagrees with the lifecycle of the system; then the
+    application model learns from it ("requirements.learn_model"). The analysis keeps the report; scenarios and
+    tests are designed from it in the pipeline. NDJSON events: analysis, log, review, done | error; the page
+    went away («Остановить») - the review stops and the previous report stays."""
+    p = project(body.project_id, "editor")
+    _require_model(p)
+    a = analyses.get(body.analysis_id) if body.analysis_id else None
+    if body.analysis_id and (not a or a["project_id"] != p["id"]):
+        raise HTTPException(404, "Анализ не найден")
+    text = body.requirements.strip() or (a or {}).get("requirements", "")
+    if not text.strip():
+        raise HTTPException(400, "Нет текста требований")
+    user = request.state.user
+    if a:
+        try:
+            a = analyses.restart(p["id"], a["id"])
+        except analyses.Conflict as e:
+            raise HTTPException(409, str(e))
+    else:
+        a = analyses.create(p["id"], text, "", user)
+    pid, aid = p["id"], a["id"]
+    loop, queue = asyncio.get_running_loop(), asyncio.Queue()
+
+    def send(event: dict) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event | {"at": time.time()})
+
+    def log(line: str) -> None:
+        send({"type": "log", "text": line})
+
+    async def work():
+        try:
+            report = await review.review(p, text, body.standard, log=log)
+            analyses.set_review(pid, aid, report)
+            send({"type": "review", "review": report})
+            if p["pipeline"]["requirements"].get("learn_model") and not text.lstrip().startswith(explorer.MAP_TITLE):
+                log("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
+                try:
+                    doc = await knowledge.extract(p, text, user)
+                    analyses.mark_learned(pid, aid)
+                    log(f"Модель приложения: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}")
+                except Exception as e:      # the model is a help: the review is done without it
+                    log(f"Модель приложения не обновлена: {llm.api_error_text(e)}")
+            analyses.finish(pid, aid)
+            send({"type": "done", "analysis": analyses.view(analyses.get(aid))})
+        except asyncio.CancelledError:
+            analyses.finish(pid, aid, error="Проверка остановлена", status="cancelled")
+            raise
+        except Exception as e:
+            analyses.finish(pid, aid, error=llm.api_error_text(e))
+            send({"type": "error", "text": llm.api_error_text(e)})
+
+    send({"type": "analysis", "analysis": analyses.view(a)})
+    future = submit(work())
+
+    async def events():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), 15)
+                except asyncio.TimeoutError:
+                    yield "\n"      # keeps proxies from closing a quiet connection
+                    continue
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if event["type"] in ("done", "error"):
+                    return
+        finally:
+            future.cancel()
+
+    return StreamingResponse(events(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ---------- The application model: entities, dependencies, lifecycles, test data, memory ----------
@@ -2749,6 +2833,7 @@ class JobBody(BaseModel):
     analysis_id: str = ""               # or scenarios of a requirements analysis (all, or `scenario_ids`)
     scenario_ids: list[str] = []
     picks: list[ScenarioPick] = []      # or scenarios of several analyses (the pipeline's common list)
+    review_id: str = ""                 # or requirements reviewed in the Requirements tab: design their scenarios
     types: list[str] | None = None      # this run's kinds of checks, layers, techniques (None = the project's)
     layers: list[str] | None = None
     techniques: list[str] | None = None
@@ -2791,12 +2876,23 @@ async def start_job(pid: str, body: JobBody, request: Request):
             raise HTTPException(400, "Нет готовых сценариев" if body.picks else "В анализе нет готовых сценариев")
     if body.scenarios and not ready:
         raise HTTPException(400, "У сценариев нет названия или шагов")
+    reviewed = None
+    if body.review_id:
+        reviewed = analyses.get(body.review_id)
+        if not reviewed or reviewed["project_id"] != p["id"]:
+            raise HTTPException(404, "Анализ не найден")
+        if not analyses.reviewed(reviewed):
+            raise HTTPException(400, "Требования ещё не проверены: «Проверить требования» во вкладке «Требования»")
+        if reviewed["status"] == "running":
+            raise HTTPException(409, "Анализ уже в работе: дождитесь окончания проверки или генерации")
+        if ready or body.links or body.text.strip() or body.explore or cases:
+            raise HTTPException(400, "Проверенные требования запускаются отдельно от других источников")
     if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases \
-            and not ready:
+            and not ready and not reviewed:
         raise HTTPException(400, "Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта")
     _require_model(p)
     job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore,
-                       cases=cases, scenarios=ready, feature=feature,
+                       cases=cases, scenarios=ready, feature=feature, review_id=body.review_id if reviewed else "",
                        design={k: v for k, v in (("types", body.types), ("layers", body.layers),
                                                  ("techniques", body.techniques)) if v is not None})
     pipeline.JOBS[job.id] = job
@@ -2885,6 +2981,18 @@ async def decide_reuse(jid: str, body: ReuseBody):
     if any(d not in reuse.DECISIONS for d in body.decisions.values()):
         raise HTTPException(400, "Решение: new, reuse или refine")
     WORKER.call_soon_threadsafe(job.decide, dict(body.decisions))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{jid}/review")
+async def accept_job_review(jid: str, request: Request):
+    """A person read the reviewer's findings that block test design and lets the run go on."""
+    job = pipeline.JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Запуск не найден")
+    if job.status != "awaiting_review":
+        raise HTTPException(409, "Запуск не ждёт решения по проверке требований")
+    WORKER.call_soon_threadsafe(job.accept_review, request.state.user or "")
     return {"ok": True}
 
 

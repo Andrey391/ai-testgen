@@ -47,7 +47,7 @@ DEFAULT_PIPELINE = {
         "connection": "",          # Atlassian connection id; empty = the first one
         "standard": "gost34",      # the documentation standard a specification is validated against (catalog.STANDARDS)
         "checklist": "",           # the team's own rules for specifications, one per line
-        "validate": False,         # validate the specification before every generation of scenarios
+        "validate": True,          # the pipeline reviews new requirements before designing scenarios (review.py)
         "learn_model": True,       # update the application model (knowledge.py) from analysed requirements
         "confirm_model": True,     # tests are generated only after a person confirmed the lifecycle of the system
         "preflight": True,         # before a test: an account for the scenario's role, no broken lifecycle (knowledge.preflight)
