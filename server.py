@@ -2474,8 +2474,8 @@ async def _learn_reviewed(p: dict, aid: str, user: str, log=None) -> str:
         return ""
     left = review.unresolved(a.get("review"))
     if left:
-        line = (f"Модель приложения обновится по требованиям, когда все замечания ревьюера будут исправлены или "
-                f"отмечены неактуальными (осталось {len(left)})")
+        line = (f"Модель приложения обновится по требованиям, когда замечания, блокирующие тест-дизайн, будут "
+                f"исправлены или отмечены неактуальными (осталось {len(left)})")
         say(line)
         return line
     say("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
@@ -2507,6 +2507,10 @@ async def review_requirements(body: ReviewBody, request: Request):
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
     user = request.state.user
+    same = None if a else analyses.same_text(p["id"], text)     # the same text checked again updates its analysis
+    again = bool(same) and same["status"] != "running"
+    if again:
+        a = same
     if a:
         try:
             a = analyses.restart(p["id"], a["id"])
@@ -2527,7 +2531,7 @@ async def review_requirements(body: ReviewBody, request: Request):
         try:
             report = await review.review(p, text, body.standard, log=log, notes=review.notes((a or {}).get("review")))
             analyses.set_review(pid, aid, report)
-            send({"type": "review", "review": report})
+            send({"type": "review", "review": review.public(report)})
             await _learn_reviewed(p, aid, user, log)
             analyses.finish(pid, aid)
             send({"type": "done", "analysis": analyses.view(analyses.get(aid))})
@@ -2539,6 +2543,8 @@ async def review_requirements(body: ReviewBody, request: Request):
             send({"type": "error", "text": llm.api_error_text(e)})
 
     send({"type": "analysis", "analysis": analyses.view(a)})
+    if again:
+        log("Эти требования уже проверялись: обновляю их анализ — решения по прежним замечаниям ревьюер учтёт")
     future = submit(work())
 
     async def events():
@@ -2588,8 +2594,9 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
         raise HTTPException(404, "Анализ не найден")
     left = review.unresolved((a or {}).get("review"))
     if a and left:
-        raise HTTPException(409, f"Сначала разберите замечания ревьюера (осталось {len(left)}): исправьте их в ТЗ "
-                                 "или отметьте неактуальными — модель приложения учится только на согласованных требованиях")
+        raise HTTPException(409, f"Сначала разберите замечания ревьюера, блокирующие тест-дизайн (осталось {len(left)}): "
+                                 "исправьте их в ТЗ или отметьте неактуальными — модель приложения учится только на "
+                                 "согласованных требованиях")
     text = body.requirements.strip() or (a or {}).get("requirements", "")
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
@@ -2838,6 +2845,62 @@ async def decide_findings(aid: str, body: FindingsBody, request: Request):
         raise HTTPException(400, str(e))
     model = await call(_learn_reviewed(p, aid, request.state.user)) if body.status == review.DISMISSED else ""
     return _review_result(aid, model)
+
+
+@app.post("/api/analyses/{aid}/review/group")
+async def group_findings(aid: str, request: Request):
+    """The findings of a report made before themes, grouped now (review.group): the same thing - one answer."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    _require_model(p)
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    try:
+        groups = await _while_connected(request, review.group(p, a["review"]))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Отменено")
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    analyses.set_groups(p["id"], aid, groups)
+    return _review_result(aid, groups=len(groups))
+
+
+class AnswersBody(BaseModel):
+    text: str           # the answers of an analyst to the findings, in one text
+
+
+@app.post("/api/analyses/{aid}/review/answers")
+async def answer_findings(aid: str, body: AnswersBody, request: Request):
+    """The answers of an analyst pasted as one text: a model matches them to the unsettled themes of findings
+    (review.distribute); an answer - the theme waits for the editor, «not relevant» - it is dismissed."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    _require_model(p)
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    if not body.text.strip():
+        raise HTTPException(400, "Вставьте ответы аналитика")
+    try:
+        found = await _while_connected(request, review.distribute(p, a["review"], body.text))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Разбор ответов отменён")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    answered = dismissed = 0
+    for x in found:
+        ids = review.unsettled_ids(analyses.get(aid)["review"], x["id"])
+        if not ids:
+            continue
+        if x["not_relevant"]:
+            analyses.decide(p["id"], aid, ids, review.DISMISSED, note=x["note"], user=request.state.user)
+            dismissed += 1
+        else:
+            analyses.decide(p["id"], aid, ids, review.TODO, x["answer"], user=request.state.user)
+            answered += 1
+    model = await call(_learn_reviewed(p, aid, request.state.user)) if dismissed else ""
+    return _review_result(aid, model, answered=answered, dismissed=dismissed)
 
 
 @app.post("/api/analyses/{aid}/review/fix")

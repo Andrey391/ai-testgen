@@ -149,7 +149,7 @@ def test_the_tab_reviews_and_keeps_the_report(monkeypatch, fake_llm):
     assert a["status"] == "done" and a["review"]["verdict"] == "ready" and a["scenarios"] == []
     assert a["validation"]["verdict"] == "ready" and not a.get("learned")
     # The findings are not settled yet: the model does not learn from the requirements.
-    assert any("когда все замечания ревьюера будут исправлены" in e["text"] for e in events if e["type"] == "log")
+    assert any("когда замечания, блокирующие тест-дизайн, будут" in e["text"] for e in events if e["type"] == "log")
     [listed] = [x for x in client.get(f"/api/projects/{p['id']}/analyses").json() if x["id"] == a["id"]]
     assert listed["review"]["verdict"] == "ready"
 

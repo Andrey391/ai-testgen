@@ -283,9 +283,17 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 - `testgen/review.py` — ревьюер требований, субагент на чистом контексте: `review()` параллельно запускает
   `validation.validate` и `lifecycle()` — свой цикл с инструментами `model_lookup` (если модель не помещается в
   промпт) и `report` (`LifecycleReport`: `contradiction`/`role`/`gap`/`new`, серьёзность, цитаты документа и модели).
-  Одна упавшая проверка не отменяет другую (`errors`), `verdict` — худший из двух, `blocking()` — `not_ready`.
+  Одна упавшая проверка не отменяет другую (`errors`). Замечания (`items()`) делятся на блокирующие тест-дизайн
+  (вопросы, дефекты содержания не `minor`) и «качество документа» (`DOCUMENT_FORM`: нумерация, атомарность, разделы
+  стандарта; `minor`): `verdict` и `blocking()` (`not_ready`) считаются только по блокирующим, модель приложения учится,
+  когда разобраны они (`resolved()`). Замечания обеих проверок об одном — темы (`group()` после проверки, от
+  `GROUP_MIN`; `groups` в отчёте, `themes()` — что разбирает человек, `public()` — отчёт для студии), тема правится
+  агентом одной правкой (`revise`), ответы аналитика одним текстом разносит `distribute()`
+  (`POST /api/analyses/{aid}/review/answers`, `…/review/group` — темы для старых отчётов). Стандарт не под вид
+  документа (`validation`: `standard_fits`, `suggested_standard`) — разделы стандарта не дефекты.
   Отчёт — `analyses.set_review` (анализ: `review`, `validation`; `learned` — модель уже училась на ТЗ). Вкладка
-  «Требования» — `POST /api/requirements/review` (новый анализ или `analysis_id` — заново, `analyses.restart`);
+  «Требования» — `POST /api/requirements/review` (новый анализ или `analysis_id` — заново, `analyses.restart`; тот же
+  текст — тот же анализ, `analyses.same_text`);
   конвейер — этап 1 (`Job._review`, ожидание `_await_review`) или готовый отчёт (`Job._design_reviewed`).
 - `testgen/blocks.py` — переиспользование шагов: только действия (`REUSABLE`, без проверок) стабильных UI-тестов
   (последний прогон прошёл, не карантин) — модулями, а не копиями. `offer()` — что видит агент (модули разделов
