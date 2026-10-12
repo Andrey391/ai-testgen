@@ -35,7 +35,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import fs, knowledge, llm, mailbox, mcp_hub, projects, skills, storage, testdata, traffic, vault
+from . import blocks, fs, knowledge, llm, mailbox, mcp_hub, projects, skills, storage, testdata, traffic, vault
 from .apiclient import ApiClient
 from .browser import BrowserSession, describe_element
 from .mcp_browser import McpBrowser
@@ -56,13 +56,23 @@ BATCH_SAFE = {"fill", "select_option", "hover", "upload_file", "assert_visible",
               "assert_element_text", "assert_value", "assert_checked", "assert_enabled", "assert_count",
               "assert_url_contains"}
 MAX_BATCH = 8
+# The rule of a turn in Auto-Pilot, at the end of the system prompt: a model is told it may batch, or it plays
+# safe with one call per turn and a form of five fields costs five requests.
+BATCH_NOTE = ("\n\nAUTO-PILOT IS ON: nobody approves the steps one by one, so every turn counts. Put into ONE answer "
+              "all the actions you can already do on the CURRENT page state, in order: fill every field of a form "
+              "(fill, select_option, upload_file) and put the click or key press that submits it LAST; give several "
+              "assertions of the same page state together; a test_data or remember call goes along with the "
+              "actions. They run back to back; whatever follows an action that changes the page (click, navigate, "
+              "press_key) is not executed and must be proposed again on the new page state.")
+# Helpers that only record something: they run right away, also in an answer with actions.
+RECORD_HELPERS = {"test_data", "remember"}
 
 SYSTEM_PROMPT = """You are a QA engineer that authors end-to-end UI test cases by driving a real web browser.
 
 The user gives you a web application and a test scenario in plain language. You carry out the scenario one browser action at a time using the tools. Every tool call you make is recorded as a step of the test case, and the recorded test will later be replayed automatically and exported as Playwright code and Gherkin. So:
 
 - Take the most direct path a real user would take. Avoid exploratory clicks that do not belong in the final test.
-- Call one tool per turn, then look at the new page state before deciding the next step. When several tool calls in one turn are allowed (Auto-Pilot), you may batch actions on the SAME page state, typically filling the fields of one form, with the action that submits or navigates LAST: they run in order, and whatever follows an action that changed the page is skipped and must be proposed again.
+- Call one tool per turn, then look at the new page state before deciding the next step - unless the AUTO-PILOT note at the end of these instructions is present: then batch the actions of one page state as it says.
 - Write each `description` as a clear test step in imperative form, e.g. "Click the 'Add to Cart' button" or "Enter 'kindle' into the search field". Write descriptions in the same language as the scenario.
 - Verify outcomes, not just actions: after each meaningful state change (search results shown, item added to cart, form submitted) add an assertion step. Assert the actual result: assert_element_text or assert_text_present for messages and data, assert_value for form fields, assert_count for lists, tables and carts, assert_checked / assert_enabled for state, assert_url_contains for navigation. assert_visible only proves that an element is there, so it is rarely enough on its own. The test must end with at least one assertion of the scenario's expected result.
 - Target elements only by `ref` values from the LATEST page snapshot; refs change after every action.
@@ -77,7 +87,7 @@ The user gives you a web application and a test scenario in plain language. You 
 - Tools whose names contain "__" come from the project's connected systems (Jira, Confluence, test management...). They are read-only helpers for context, e.g. to read the requirements of an issue; they are not test steps. Use them only when the scenario needs that information."""
 
 # For weaker models: fewer words, numbered rules; examples come from a skill.
-SYSTEM_PROMPT_COMPACT = """You are a QA engineer. You write an end-to-end UI test by driving a real web browser with the tools: exactly ONE tool call per turn. Every call becomes a step of the test.
+SYSTEM_PROMPT_COMPACT = """You are a QA engineer. You write an end-to-end UI test by driving a real web browser with the tools: ONE tool call per turn (unless the AUTO-PILOT note at the end allows more). Every call becomes a step of the test.
 
 Rules:
 1. Target elements only by `ref` (like e12) from the LATEST page state.
@@ -213,9 +223,16 @@ MODULE_TOOL = _tool("use_module", "Run a module of the project (a saved block of
     "params": {"type": "string", "description": "Parameters as a JSON object, e.g. {\"item\": \"Молоко\"}; '{}' "
                                                 "if none."},
     "description": _DESC})
+REUSE_TOOL = _tool("reuse_steps", "Run actions already recorded in a stable test of the project (a run listed in the "
+                                   "task) as ONE step: they become a module shared with that test, not a copy. Only "
+                                   "when those actions are exactly what the scenario needs now, from the current page.", {
+    "run": {"type": "string", "description": "Run id from the task, e.g. 'a1b2c3d4e5:1-4'."},
+    "count": {"type": "integer", "description": "Only the first N actions of the run; 0 = the whole run."},
+    "description": {"type": "string", "description": "Name of the module for a human reader, in the language of the "
+                                                     "scenario, e.g. 'Войти как игрок'."}})
 # Need the built-in engine (the page itself, not an MCP server's view of it).
 BUILTIN_ONLY = {"assert_accessible", "assert_screenshot", "handle_dialog", "assert_download", "upload_file",
-                "read_email", "use_module"}
+                "read_email", "use_module", "reuse_steps"}
 LOOK_TOOL = _tool("look", "Get a screenshot of the current page (not a test step).", {})
 FIND_TOOL = _tool("find_elements", "Find elements of the whole page (all frames, off-screen too) whose name, label, "
                                    "placeholder or value contain the text; returns their refs. Not a test step.", {
@@ -314,6 +331,7 @@ def tool_to_step(name: str, inp: dict) -> dict:
         "assert_checked": str(bool(inp.get("checked", True))).lower(),
         "assert_enabled": str(bool(inp.get("enabled", True))).lower(),
         "assert_count": str(inp.get("count", "")),
+        "reuse_steps": inp.get("run", ""),
     }.get(name, "")
     if name == "handle_dialog":
         value = _json({"action": inp.get("action", "accept"), "prompt_text": inp.get("prompt_text", ""),
@@ -363,7 +381,9 @@ def project_files(pid: str) -> list[str]:
 RESUME_TASK = ("The authoring session was interrupted (the studio restarted) and is being continued. Do not repeat "
                "the steps above: continue the test scenario from the current page.")
 FRESH_TASK = ("To keep the requests short, the conversation was started over: the steps above are already done in "
-              "the browser and recorded. Do not repeat them: continue the test scenario from the current page.")
+              "the browser and recorded. The browser keeps its state: the same page, still logged in if the steps "
+              "above logged in. Do not repeat them (do not log in or fill a form again): continue the test scenario "
+              "from the current page.")
 EDIT_TASK = ("A person opened this saved test to edit it: the steps above are already recorded in the test and have "
              "been replayed. Do only what the person asks in the chat (add, change or re-record steps from the current "
              "page); do not repeat the steps above and do not go on with the scenario on your own.")
@@ -456,6 +476,18 @@ def save_checkpoint(project: dict, cp: dict, status: str = "") -> tuple[dict, li
     return s.save(status)
 
 
+def _module_line(m: dict) -> str:
+    params = sorted({k[7:] for s in m["steps"] for k in re.findall(r"\{\{(params\.\w+)\}\}", s.get("value", ""))})
+    start = blocks.module_start(m)
+    return (f"- {m['id']}: «{m['name']}»" + (f", params: {', '.join(params)}" if params else "")
+            + (f", starts on {start}" if start else ""))
+
+
+def _same_page(a: str, b: str) -> bool:
+    pa, pb = urlparse(a or ""), urlparse(b or "")
+    return (pa.netloc, pa.path.rstrip("/"), pa.query) == (pb.netloc, pb.path.rstrip("/"), pb.query)
+
+
 def recorded_steps(steps: list[dict]) -> list[dict]:
     """Steps that go into the saved test: failed attempts are dropped, since the
     agent retries them another way and replay stops at the first failing step."""
@@ -540,6 +572,9 @@ class StudioSession:
         # What the project offers the agent: test files, modules (tests used as steps), a test mailbox.
         self.files = project_files(self.project_id)
         self.modules = [t for t in storage.all_tests(self.project_id) if t.get("role") == "module"] if builtin else []
+        # What the agent may reuse instead of recording again: modules of the scenario's sections, runs of
+        # actions of the stable tests closest to it (blocks.py).
+        self.reuse = blocks.offer(self.project_id, f"{name}\n{scenario}") if builtin else {"modules": [], "chains": []}
         self.mailbox = bool((project.get("mailbox") or {}).get("kind"))
         self.tools = [t for t in TOOLS if builtin or t["name"] not in BUILTIN_ONLY] + [REMEMBER_TOOL, DATA_TOOL]
         large = not knowledge.fits(self.project_id)     # the agent sees a slice of the model: it may ask for more
@@ -547,7 +582,8 @@ class StudioSession:
             self.tools.append(LOOKUP_TOOL)
         if builtin:
             self.tools += [FIND_TOOL, API_TOOL] + ([UPLOAD_TOOL] if self.files else []) + \
-                ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else [])
+                ([EMAIL_TOOL] if self.mailbox else []) + ([MODULE_TOOL] if self.modules else []) + \
+                ([REUSE_TOOL] if self.reuse["chains"] else [])
         if api:
             self.tools = [API_TOOL] + [t for t in TOOLS if t["name"] == "finish"] + [REMEMBER_TOOL, DATA_TOOL] + \
                 ([LOOKUP_TOOL] if large else [])
@@ -780,11 +816,15 @@ class StudioSession:
         if self.files:
             parts.append("Test files for upload_file: " + ", ".join(self.files) + ".")
         if self.modules:
-            lines = []
-            for m in self.modules:
-                params = sorted({k[7:] for s in m["steps"] for k in re.findall(r"\{\{(params\.\w+)\}\}", s.get("value", ""))})
-                lines.append(f"- {m['id']}: «{m['name']}»" + (f", params: {', '.join(params)}" if params else ""))
-            parts.append("Modules of the project (use_module runs one as a single step):\n" + "\n".join(lines))
+            listed = self.reuse["modules"]
+            lines = [_module_line(m) for m in listed]
+            more = len(self.modules) - len(listed)
+            parts.append("Modules of the project (use_module runs one as a single step; prefer them to recording "
+                         "their actions again):\n" + ("\n".join(lines) if lines else "(none for this scenario)")
+                         + (f"\nOther modules ({more}) are listed in the page state on the pages where they start."
+                            if more > 0 else ""))
+        if self.reuse["chains"]:
+            parts.append(blocks.note(self.reuse))
         if self.mailbox:
             parts.append("The project has a test mailbox: read_email waits for a letter and saves its code as "
                          "{{vars.<name>}}.")
@@ -820,6 +860,9 @@ class StudioSession:
                          for i, s in enumerate(recorded_steps(self.steps)))
         extra = (f"Your task in this session: {self.task}\n\n"
                  if self.task and self.task not in (EDIT_TASK, RESUME_TASK) else "")
+        said = [m["text"] for m in self.chat if m["role"] == "agent"][-3:]
+        if said and done:
+            done += "\n\nYour last comments (where you are in the scenario):\n" + "\n".join(f"- {t[:300]}" for t in said)
         return (f"Application under test: {self.url}\nTest scenario: {self.scenario}\n\n{extra}"
                 f"{self._credentials_note()}{self._context_note()}The test steps recorded so far:\n{done}\n\n"
                 f"{self.task if self.task == EDIT_TASK else task}\n\n")
@@ -1066,12 +1109,23 @@ class StudioSession:
     async def _page_state(self) -> list[dict]:
         t0 = time.monotonic()
         text = await self.bs.describe()
+        here = self._modules_here()
+        if here:
+            text += "\n\nModules that start on this page (use_module):\n" + "\n".join(_module_line(m) for m in here)
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url
         self.timing["browser"] += time.monotonic() - t0
         if not self.screenshot or self.screenshots != "always":
             return [{"type": "text", "text": text}]
         return [{"type": "text", "text": text}, self._image()]
+
+    def _modules_here(self) -> list[dict]:
+        """The modules (not listed in the task) that start on the current page."""
+        if not self.modules or not isinstance(self.bs, BrowserSession):
+            return []
+        path = blocks.path_key(self.bs.url)
+        listed = {m["id"] for m in self.reuse["modules"]}
+        return [m for m in self.modules if m["id"] not in listed and blocks.module_start(m) == path][:10]
 
     def _image(self) -> dict:
         return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": self.screenshot}}
@@ -1152,6 +1206,13 @@ class StudioSession:
                         "state.")
         if call["name"] == "upload_file" and call["input"].get("file") not in self.files:
             return f"Unknown file {call['input'].get('file')!r}. Test files: {', '.join(self.files)}."
+        if call["name"] == "reuse_steps":
+            try:
+                src, _, _ = blocks.chain(self.project_id, call["input"].get("run", ""), int(call["input"].get("count") or 0))
+            except (TypeError, ValueError) as e:
+                return str(e)
+            if src["id"] == self.test_id:
+                return "That run belongs to the test of this session."
         if call["name"] == "use_module" and call["input"].get("module") not in {m["id"] for m in self.modules}:
             return "Unknown module id. Modules: " + ", ".join(f"{m['id']} ({m['name']})" for m in self.modules)
         return ""
@@ -1168,6 +1229,8 @@ class StudioSession:
         if builtin:
             self.bs.step_index = len(self.steps)
             self.bs.new_tabs = 0
+        if isinstance(self.bs, BrowserSession) and self.bs.page:
+            step["page"] = self.bs.url          # where the step starts: the start page of reused steps (blocks.py)
         try:
             if step["action"] == "use_module":
                 await self._run_module(step)
@@ -1218,6 +1281,9 @@ class StudioSession:
         if not p:
             return
         self.pending = None
+        if p["name"] == "reuse_steps":
+            await self._reuse(p)
+            return
         step = p["step"]
         await self._run_step(step, shot=False)
         done = [(p["id"], step)]
@@ -1228,6 +1294,7 @@ class StudioSession:
             if not skip:
                 skip = ("Auto-Pilot is off: the person approves steps one by one" if not self.autopilot
                         else "an earlier action of this turn failed" if prev["status"] != "passed"
+                        else "reuse_steps must be called on its own" if call["name"] == "reuse_steps"
                         else "the page may have changed after the previous action" if prev["action"] not in BATCH_SAFE
                         or self.bs.url != url or getattr(self.bs, "new_tabs", 0)
                         else self._invalid(call))
@@ -1246,6 +1313,53 @@ class StudioSession:
                 "type": "tool_result", "tool_use_id": tid, "is_error": st["status"] != "passed",
                 "content": [{"type": "text", "text": result + " New page state:"}] + state if last else result,
             })
+
+    async def _reuse(self, p: dict) -> None:
+        """reuse_steps: the run of a stable test runs in place; when every action passed it becomes a module
+        (the source test calls it too) and the test gets one use_module step. A run that fails records nothing:
+        the page is reopened where the run started."""
+        from . import runner
+        self.status = "executing"
+        t0 = time.monotonic()
+        inp = p["input"]
+        start_url = self.bs.url
+        try:
+            src, a, b = blocks.chain(self.project_id, inp.get("run", ""), int(inp.get("count") or 0))
+            steps = [copy.deepcopy(s) | {"status": "pending", "error": ""} for s in src["steps"][a:b]]
+            report = {"passed": True, "healed": 0, "proposals": []}
+            results: list[dict] = []
+            self.bs.step_index = len(self.steps)
+            await runner.run_steps(self.bs, {"id": src["id"], "project_id": self.project_id, "steps": steps},
+                                   steps, {"self_heal": False}, report, results, shots=False, heal_ok=False)
+            if report["passed"]:
+                name = (inp.get("description") or "").strip() or \
+                    f"{steps[0]['description']} → {steps[-1]['description']}"
+                module = blocks.reuse(self.project_id, src, a, b, name)
+                self.modules.append(module)
+                self.reuse["modules"].append(module)
+                if MODULE_TOOL not in self.tools:
+                    self.tools.append(MODULE_TOOL)
+                step = blocks.use_step(module)
+                step["page"] = start_url
+                self.steps.append(step)
+                self._say("system", f"♻️ Шаги {a + 1}–{b} теста «{src['name']}» переиспользованы: стали модулем "
+                                    f"«{module['name']}», в обоих тестах — вызов модуля, а не копия.")
+                ok, result = True, (f"Reused: the actions became module {module['id']} «{module['name']}», recorded as "
+                                    "ONE step (call use_module with this id if you need them again).")
+            else:
+                failed = results[-1]
+                await self.bs.execute(new_step("navigate", "Reopen the page", start_url))
+                ok, result = False, (f"Not reused: action «{failed['description']}» of the run failed "
+                                     f"({failed['error'][:200]}). Nothing was recorded and the page {start_url} was "
+                                     "reopened: record the actions yourself.")
+        except Exception as e:
+            ok, result = False, f"Not reused: {str(e)[:300]}"
+        self.timing["browser"] += time.monotonic() - t0
+        self._drop_batch(p, "the page changed after reuse_steps")
+        state = await self._page_state()
+        self.unanswered.append({"type": "tool_result", "tool_use_id": p["id"], "is_error": not ok,
+                                "content": [{"type": "text", "text": result + " New page state:"}] + state})
+        self.checkpoint()
 
     async def _think(self, extra: list[dict] | None = None) -> None:
         """Send queued tool results / notes / `extra` as a user turn, get the next step.
@@ -1274,7 +1388,7 @@ class StudioSession:
                 # and snapshots are dropped: they are useless once the page moved on.
                 # Auto-Pilot with the built-in engine may batch actions on one page (BATCH_SAFE); a person
                 # approving steps sees them one at a time.
-                reply = await llm.chat(self.cfg, system=self.system,
+                reply = await llm.chat(self.cfg, system=self.system + (BATCH_NOTE if self._batching() else ""),
                                        tools=self.tools + (self.toolbox.tools if self.toolbox else []),
                                        messages=self.messages, max_tokens=16000, one_tool=not self._batching(),
                                        cache_all=True,
@@ -1312,6 +1426,16 @@ class StudioSession:
             if reply.text:
                 self._say("agent", reply.text)
             calls = list(reply.tool_calls)
+            side = [c for c in calls if c["name"] in RECORD_HELPERS] if len(calls) > 1 else []
+            for c in side:
+                # A record of test data or a fact goes along with the actions of the answer: no turn of its own.
+                problem = check_call(c, self.tools)
+                self.unanswered.append({"type": "tool_result", "tool_use_id": c["id"], "is_error": bool(problem),
+                                        "content": f"Invalid call, nothing was done: {problem}" if problem
+                                        else await self._helper(c["name"], c["input"])})
+            calls = [c for c in calls if c not in side]
+            if side and not calls:
+                continue
             tool = calls[0] if calls else None
             if tool is None and not reply.text:
                 # Some models (through gateways) now and then answer with nothing at all.
@@ -1386,6 +1510,12 @@ class StudioSession:
                 self.status = "done"
                 self.autopilot = False
                 return
+            if name == "navigate" and self._reopens(inp.get("url", "")):
+                self.unanswered.append({"type": "tool_result", "tool_use_id": tid, "is_error": True,
+                                        "content": "Not executed: the browser is already on this page (the previous "
+                                                   "step opened it). Continue from the current page state."})
+                self._drop_batch({"batch": batch}, "the navigation before it was not executed")
+                continue
             step = tool_to_step(name, inp)
             self.pending = {"id": tid, "name": name, "input": inp, "step": step, "batch": batch}
             self.status = "awaiting_approval"
@@ -1393,6 +1523,14 @@ class StudioSession:
         self.status = "idle"
         self._say("system", "Агент слишком много ходов подряд не предлагал действий в браузере "
                             "(инструменты подключений или завершение без проверки).")
+
+    def _reopens(self, url: str) -> bool:
+        """A navigation to the page the previous step has just opened: a reload that only adds a step."""
+        last = recorded_steps(self.steps)[-1:]
+        if not last or last[0]["action"] != "navigate" or not isinstance(self.bs, BrowserSession):
+            return False
+        target = self.bs.expand(url)
+        return _same_page(self.bs.expand(last[0]["value"]), target) and _same_page(self.bs.url, target)
 
     def _drop_batch(self, pending: dict, reason: str) -> None:
         """The actions batched after a step that will not run: each gets its "not executed" result."""

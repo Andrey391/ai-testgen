@@ -25,7 +25,7 @@ from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Re
                                StreamingResponse)
 from pydantic import BaseModel
 
-from testgen import (access, analyses, apiclient, audit, auth, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
+from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
                      publisher, reports, reuse, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
@@ -213,6 +213,8 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/knowledge/pending"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/sort"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/duplicates"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/blocks/{key}/accept"): "test.module",
+    ("POST", "/api/projects/{pid}/blocks/{key}/dismiss"): "test.module",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
     ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
     ("POST", "/api/projects/{pid}/runs"): "suite.start",
@@ -2522,6 +2524,54 @@ async def sort_knowledge(pid: str, request: Request, body: SortBody | None = Non
     except llm.ProviderError as e:
         raise HTTPException(502, str(e))
     return knowledge.view(pid) | {"sorting": res}
+
+
+@app.get("/api/projects/{pid}/blocks")
+async def reusable_blocks(pid: str):
+    """Chains of actions repeated in stable tests (candidates for modules) and the project's modules, with
+    their sections and the tests that call them."""
+    project(pid)
+    tests = storage.all_tests(pid)
+    used: dict[str, list[str]] = {}
+    for t in tests:
+        for s in t.get("steps") or []:
+            if s.get("action") == "use_module":
+                try:
+                    mid = json.loads(s.get("value") or "{}").get("module")
+                except ValueError:
+                    continue
+                used.setdefault(mid, [])
+                if t["name"] not in used[mid]:
+                    used[mid].append(t["name"])
+    mods = [{"id": m["id"], "name": m["name"], "steps": len(m.get("steps") or []),
+             "section": blocks.section_label(m.get("section") or [], blocks.module_start(m)
+                                             or blocks.path_key(m.get("url") or "")),
+             "start_path": blocks.module_start(m), "used_by": used.get(m["id"], [])}
+            for m in tests if m.get("role") == "module"]
+    return {"candidates": await asyncio.to_thread(blocks.candidates, pid), "modules": mods}
+
+
+class BlockAccept(BaseModel):
+    name: str = ""
+    replace: bool = True
+
+
+@app.post("/api/projects/{pid}/blocks/{key}/accept")
+async def accept_block(pid: str, key: str, body: BlockAccept):
+    """The repeated chain becomes a module; with `replace` the tests call it instead of their copies."""
+    project(pid, "editor")
+    try:
+        res = await asyncio.to_thread(blocks.accept, pid, key, body.name, body.replace)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    return {"module": {"id": res["module"]["id"], "name": res["module"]["name"]}, "replaced": res["replaced"]}
+
+
+@app.post("/api/projects/{pid}/blocks/{key}/dismiss")
+async def dismiss_block(pid: str, key: str):
+    project(pid, "editor")
+    blocks.dismiss(pid, key)
+    return {"ok": True}
 
 
 @app.get("/api/projects/{pid}/knowledge/duplicates")

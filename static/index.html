@@ -719,6 +719,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Последние запуски</th><th>Качество проверок</th><th id="tmsHead">Система тестов</th><th></th></tr></thead>
     <tbody id="testsBody"></tbody></table>
   </div>
+  <div class="card" id="blocksBox"></div>
   <div class="card hidden" id="suiteBox"></div>
   <div class="card runlog hidden" id="runBox"></div>
   <div class="card hidden" id="testBox"></div>
@@ -2300,10 +2301,47 @@ async function loadTests() {
           <button onclick="delTest('${t.id}')" style="color:var(--bad)">Удалить</button>
         </div></details></td></tr>`;
   }).join('') || `<tr><td colspan="6" class="muted">${tag ? 'Нет тестов с этим тегом.' : 'В проекте пока нет тестов. Создайте тест в Studio или запустите конвейер.'}</td></tr>`;
-  loadSuites(); loadCoverage();
+  loadSuites(); loadCoverage(); loadBlocks();
   if (OPEN_TEST && !$('#testBox').classList.contains('hidden')) openTest(OPEN_TEST, true);
 }
 $('#tagFilter').onchange = loadTests;
+// Repeated actions -> modules: a chain of actions found in several stable tests is offered as a module (blocks.py);
+// the tests then call the module instead of keeping copies. Assertions never go into a module.
+async function loadBlocks() {
+  const box = $('#blocksBox');
+  let d;
+  try { d = await api('GET', `/api/projects/${PID}/blocks`); } catch (e) { box.innerHTML = ''; return; }
+  const bySection = list => list.reduce((acc, x) => ((acc[x.section || 'Без раздела'] ||= []).push(x), acc), {});
+  const cands = bySection(d.candidates), mods = bySection(d.modules);
+  const candHtml = Object.entries(cands).map(([sec, list]) => `<div style="margin-top:8px"><b>${esc(sec)}</b>${list.map(c => `
+    <details class="card" style="margin:6px 0;padding:8px"><summary><b>${esc(c.name)}</b>
+      <span class="muted">— ${c.steps.length} действий, в ${c.tests.length} тестах${c.params ? `, параметров: ${c.params}` : ''}</span></summary>
+      <ol style="margin:6px 0">${c.steps.map(s => `<li><code>${esc(s.action)}</code> ${esc(s.description)}${s.value ? ` <span class="muted">— ${esc(s.value)}</span>` : ''}</li>`).join('')}</ol>
+      <div class="muted" style="font-size:12px">Тесты: ${c.tests.map(t => esc(t.name) + (t.count > 1 ? ` (×${t.count})` : '')).join(', ')}${c.start_path ? ` · начинается на ${esc(c.start_path)}` : ''}</div>
+      <div class="row" style="margin-top:6px"><input class="grow" id="blk-${c.key}" value="${esc(c.name)}" title="Название модуля">
+        <label class="inline" title="Шаги в этих тестах заменятся вызовом модуля (новая версия теста)"><input type="checkbox" id="blkr-${c.key}" checked> заменить в тестах</label>
+        <button class="btn primary small" onclick="acceptBlock('${c.key}', this)">Сделать модулем</button>
+        <button class="btn small" onclick="dismissBlock('${c.key}')">Не предлагать</button></div>
+    </details>`).join('')}</div>`).join('');
+  const modHtml = Object.entries(mods).map(([sec, list]) => `<div style="margin-top:6px"><b>${esc(sec)}</b>: ${list.map(m =>
+    `<a href="#" onclick="openTest('${m.id}');return false">${esc(m.name)}</a> <span class="muted">(${m.steps} шагов${m.start_path ? ', ' + esc(m.start_path) : ''}; ${m.used_by.length ? 'используют: ' + m.used_by.length : 'не используется'})</span>`).join('; ')}</div>`).join('');
+  box.innerHTML = `<h3>Повторяющиеся шаги и модули</h3>
+    <div class="hint" style="margin-top:0">Одинаковые цепочки действий (без проверок) из стабильных тестов — их лучше вынести в модуль: тесты будут вызывать его, а не хранить копии, самолечение починит его один раз. При записи новых тестов агент сам ищет готовые действия по разделу сценария и переиспользует их как модуль. Разделы — группы сущностей модели приложения или страница, с которой начинаются действия.</div>
+    ${candHtml || '<div class="muted" style="margin-top:6px">Повторяющихся цепочек действий в стабильных тестах нет.</div>'}
+    ${modHtml ? `<div style="margin-top:10px"><b>Модули проекта</b>${modHtml}</div>` : ''}`;
+}
+async function acceptBlock(key, btn) {
+  btn.disabled = true;
+  try {
+    const r = await api('POST', `/api/projects/${PID}/blocks/${key}/accept`, {name: $('#blk-' + key).value, replace: $('#blkr-' + key).checked});
+    alert(`Модуль «${r.module.name}» создан${r.replaced ? `, заменено вхождений: ${r.replaced}` : ''}`);
+  } catch (e) { alert(e.message); }
+  loadTests();
+}
+async function dismissBlock(key) {
+  try { await api('POST', `/api/projects/${PID}/blocks/${key}/dismiss`); } catch (e) { alert(e.message); }
+  loadBlocks();
+}
 document.addEventListener('click', e => $$('details.menu[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
 async function editTags(id) {
   const t = TESTS.find(x => x.id === id);
