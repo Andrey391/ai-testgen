@@ -613,7 +613,13 @@ class Job:
             if self._cancel:
                 return
         learn = None
-        if cfg["requirements"].get("learn_model") and learn_from:
+        left = review.unresolved((analyses.get(self.analysis_id) or {}).get("review") if self.analysis_id else self.review)
+        if cfg["requirements"].get("learn_model") and learn_from and left:
+            # The lifecycle of the system takes in only what the authors settled: the model learns from these
+            # requirements once every finding is fixed or marked not relevant in the Requirements tab.
+            self._log(f"Модель приложения не обновляется по требованиям: замечаний ревьюера не разобрано {len(left)} — "
+                      "исправьте их или отметьте неактуальными во вкладке «Требования»", "warn")
+        elif cfg["requirements"].get("learn_model") and learn_from:
             learn = asyncio.create_task(knowledge.extract(project, learn_from, self.user))
 
         try:
@@ -625,6 +631,8 @@ class Job:
         if learn:
             try:
                 doc = await learn
+                if self.analysis_id:
+                    analyses.mark_learned(self.project_id, self.analysis_id)
                 self._log(f"Модель приложения обновлена: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}")
             except Exception as e:
                 self._log(f"Модель приложения не обновлена: {_err(e)}", "warn")
