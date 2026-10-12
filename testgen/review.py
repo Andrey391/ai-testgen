@@ -18,9 +18,13 @@ in the pipeline from the reviewed requirements. It never changes the application
 
 A person works through the findings (items()): answers how it should be (or takes the reviewer's suggestion)
 or marks a finding as not relevant; revise() - an editor on a clean context applies the answered findings to
-the document as edits of exact fragments. The application model learns from the requirements only when every
-finding is fixed or marked not relevant (resolved()): the lifecycle of the system does not take in what the
-authors have not settled. Reviewed again, the reviewer is told what the authors decided (notes()).
+the document as edits of exact fragments. A finding either blocks test design (a question, a defect of the
+content) or is the quality of the document (its form, minor findings: worth fixing, not required). The findings
+of both checks on the same thing are grouped into themes (group()) and settled with one answer; the answers of an
+analyst pasted as one text are matched to them by a model (distribute()). The application model learns from the
+requirements only when every finding that blocks test design is fixed or marked not relevant (resolved()): the
+lifecycle of the system does not take in what the authors have not settled. Reviewed again, the reviewer is told
+what the authors decided (notes()).
 """
 from __future__ import annotations
 
@@ -150,15 +154,16 @@ async def lifecycle(project: dict, document: str, log=None, notes: str = "") -> 
 
 
 def verdict(report: dict) -> str:
-    """ready | needs_work | not_ready of the two checks together: the worse of them."""
-    order = ("ready", "needs_work", "not_ready")
+    """ready | needs_work | not_ready of the two checks together: the worse of them, by what blocks test design
+    (items()). Not ready only for a critical finding that blocks it: the form of the document (numbering, sections
+    of the standard) makes it need work at most."""
+    its = [it for it in items(report) if it["blocking"]]
+    if any(it["severity"] == "critical" for it in its):
+        return "not_ready"
     worst = (report.get("validation") or {}).get("verdict") or "ready"
-    conflicts = [c for c in (report.get("lifecycle") or {}).get("conflicts") or [] if c["kind"] != "new"]
-    if any(c["severity"] == "critical" for c in conflicts):
-        worst = "not_ready"
-    elif any(c["severity"] == "major" for c in conflicts) and worst == "ready":
+    if worst == "not_ready" or any(it["kind"] == "lifecycle" and it["severity"] == "major" for it in its):
         worst = "needs_work"
-    return worst if worst in order else "needs_work"
+    return worst if worst in ("ready", "needs_work") else "needs_work"
 
 
 def summary(report: dict) -> str:
@@ -194,6 +199,14 @@ async def review(project: dict, document: str, standard: str = "", log=None, not
            "lifecycle": None if isinstance(lc, BaseException) else lc, "errors": errors, "at": time.time()}
     out["verdict"] = verdict(out)
     say(f"Ревьюер требований: {summary(out)}")
+    try:
+        out["groups"] = await group(project, out)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:      # the findings stay one by one
+        say(f"Замечания не сведены в темы: {llm.api_error_text(e)}")
+    if out.get("groups"):
+        say(f"Замечания сведены в темы: {len(themes(out))} вместо {len(items(out))}")
     return out
 
 
@@ -207,37 +220,181 @@ def blocking(report: dict | None) -> bool:
 OPEN, TODO, FIXED, DISMISSED = "open", "todo", "fixed", "dismissed"
 
 
+# The form of the document, not its content: a test is designed without them, so they do not block it.
+DOCUMENT_FORM = ("traceable", "singular", "section")
+
+
+def _blocks(it: dict) -> bool:
+    """The finding blocks test design: a question to the authors, or a defect of the content that is not minor."""
+    if it["kind"] == "question":
+        return True
+    return it["severity"] != "minor" and it.get("criterion") not in DOCUMENT_FORM
+
+
 def items(report: dict | None) -> list[dict]:
     """The findings a person has to settle, each with a stable id within the report: defects of the document
     (d<i>), conflicts with the lifecycle (l<i>; "new" ones are not defects and are left out) and the questions
-    to the authors (vq<i>, lq<i>). With the person's decision: status, answer, note."""
+    to the authors (vq<i>, lq<i>). `blocking` - it blocks test design (_blocks), the others are the quality of
+    the document: worth fixing, not required. `theme` - the group it is in (groups, group()). With the person's
+    decision: status, answer, note."""
     if not report:
         return []
     out = []
     v, lc = report.get("validation") or {}, report.get("lifecycle") or {}
     for i, f in enumerate(v.get("findings") or []):
         out.append({"id": f"d{i}", "kind": "defect", "severity": f["severity"], "location": f["location"],
-                    "problem": f["problem"], "suggestion": f["suggestion"]})
+                    "problem": f["problem"], "suggestion": f["suggestion"], "criterion": f.get("criterion", "")})
     for i, c in enumerate(lc.get("conflicts") or []):
         if c["kind"] != "new":
             out.append({"id": f"l{i}", "kind": "lifecycle", "severity": c["severity"], "location": c["location"],
-                        "problem": c["problem"], "suggestion": c["suggestion"], "model_rule": c.get("model_rule", "")})
+                        "problem": c["problem"], "suggestion": c["suggestion"], "model_rule": c.get("model_rule", ""),
+                        "criterion": c["kind"]})
     for prefix, qs in (("vq", v.get("questions")), ("lq", lc.get("questions"))):
         for i, q in enumerate(qs or []):
             out.append({"id": f"{prefix}{i}", "kind": "question", "severity": "", "location": "", "problem": q,
-                        "suggestion": ""})
+                        "suggestion": "", "criterion": ""})
     decided = report.get("resolutions") or {}
-    return [it | {"status": OPEN, "answer": "", "note": ""} | decided.get(it["id"], {}) for it in out]
+    theme = {i: g["id"] for g in report.get("groups") or [] for i in g["ids"]}
+    return [it | {"blocking": _blocks(it), "theme": theme.get(it["id"], it["id"]), "status": OPEN, "answer": "",
+                  "note": ""} | decided.get(it["id"], {}) for it in out]
 
 
-def unresolved(report: dict | None) -> list[dict]:
-    """Findings neither fixed in the document nor marked not relevant."""
-    return [it for it in items(report) if it["status"] not in (FIXED, DISMISSED)]
+def unresolved(report: dict | None, everything: bool = False) -> list[dict]:
+    """Findings that block test design (everything - all findings) neither fixed in the document nor marked not
+    relevant."""
+    return [it for it in items(report) if (everything or it["blocking"]) and it["status"] not in (FIXED, DISMISSED)]
 
 
 def resolved(report: dict | None) -> bool:
-    """Every finding of the review is settled: the application model may learn from the requirements."""
+    """Every finding that blocks test design is settled: the application model may learn from the requirements.
+    The quality of the document (its form, minor findings) does not hold it back."""
     return not unresolved(report)
+
+
+# ---------- themes: the findings of both checks on the same thing, settled with one answer ----------
+
+GROUP_MIN = 6       # fewer findings are read one by one
+
+
+class Theme(BaseModel):
+    title: str
+    items: list[str]
+
+
+class Themes(BaseModel):
+    themes: list[Theme]
+
+
+GROUP = """Two reviewers checked a specification independently: one for defects of the document, the other against the lifecycle of the system; both asked the authors questions. They often report the same thing several times. Group the findings that are about the same thing - the same requirement, rule, field or behaviour - so that the authors answer it once.
+
+A theme has a short title (what has to be decided, a few words) and the ids of its findings. Put findings together only when one answer settles all of them; a finding unlike the others stays out of every theme. Every id is in one theme at most."""
+
+
+def _brief(it: dict) -> str:
+    kind = {"question": "question", "lifecycle": "lifecycle conflict"}.get(it["kind"], "defect")
+    return f"[{it['id']}] {kind}" + (f" ({it['location'][:160]})" if it["location"] else "") + f": {it['problem'][:400]}"
+
+
+async def group(project: dict, report: dict) -> list[dict]:
+    """The findings of the report grouped into themes by a model on a clean context: [{id: t<i>, title, ids}],
+    only the themes of two findings or more. Few findings - none."""
+    its = items(report)
+    if len(its) < GROUP_MIN:
+        return []
+    reply = await llm.parse(project["pipeline"]["requirements"], system=GROUP + projects.language_rule(project),
+                            messages=[{"role": "user", "content": "The findings:\n" + "\n".join(map(_brief, its))}],
+                            schema=Themes, max_tokens=8000, project_id=project["id"], stage_name="requirements")
+    if reply.parsed is None:
+        return []
+    known, seen, out = {it["id"] for it in its}, set(), []
+    for t in reply.parsed.themes:
+        ids = [i for i in dict.fromkeys(t.items) if i in known and i not in seen]
+        if len(ids) < 2:
+            continue
+        seen |= set(ids)
+        out.append({"id": f"t{len(out)}", "title": t.title.strip()[:200], "ids": ids})
+    return out
+
+
+SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2, "": 3}
+
+
+def themes(report: dict | None) -> list[dict]:
+    """What a person settles: a theme of findings (groups) or a finding of its own, in the order of the findings.
+    With what it takes from its findings: blocking (any), the worst severity, question (one of them asks the
+    authors: it needs an answer) and the decision - open while any is open, todo while any waits for the editor,
+    dismissed when all are not relevant, otherwise fixed."""
+    its = items(report)
+    titles = {g["id"]: g["title"] for g in (report or {}).get("groups") or []}
+    order, members = [], {}
+    for it in its:
+        if it["theme"] not in members:
+            order.append(it["theme"])
+        members.setdefault(it["theme"], []).append(it)
+    out = []
+    for tid in order:
+        ms = members[tid]
+        sts = {m["status"] for m in ms}
+        status = OPEN if OPEN in sts else TODO if TODO in sts else DISMISSED if sts == {DISMISSED} else FIXED
+        first = next((m for m in ms if m["answer"] or m["note"]), ms[0])
+        out.append({"id": tid, "title": titles.get(tid, ""), "ids": [m["id"] for m in ms],
+                    "blocking": any(m["blocking"] for m in ms),
+                    "severity": min((m["severity"] for m in ms), key=lambda s: SEVERITY_ORDER.get(s, 3)),
+                    "question": any(m["kind"] == "question" for m in ms), "status": status,
+                    "answer": first["answer"], "note": first["note"],
+                    "error": next((m["error"] for m in ms if m.get("error")), "")})
+    return out
+
+
+def public(report: dict | None) -> dict | None:
+    """The report as the studio shows it: with its findings (items) and what a person settles (themes)."""
+    if not report:
+        return report
+    return report | {"items": items(report), "themes": themes(report)}
+
+
+# ---------- the answers of an analyst, pasted as one text ----------
+
+class Answer(BaseModel):
+    id: str
+    answer: str              # how it should be ("" - when not relevant)
+    not_relevant: bool
+    note: str                # why it is not relevant
+
+
+class Answers(BaseModel):
+    answers: list[Answer]
+
+
+DISTRIBUTE = """The authors of a specification answered the reviewer's findings in one text: a list, a letter, notes in any order. Match each answer to its finding by the id in square brackets, by the number of the list or by what it is about, and give it as said - do not invent answers. A finding the text says is not relevant, not needed or out of scope: not_relevant, `note` - why. A finding the text does not answer is left out."""
+
+
+async def distribute(project: dict, report: dict, text: str) -> list[dict]:
+    """The answers in `text` matched to the unsettled themes (themes()): [{id, answer, not_relevant, note}]."""
+    left = [t for t in themes(report) if t["status"] in (OPEN, TODO)]
+    if not left:
+        raise ValueError("Все замечания уже разобраны")
+    by = {it["id"]: it for it in items(report)}
+    lines = []
+    for n, t in enumerate(left, 1):
+        lines.append(f"{n}. [{t['id']}] {t['title'] or by[t['ids'][0]]['problem'][:300]}"
+                     + "".join(f"\n   - {by[i]['problem'][:300]}" for i in t["ids"] if t["title"] or i != t["ids"][0]))
+    reply = await llm.parse(project["pipeline"]["requirements"], system=DISTRIBUTE + projects.language_rule(project),
+                            context="The findings:\n" + "\n".join(lines),
+                            messages=[{"role": "user", "content": f"The answers of the authors:\n{text[:60_000]}"}],
+                            schema=Answers, max_tokens=8000, project_id=project["id"], stage_name="requirements")
+    if reply.parsed is None:
+        raise RuntimeError("Модель не смогла разобрать ответы")
+    known, out = {t["id"] for t in left}, {}
+    for a in reply.parsed.answers:
+        if a.id in known and (a.not_relevant or a.answer.strip()):
+            out[a.id] = a.model_dump()
+    return list(out.values())
+
+
+def unsettled_ids(report: dict, theme_id: str) -> list[str]:
+    """The findings of a theme still to settle (open or waiting for the editor)."""
+    return [it["id"] for it in items(report) if it["theme"] == theme_id and it["status"] in (OPEN, TODO)]
 
 
 def decide(report: dict, ids: list[str], status: str, answer: str | None = None, note: str | None = None,
@@ -317,39 +474,55 @@ def _locate(document: str, fragment: str) -> tuple[int, int] | None:
     return (m.start(), m.end()) if m else None
 
 
-def _revise_task(todo: list[dict]) -> str:
+def _finding(it: dict, pad: str) -> str:
+    line = ""
+    if it.get("location"):
+        line += f"\n{pad}where: {it['location']}"
+    if it.get("model_rule"):
+        line += f"\n{pad}the lifecycle of the system says: {it['model_rule']}"
+    if it.get("suggestion"):
+        line += f"\n{pad}the reviewer suggests: {it['suggestion']}"
+    return line
+
+
+def _revise_task(units: list[tuple[str, list[dict]]], titles: dict | None = None) -> str:
+    """units - (id, findings): a finding of its own, or a theme of findings settled by one answer."""
     out = []
-    for it in todo:
-        line = f"[{it['id']}] {it['problem']}"
-        if it.get("location"):
-            line += f"\n  where: {it['location']}"
-        if it.get("model_rule"):
-            line += f"\n  the lifecycle of the system says: {it['model_rule']}"
-        if it.get("suggestion"):
-            line += f"\n  the reviewer suggests: {it['suggestion']}"
-        line += f"\n  the answer of the authors: {it['answer'] or 'none - apply the suggestion'}"
+    for uid, ms in units:
+        if len(ms) == 1:
+            line = f"[{uid}] {ms[0]['problem']}" + _finding(ms[0], "  ")
+        else:
+            line = f"[{uid}] {(titles or {}).get(uid) or 'findings on the same thing'} - settle them together:" + "".join(
+                f"\n  - {m['problem']}" + _finding(m, "    ") for m in ms)
+        answer = next((m["answer"] for m in ms if m["answer"]), "")
+        line += f"\n  the answer of the authors: {answer or 'none - apply the suggestion'}"
         out.append(line)
     return "Apply these findings to the document:\n\n" + "\n\n".join(out)
 
 
 async def revise(project: dict, document: str, report: dict) -> dict:
     """The findings a person sent to be fixed (status todo) applied to the document by an editor on a clean
-    context. {requirements: the new text, fixed: [ids], failed: {id: why}, edits: [{item, find, replace}],
-    summary}."""
+    context; the findings of a theme are given and fixed together. {requirements: the new text, fixed: [ids],
+    failed: {id: why}, edits: [{item, find, replace}], summary}."""
     todo = [it for it in items(report) if it["status"] == TODO]
     if not todo:
         raise ValueError("Нет замечаний для исправления: ответьте на замечания или примите предложения ревьюера")
+    units: dict[str, list[dict]] = {}
+    for it in todo:
+        units.setdefault(it["theme"], []).append(it)
+    titles = {g["id"]: g["title"] for g in report.get("groups") or []}
     cfg = project["pipeline"]["requirements"]
     system = REVISE + projects.language_rule(project)
-    doc, edits, summaries, failed, pending = document, [], [], {}, todo
+    doc, edits, summaries, failed, pending = document, [], [], {}, list(units)
     for _ in range(ATTEMPTS):
         reply = await llm.parse(cfg, system=system, context=f"The document:\n{doc[:150_000]}",
-                                messages=[{"role": "user", "content": _revise_task(pending)}], schema=Revision,
-                                max_tokens=16000, project_id=project["id"], stage_name="requirements")
+                                messages=[{"role": "user", "content": _revise_task([(u, units[u]) for u in pending],
+                                                                                   titles)}],
+                                schema=Revision, max_tokens=16000, project_id=project["id"], stage_name="requirements")
         if reply.parsed is None:
             raise RuntimeError("Модель не смогла исправить документ")
         summaries.append(reply.parsed.summary.strip())
-        asked, done = {it["id"] for it in pending}, set()
+        asked, done = set(pending), set()
         for e in reply.parsed.edits:
             if e.item not in asked:
                 continue
@@ -360,13 +533,14 @@ async def revise(project: dict, document: str, report: dict) -> dict:
             doc = doc[:at[0]] + e.replace + doc[at[1]:]
             edits.append(e.model_dump())
             done.add(e.item)
-        for i in asked:
-            if i in done:
-                failed.pop(i, None)
+        for u in asked:
+            if u in done:
+                failed.pop(u, None)
             else:
-                failed.setdefault(i, "агент не предложил правку")
-        pending = [it for it in pending if it["id"] in failed]
+                failed.setdefault(u, "агент не предложил правку")
+        pending = [u for u in pending if u in failed]
         if not pending:
             break
-    return {"requirements": doc, "fixed": [it["id"] for it in todo if it["id"] not in failed], "failed": failed,
+    return {"requirements": doc, "fixed": [it["id"] for it in todo if it["theme"] not in failed],
+            "failed": {m["id"]: why for u, why in failed.items() for m in units[u]},
             "edits": edits, "summary": " ".join(s for s in summaries if s)}

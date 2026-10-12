@@ -207,3 +207,110 @@ def test_the_pipeline_does_not_teach_the_model_unsettled_requirements(monkeypatc
     assert job.status == "done", job.error
     assert learned == [] and not analyses.get(job.analysis_id).get("learned")
     assert any("замечаний ревьюера не разобрано 3" in e["text"] for e in job.log)
+
+
+def _many() -> dict:
+    """A report with what blocks test design and what is the form of the document."""
+    v = _findings().model_dump()
+    v["findings"] += [
+        {"criterion": "traceable", "severity": "critical", "location": "весь документ", "problem": "Нет номеров",
+         "suggestion": "пронумеровать"},
+        {"criterion": "complete", "severity": "minor", "location": "п. 1", "problem": "Нет примера", "suggestion": ""},
+        {"criterion": "complete", "severity": "major", "location": "п. 2", "problem": "Не сказано, кто правит заказ",
+         "suggestion": "назвать роль"}]
+    return {"validation": v, "lifecycle": {"summary": "", "conflicts": [CONFLICT], "questions": ["Кто правит заказ?"]}}
+
+
+def test_only_what_blocks_test_design_holds_the_model_back():
+    report = _many()
+    its = {x["id"]: x["blocking"] for x in review.items(report)}
+    assert its == {"d0": True, "d1": False, "d2": False, "d3": True, "l0": True, "vq0": True, "lq0": True}
+    assert review.verdict(report) == "not_ready"         # the critical conflict with the lifecycle
+    review.decide(report, ["d0", "d3", "l0", "vq0", "lq0"], "dismissed")
+    assert review.resolved(report) and len(review.unresolved(report, everything=True)) == 2
+    report["lifecycle"]["conflicts"] = []
+    report["validation"]["findings"] = report["validation"]["findings"][1:3]     # numbering and a minor one
+    report["validation"]["questions"], report["lifecycle"]["questions"] = [], []
+    report["validation"]["verdict"] = "not_ready"
+    assert review.verdict(report) == "needs_work"        # the form of the document does not make it not ready
+
+
+def test_a_theme_is_answered_once_and_fixed_together(fake_llm):
+    p = _project("Темы")
+    report = _many()
+    report["groups"] = [{"id": "t0", "title": "Кто правит заказ", "ids": ["d3", "l0", "lq0"]}]
+    ts = review.themes(report)
+    assert [t["id"] for t in ts] == ["d0", "d1", "d2", "t0", "vq0"]
+    t0 = ts[3]
+    assert t0["ids"] == ["d3", "l0", "lq0"] and t0["blocking"] and t0["question"] and t0["severity"] == "critical"
+    review.decide(report, t0["ids"], "todo", "Правит только менеджер до отправки")
+    assert review.themes(report)[3]["status"] == "todo"
+    asked = []
+
+    def script(kind, kw):
+        asked.append(kw["messages"][0]["content"])
+        return Resp(parsed=review.Revision(summary="Роль названа", edits=[
+            review.Edit(item="t0", find="2. Менеджер редактирует отправленный заказ.",
+                        replace="2. Менеджер редактирует заказ до отправки.")]))
+    fake_llm.script = script
+    out = arun(review.revise(p, SPEC, report))
+    assert out["fixed"] == ["d3", "l0", "lq0"] and out["failed"] == {}
+    assert "[t0] Кто правит заказ - settle them together" in asked[0] and asked[0].count("the answer of the authors") == 1
+    review.fixed(report, out["fixed"])
+    assert review.themes(report)[3]["status"] == "fixed"
+
+
+def test_the_answers_of_an_analyst_are_matched_to_the_findings(monkeypatch, fake_llm):
+    import server
+    monkeypatch.setattr(auth, "ENABLED", False)
+    p = _project("Ответы")
+    a = analyses.create(p["id"], SPEC, "", "ann")
+    report = _many()
+    report["groups"] = [{"id": "t0", "title": "Кто правит заказ", "ids": ["d3", "l0", "lq0"]}]
+    analyses.set_review(p["id"], a["id"], report)
+    analyses.finish(p["id"], a["id"])
+    seen = []
+
+    def script(kind, kw):
+        seen.append(kw)
+        return Resp(parsed=review.Answers(answers=[
+            review.Answer(id="t0", answer="Только менеджер, до отправки", not_relevant=False, note=""),
+            review.Answer(id="vq0", answer="", not_relevant=True, note="заказ не отменяют"),
+            review.Answer(id="zz", answer="чужое", not_relevant=False, note="")]))
+    fake_llm.script = script
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    r = client.post(f"/api/analyses/{a['id']}/review/answers", json={"text": "1. Только менеджер\n2. не актуально"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["answered"] == 1 and body["dismissed"] == 1
+    assert "[t0] Кто правит заказ" in str(seen[0])
+    st = {t["id"]: (t["status"], t["answer"], t["note"]) for t in body["analysis"]["review"]["themes"]}
+    assert st["t0"] == ("todo", "Только менеджер, до отправки", "") and st["vq0"] == ("dismissed", "", "заказ не отменяют")
+    res = analyses.get(a["id"])["review"]["resolutions"]
+    assert {i: res[i]["status"] for i in res} == {"d3": "todo", "l0": "todo", "lq0": "todo", "vq0": "dismissed"}
+
+
+def test_the_same_requirements_checked_again_update_their_analysis(monkeypatch, fake_llm):
+    import server
+    monkeypatch.setattr(auth, "ENABLED", False)
+    fake_llm.script = _review_script
+    p = _project("Повтор")
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    for text in (SPEC, "  " + SPEC.replace("\n", "\n\n") + "\n"):
+        with client.stream("POST", "/api/requirements/review", json={"project_id": p["id"], "requirements": text}) as r:
+            lines = list(r.iter_lines())
+    assert len(analyses.list_analyses(p["id"])) == 1
+    assert any("уже проверялись" in x for x in lines)
+
+
+def test_a_standard_not_meant_for_the_document_does_not_make_defects(fake_llm):
+    p = _project("Стандарт")
+    fake_llm.script = lambda kind, kw: Resp(parsed=validation.Validation(
+        summary="ТЗ модуля", document_kind="техническое ТЗ модуля", standard_fits=False, suggested_standard="iso29148",
+        score=40, verdict="not_ready", sections=[],
+        findings=[validation.Finding(criterion="section", severity="critical", location="—", problem="Нет DoD",
+                                     suggestion=""),
+                  validation.Finding(criterion="verifiable", severity="major", location="п. 1",
+                                     problem="Нет лимита", suggestion="")], questions=[]))
+    v = arun(validation.validate(p, SPEC, "agile"))
+    assert [f["problem"] for f in v["findings"]] == ["Нет лимита"] and v["suggested_standard"] == "iso29148"

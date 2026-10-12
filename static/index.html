@@ -3220,7 +3220,7 @@ function renderAnalysis() {
   if (!body) return;
   const busy = AN.status === 'running' || !!REQ_ABORT;
   const rv = AN.review, revs = AN.revisions || [];
-  const unsettled = rv ? reviewItems(rv).filter(x => x.status === 'open' || x.status === 'todo').length : 0;
+  const unsettled = rv?.items ? rv.items.filter(x => x.blocking && (x.status === 'open' || x.status === 'todo')).length : 0;
   body.innerHTML = `
     <details class="opt"><summary>Требования${AN.url ? ` · ${esc(AN.url)}` : ''}${revs.length ? ` · исправлены агентом: ${revs.length}` : ''}</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
       ${revs.length ? `<details class="opt"><summary>Последнее исправление — ${fmtTime(revs[revs.length - 1].at)}${revs[revs.length - 1].by ? `, ${esc(revs[revs.length - 1].by)}` : ''}</summary>
@@ -3233,7 +3233,7 @@ function renderAnalysis() {
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
     <div class="row" style="margin-top:8px"><span class="grow"></span>
       <button class="btn small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''} title="Проверить требования этого анализа ревьюером заново: дефекты ТЗ и соответствие жизненному циклу системы">${rv ? 'Проверить заново' : 'Проверить требования'}</button>
-      <button class="btn small" onclick="learnFromAnalysis(this)" ${unsettled ? 'disabled' : ''} title="${unsettled ? `Сначала разберите замечания ревьюера (осталось ${unsettled}): модель приложения учится только на согласованных требованиях` : 'Дополнить модель приложения (сущности, зависимости, жизненный цикл, роли) требованиями этого анализа'}">В модель приложения</button>
+      <button class="btn small" onclick="learnFromAnalysis(this)" ${unsettled ? 'disabled' : ''} title="${unsettled ? `Сначала разберите замечания ревьюера, блокирующие тест-дизайн (осталось ${unsettled}): модель приложения учится только на согласованных требованиях` : 'Дополнить модель приложения (сущности, зависимости, жизненный цикл, роли) требованиями этого анализа'}">В модель приложения</button>
       <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''}>Удалить анализ</button>
       <button class="btn primary" onclick="toPipeline()" ${busy || !rv ? 'disabled' : ''} title="${rv ? 'Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты' : 'Сначала проверьте требования'}">Генерировать тест-кейсы в конвейере →</button></div>
     ${AN.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${AN.assumptions.map(esc).join('; ')}</div>` : ''}
@@ -3243,6 +3243,7 @@ function renderAnalysis() {
       <table class="scen-list" style="margin-top:8px"><thead><tr><th>#</th><th>Сценарий и тесты по нему</th><th>Тип</th><th>Приоритет</th><th></th></tr></thead>
         <tbody id="scenList"></tbody></table></div>`;
   $('#anDelete').onclick = deleteAnalysis;
+  applyFindFilter();
   renderScenarios();
 }
 // ---- what to design in this generation: layers, kinds of checks, techniques (defaults: Проект → Сценарии)
@@ -3276,106 +3277,156 @@ function readDesign(prefix) {
 const VERDICTS = {ready: 'готово к тест-дизайну', needs_work: 'нужна доработка', not_ready: 'не готово'};
 const SEVERITY = {critical: ['критично', 'bad'], major: ['существенно', 'warn'], minor: ['незначительно', 'off']};
 const SECTION = {present: ['есть', 'ok'], partial: ['частично', 'warn'], missing: ['нет', 'bad']};
-function validationHtml(v, ctl) {      // ctl(id, question) - what a person decides on the finding
-  const q = PROJ.catalog.quality;
+const criterionLabel = c => PROJ.catalog.quality[c] || (c === 'checklist' ? 'правила команды' : c === 'section' ? 'структура' : c);
+function findingCard(f) {     // a defect of the document or a conflict with the lifecycle, as the reviewer gave it
+  return `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
+      <div><span class="badge ${SEVERITY[f.severity]?.[1] || ''}">${esc(SEVERITY[f.severity]?.[0] || f.severity)}</span>
+        <span class="badge">${esc(f.kind && CONFLICT_KIND[f.kind] ? CONFLICT_KIND[f.kind] : criterionLabel(f.criterion))}</span>
+        <span class="muted" style="font-size:12px">${esc(f.location)}</span></div>
+      <div style="margin-top:4px">${esc(f.problem)}</div>
+      ${f.model_rule ? `<div class="hint" style="margin:2px 0 0">По модели: ${esc(f.model_rule)}</div>` : ''}
+      ${f.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(f.suggestion)}</div>` : ''}</div>`;
+}
+// brief - the findings and questions are listed as themes (reviewHtml): only the score and the sections here
+function validationHtml(v, brief) {
   const color = v.score >= 80 ? 'var(--ok)' : v.score >= 50 ? 'var(--warn)' : 'var(--bad)';
   return `<div class="row" style="margin-top:6px"><b class="grow">${esc(v.standard_title || '')}</b>
       <span class="badge" style="background:${color};color:#fff">${v.score}/100</span> <span class="badge">${esc(VERDICTS[v.verdict] || v.verdict)}</span></div>
     <div class="bar"><span style="width:${v.score}%;background:${color}"></span></div>
+    ${v.document_kind ? `<div class="hint" style="margin:4px 0 0">Документ: ${esc(v.document_kind)}</div>` : ''}
     <div style="margin-top:6px">${esc(v.summary)}</div>
-    <details class="opt" open><summary>Разделы по стандарту (${v.sections.filter(x => x.status === 'present').length} из ${v.sections.length})</summary>
+    <details class="opt" ${brief ? '' : 'open'}><summary>Разделы по стандарту (${v.sections.filter(x => x.status === 'present').length} из ${v.sections.length})</summary>
       <table data-nopage><tbody>${v.sections.map(x => `<tr><td>${esc(x.section)}</td><td><span class="badge ${SECTION[x.status]?.[1] || ''}">${esc(SECTION[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.comment)}</td></tr>`).join('')}</tbody></table></details>
-    <details class="opt" open><summary>Замечания (${v.findings.length})</summary>
-      ${v.findings.map((f, i) => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
-        <div><span class="badge ${SEVERITY[f.severity]?.[1] || ''}">${esc(SEVERITY[f.severity]?.[0] || f.severity)}</span>
-          <span class="badge">${esc(q[f.criterion] || (f.criterion === 'checklist' ? 'правила команды' : f.criterion === 'section' ? 'структура' : f.criterion))}</span>
-          <span class="muted" style="font-size:12px">${esc(f.location)}</span></div>
-        <div style="margin-top:4px">${esc(f.problem)}</div>
-        ${f.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(f.suggestion)}</div>` : ''}${ctl ? ctl('d' + i) : ''}</div>`).join('') || '<div class="hint">Замечаний нет.</div>'}</details>
-    ${v.questions?.length ? `<details class="opt" open><summary>Вопросы авторам (${v.questions.length})</summary><ol style="margin:4px 0">${v.questions.map((x, i) => `<li>${esc(x)}${ctl ? ctl('vq' + i, true) : ''}</li>`).join('')}</ol></details>` : ''}`;
+    ${brief ? '' : `<details class="opt" open><summary>Замечания (${v.findings.length})</summary>
+      ${v.findings.map(f => findingCard(f)).join('') || '<div class="hint">Замечаний нет.</div>'}</details>
+    ${v.questions?.length ? `<details class="opt" open><summary>Вопросы авторам (${v.questions.length})</summary><ol style="margin:4px 0">${v.questions.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>` : ''}`}`;
 }
 // ---- the reviewer's report: defects of the document and conflicts with the lifecycle of the system
 const CONFLICT_KIND = {contradiction: 'противоречит жизненному циклу', role: 'роли', gap: 'пробел в жизненном цикле', new: 'новое для модели'};
 const MODEL_STATE = {confirmed: 'подтверждена', changed: 'изменилась после подтверждения', none: 'не подтверждена'};
-function lifecycleHtml(lc, ctl) {
-  const all = lc.conflicts.map((c, i) => [c, i]);
-  const bad = all.filter(([c]) => c.kind !== 'new'), fresh = all.filter(([c]) => c.kind === 'new');
+function lifecycleHtml(lc, brief) {
+  const bad = lc.conflicts.filter(c => c.kind !== 'new'), fresh = lc.conflicts.filter(c => c.kind === 'new');
   const m = lc.model || {};
-  const card = ([c, i]) => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
-      <div><span class="badge ${SEVERITY[c.severity]?.[1] || ''}">${esc(SEVERITY[c.severity]?.[0] || c.severity)}</span>
-        <span class="badge">${esc(CONFLICT_KIND[c.kind] || c.kind)}</span>
-        <span class="muted" style="font-size:12px">${esc(c.location)}</span></div>
-      <div style="margin-top:4px">${esc(c.problem)}</div>
-      ${c.model_rule ? `<div class="hint" style="margin:2px 0 0">По модели: ${esc(c.model_rule)}</div>` : ''}
-      ${c.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(c.suggestion)}</div>` : ''}${ctl && c.kind !== 'new' ? ctl('l' + i) : ''}</div>`;
   return `<div class="hint" style="margin-top:6px">Модель приложения: ${m.entities || m.roles ? `сущностей ${m.entities}, ролей ${m.roles} — ${esc(MODEL_STATE[m.state] || m.state || '')}` : 'пуста — проверен жизненный цикл, который описывает сам документ'}
       · <a href="#" onclick="openSettings('data', 'overview');return false">открыть</a></div>
     <div style="margin-top:6px">${esc(lc.summary)}</div>
-    <details class="opt" open><summary>Расхождения с жизненным циклом (${bad.length})</summary>${bad.map(card).join('') || '<div class="hint">Расхождений нет.</div>'}</details>
-    ${fresh.length ? `<details class="opt"><summary>Новое для модели приложения (${fresh.length})</summary>${fresh.map(card).join('')}</details>` : ''}
-    ${lc.questions?.length ? `<details class="opt" open><summary>Вопросы о жизненном цикле (${lc.questions.length})</summary><ol style="margin:4px 0">${lc.questions.map((x, i) => `<li>${esc(x)}${ctl ? ctl('lq' + i, true) : ''}</li>`).join('')}</ol></details>` : ''}`;
+    ${brief ? '' : `<details class="opt" open><summary>Расхождения с жизненным циклом (${bad.length})</summary>${bad.map(c => findingCard(c)).join('') || '<div class="hint">Расхождений нет.</div>'}</details>`}
+    ${fresh.length ? `<details class="opt"><summary>Новое для модели приложения (${fresh.length})</summary>${fresh.map(c => findingCard(c)).join('')}</details>` : ''}
+    ${!brief && lc.questions?.length ? `<details class="opt" open><summary>Вопросы о жизненном цикле (${lc.questions.length})</summary><ol style="margin:4px 0">${lc.questions.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>` : ''}`;
 }
-// The findings a person settles, with the ids the server gives them (review.items): defects d<i>, conflicts with
-// the lifecycle l<i> (not the "new" ones), questions vq<i> and lq<i>.
-function reviewItems(rv) {
-  const v = rv.validation || {}, lc = rv.lifecycle || {}, res = rv.resolutions || {};
-  const ids = [...(v.findings || []).map((_, i) => ['d' + i, false]),
-    ...(lc.conflicts || []).map((c, i) => c.kind === 'new' ? null : ['l' + i, false]).filter(Boolean),
-    ...(v.questions || []).map((_, i) => ['vq' + i, true]), ...(lc.questions || []).map((_, i) => ['lq' + i, true])];
-  return ids.map(([id, question]) => ({id, question, ...{status: 'open', answer: '', note: ''}, ...(res[id] || {})}));
-}
+// ---- what a person settles: themes (review.themes) - the findings of both checks on the same thing, one answer
+// for all of them, or a finding of its own. Blocking ones hold back test design and the application model; the
+// others are the quality of the document (its form, minor findings): worth fixing, not required.
 const FINDING_STATE = {open: ['не разобрано', 'warn'], todo: ['ждёт исправления агентом', 'off'], fixed: ['исправлено в ТЗ', 'ok'], dismissed: ['не актуально', 'off']};
-let FIX_MSG = '';       // what the last fix or decision did, under the progress of the findings
-function findingCtl(rv, id, question) {
-  const r = (rv.resolutions || {})[id] || {}, st = r.status || 'open', [label, cls] = FINDING_STATE[st] || [st, 'off'];
-  const busy = !!REQ_ABORT || AN?.status === 'running';
+let FIX_MSG = '';               // what the last fix or decision did, under the progress of the findings
+let FIND_SHOW = 'blocking', FIND_LEFT = true;     // the filter of the list: blocking | quality | all; only unsettled
+const themeLeft = t => t.status === 'open' || t.status === 'todo';
+const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running';
+function themeItem(it, many) {
+  const tag = it.kind === 'question' ? '<span class="badge">вопрос авторам</span>'
+    : `<span class="badge ${SEVERITY[it.severity]?.[1] || ''}">${esc(SEVERITY[it.severity]?.[0] || it.severity)}</span>
+       <span class="badge">${esc(it.kind === 'lifecycle' ? CONFLICT_KIND[it.criterion] || 'жизненный цикл' : criterionLabel(it.criterion))}</span>`;
+  return `<div style="${many ? 'border-left:3px solid var(--line);padding-left:8px;' : ''}margin-top:6px">
+      <div>${tag} <span class="muted" style="font-size:12px">${esc(it.location)}</span></div>
+      <div style="margin-top:2px">${esc(it.problem)}</div>
+      ${it.model_rule ? `<div class="hint" style="margin:2px 0 0">По модели: ${esc(it.model_rule)}</div>` : ''}
+      ${it.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(it.suggestion)}</div>` : ''}</div>`;
+}
+function themeCtl(t) {
+  const busy = reviewBusy(), [label, cls] = FINDING_STATE[t.status] || [t.status, 'off'];
   const badge = `<span class="badge ${cls}">${esc(label)}</span>`;
-  if (st === 'fixed' || st === 'dismissed')
+  if (!themeLeft(t))
     return `<div class="row" style="margin-top:6px;gap:6px">${badge}
-      <span class="hint grow" style="margin:0">${r.answer ? `Ответ: ${esc(r.answer)}` : st === 'fixed' ? 'По предложению ревьюера' : ''}${r.note ? `Почему: ${esc(r.note)}` : ''}</span>
-      <button class="btn small" onclick="decideFinding('${id}', 'open')" ${busy ? 'disabled' : ''} title="Снова считать замечание неразобранным">Вернуть</button></div>`;
+      <span class="hint grow" style="margin:0">${t.answer ? `Ответ: ${esc(t.answer)}` : t.status === 'fixed' ? 'По предложению ревьюера' : ''}${t.note ? `Почему: ${esc(t.note)}` : ''}</span>
+      <button class="btn small" onclick="decideTheme('${t.id}', 'open')" ${busy ? 'disabled' : ''} title="Снова считать неразобранным">Вернуть</button></div>`;
   return `<div style="margin-top:6px">
-    <div class="row" style="gap:6px">${badge}${r.error ? `<span class="err" style="margin:0">Агент не исправил: ${esc(r.error)} — уточните ответ</span>` : ''}</div>
-    <textarea id="fd-${id}" rows="2" style="width:100%;margin-top:4px" placeholder="${question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(r.answer || '')}</textarea>
+    <div class="row" style="gap:6px">${badge}${t.error ? `<span class="err" style="margin:0">Агент не исправил: ${esc(t.error)} — уточните ответ</span>` : ''}</div>
+    <textarea id="fd-${t.id}" rows="2" style="width:100%;margin-top:4px" placeholder="${t.question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(t.answer || '')}</textarea>
     <div class="row" style="gap:6px;margin-top:4px"><span class="grow"></span>
-      <button class="btn small" onclick="decideFinding('${id}', 'todo')" ${busy ? 'disabled' : ''} title="Агент исправит ТЗ по ответу при «Исправить ТЗ агентом»">${st === 'todo' ? 'Сохранить ответ' : question ? 'Ответить' : 'Исправить так'}</button>
-      <button class="btn small" onclick="decideFinding('${id}', 'dismissed')" ${busy ? 'disabled' : ''} title="Замечание не актуально: ТЗ не меняется, при повторной проверке ревьюер его не повторит">Не актуально</button></div></div>`;
+      <button class="btn small" onclick="decideTheme('${t.id}', 'todo')" ${busy ? 'disabled' : ''} title="Агент исправит ТЗ по ответу при «Исправить ТЗ агентом»">${t.status === 'todo' ? 'Сохранить ответ' : 'Ответить'}</button>
+      <button class="btn small" onclick="$('#fdis-${t.id}').classList.toggle('hidden');$('#fdn-${t.id}').focus()" ${busy ? 'disabled' : ''} title="ТЗ не меняется, при повторной проверке ревьюер это не повторит">Не актуально</button></div>
+    <div class="row hidden" id="fdis-${t.id}" style="gap:6px;margin-top:4px">
+      <input id="fdn-${t.id}" class="grow" placeholder="Почему не актуально (необязательно) — ревьюер учтёт при повторной проверке" onkeydown="if (event.key === 'Enter') decideTheme('${t.id}', 'dismissed')">
+      <button class="btn small" onclick="decideTheme('${t.id}', 'dismissed')">Отметить неактуальным</button></div></div>`;
+}
+function themeCard(rv, t, editable) {
+  const by = Object.fromEntries(rv.items.map(x => [x.id, x])), ms = t.ids.map(i => by[i]).filter(Boolean);
+  const many = ms.length > 1;
+  const quality = t.blocking ? '' : '<span class="badge off" title="Не мешает тест-дизайну и обновлению модели приложения: исправлять не обязательно">качество документа</span>';
+  const head = many ? `<div class="row" style="gap:6px"><b class="grow">${esc(t.title || 'Об одном и том же')}</b>
+      ${t.severity ? `<span class="badge ${SEVERITY[t.severity]?.[1] || ''}">${esc(SEVERITY[t.severity]?.[0] || t.severity)}</span>` : ''}
+      <span class="badge" title="Замечания обеих проверок об одном и том же: один ответ на все">замечаний: ${ms.length}</span>${quality}</div>`
+    : quality ? `<div class="row">${quality}</div>` : '';
+  return `<div class="card" data-theme="${t.id}" data-blocking="${t.blocking ? 1 : 0}" data-left="${themeLeft(t) ? 1 : 0}" style="margin-top:6px;background:var(--bg);padding:8px">
+    ${head}${ms.map(it => themeItem(it, many)).join('')}${editable ? themeCtl(t) : ''}</div>`;
+}
+function applyFindFilter() {
+  const cards = $$('#findList [data-theme]');
+  let shown = 0;
+  cards.forEach(c => {
+    const on = (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === (c.dataset.blocking === '1')) && (!FIND_LEFT || c.dataset.left === '1');
+    c.classList.toggle('hidden', !on); shown += on;
+  });
+  $('#findEmpty')?.classList.toggle('hidden', !!shown || !cards.length);
 }
 function reviewHtml(rv, editable) {
   const [vt, vcls] = REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'];
-  const errors = Object.entries(rv.errors || {});
-  const its = reviewItems(rv), left = its.filter(x => x.status === 'open' || x.status === 'todo'), todo = its.filter(x => x.status === 'todo');
-  const accept = its.filter(x => x.status === 'open' && !x.question);
-  const ctl = editable ? (id, q) => findingCtl(rv, id, q) : null;
-  const busy = !!REQ_ABORT || AN?.status === 'running';
-  const progress = editable && its.length ? `<div class="card" style="margin-top:8px;padding:8px">
-      <div class="row" style="gap:6px"><b class="grow">Замечания: разобрано ${its.length - left.length} из ${its.length}</b>
-        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${busy ? 'disabled' : ''} title="Исправить все неразобранные замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
-        <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
-      <div class="hint" style="margin:4px 0 0">${left.length
-        ? 'Ответьте, как должно быть, — агент исправит ТЗ; или отметьте замечание неактуальным. Модель приложения (жизненный цикл) обновится по ТЗ, только когда все замечания будут исправлены или отмечены неактуальными.'
-        : AN?.learned ? 'Все замечания разобраны, модель приложения обновлена по согласованным требованиям. Проверьте исправленное ТЗ заново, если нужно.'
-        : 'Все замечания разобраны. Проверьте исправленное ТЗ заново, если нужно.'}</div>
-      ${FIX_MSG ? `<div class="hint" style="margin:4px 0 0">${esc(FIX_MSG)}</div>` : ''}</div>` : '';
-  return `<div class="row" style="margin-top:8px"><b class="grow">Отчёт ревьюера${rv.at ? ` <span class="muted" style="font-weight:400;font-size:12px">— ${fmtTime(rv.at)}</span>` : ''}</b>
+  const errors = Object.entries(rv.errors || {}), v = rv.validation, busy = reviewBusy();
+  const head = `<div class="row" style="margin-top:8px"><b class="grow">Отчёт ревьюера${rv.at ? ` <span class="muted" style="font-weight:400;font-size:12px">— ${fmtTime(rv.at)}</span>` : ''}</b>
       <span class="badge ${vcls}">${esc(vt)}</span></div>
-    ${rv.verdict === 'not_ready' && left.length ? `<div class="hint" style="color:var(--bad)">Есть критичные замечания: ${editable ? 'разберите их ниже' : 'исправьте ТЗ'} и проверьте заново — или генерируйте тест-кейсы, понимая риск.</div>` : ''}
-    ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(e)}</div>`).join('')}
-    ${progress}
-    ${rv.validation ? `<details class="opt" open><summary><b>Дефекты ТЗ</b> — ${rv.validation.score}/100, замечаний ${rv.validation.findings.length}</summary>${validationHtml(rv.validation, ctl)}</details>` : ''}
-    ${rv.lifecycle ? `<details class="opt" open><summary><b>Соответствие жизненному циклу системы</b> — расхождений ${rv.lifecycle.conflicts.filter(c => c.kind !== 'new').length}</summary>${lifecycleHtml(rv.lifecycle, ctl)}</details>` : ''}`;
+    ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(e)}</div>`).join('')}`;
+  if (!rv.themes)       // a report kept elsewhere (a run of the pipeline): as the reviewer gave it
+    return head + (v ? `<details class="opt" open><summary><b>Дефекты ТЗ</b> — ${v.score}/100, замечаний ${v.findings.length}</summary>${validationHtml(v)}</details>` : '')
+      + (rv.lifecycle ? `<details class="opt" open><summary><b>Соответствие жизненному циклу системы</b> — расхождений ${rv.lifecycle.conflicts.filter(c => c.kind !== 'new').length}</summary>${lifecycleHtml(rv.lifecycle)}</details>` : '');
+  const ts = rv.themes, block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
+  const blockLeft = block.filter(themeLeft), todo = ts.filter(t => t.status === 'todo');
+  const accept = blockLeft.filter(t => t.status === 'open' && !t.question);
+  const std = v?.suggested_standard && PROJ.catalog.standards?.[v.suggested_standard];
+  const fit = v && v.standard_fits === false ? `<div class="hint" style="color:var(--warn)">Документ — ${esc(v.document_kind || 'другого вида')}: стандарт «${esc(v.standard_title || '')}» для него не предназначен, разделы стандарта не считаются дефектами.
+      ${std && editable ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
+      стандарт проекта — в «Проект → Требования».</div>` : '';
+  const progress = editable && ts.length ? `<div class="card" style="margin-top:8px;padding:8px">
+      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: разобрано ${block.length - blockLeft.length} из ${block.length}</b>
+        ${quality.length ? `<span class="muted" style="font-size:12px" title="Оформление документа и незначительные замечания: модель приложения и тест-дизайн их не ждут">качество документа: не разобрано ${quality.filter(themeLeft).length} из ${quality.length} — не обязательно</span>` : ''}</div>
+      <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><span class="grow"></span>
+        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings(this)" ${busy ? 'disabled' : ''} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}
+        <button class="btn small" onclick="copyFindings(this)" title="Неразобранные замечания и вопросы показанного списка — одним текстом для аналитика или автора ТЗ">Скопировать для аналитика</button>
+        <button class="btn small" onclick="$('#ansBox').classList.toggle('hidden');$('#ansText').focus()" ${busy ? 'disabled' : ''} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям">Вставить ответы аналитика</button>
+        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${busy ? 'disabled' : ''} title="Исправить неразобранные блокирующие замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
+        <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
+      <div id="ansBox" class="hidden" style="margin-top:6px">
+        <textarea id="ansText" rows="6" style="width:100%" placeholder="Ответы аналитика — списком, письмом, в любом порядке. Номера и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным."></textarea>
+        <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small primary" onclick="pasteAnswers(this)">Разнести по замечаниям</button></div></div>
+      <div class="hint" style="margin:4px 0 0">${blockLeft.length
+        ? 'Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным. Похожие замечания обеих проверок собраны в темы: один ответ на тему. Модель приложения обновится по ТЗ, когда будут разобраны блокирующие замечания; качество документа её не держит.'
+        : AN?.learned ? 'Блокирующие замечания разобраны, модель приложения обновлена по согласованным требованиям. Проверьте исправленное ТЗ заново, если нужно.'
+        : 'Блокирующие замечания разобраны. Проверьте исправленное ТЗ заново, если нужно.'}</div>
+      ${FIX_MSG ? `<div class="hint" style="margin:4px 0 0">${esc(FIX_MSG)}</div>` : ''}</div>` : '';
+  const list = ts.length ? `<div class="row" style="gap:10px;margin-top:8px;align-items:center">
+      <select style="width:auto" onchange="FIND_SHOW=this.value;applyFindFilter()">
+        ${[['blocking', `Блокируют тест-дизайн (${block.length})`], ['quality', `Качество документа (${quality.length})`], ['all', `Все (${ts.length})`]]
+          .map(([k, t]) => `<option value="${k}" ${FIND_SHOW === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <label class="inline"><input type="checkbox" ${FIND_LEFT ? 'checked' : ''} onchange="FIND_LEFT=this.checked;applyFindFilter()"> только неразобранные</label></div>
+    <div id="findList">${ts.map(t => themeCard(rv, t, editable)).join('')}</div>
+    <div class="hint hidden" id="findEmpty">В этом списке ничего не осталось — смените фильтр, чтобы увидеть остальное.</div>` : '<div class="hint">Замечаний нет.</div>';
+  return head + `
+    ${rv.verdict === 'not_ready' && blockLeft.length ? `<div class="hint" style="color:var(--bad)">Есть критичные замечания: ${editable ? 'разберите их ниже' : 'исправьте ТЗ'} и проверьте заново — или генерируйте тест-кейсы, понимая риск.</div>` : ''}
+    ${fit}${progress}${list}
+    <details class="opt"><summary>Подробности проверки${v ? ` — ${v.score}/100` : ''}</summary>
+      ${v ? validationHtml(v, true) : ''}${rv.lifecycle ? lifecycleHtml(rv.lifecycle, true) : ''}</details>`;
 }
-async function decideFinding(id, status) {
-  let note;
-  if (status === 'dismissed') {
-    note = prompt('Почему замечание не актуально? (необязательно — ревьюер учтёт при повторной проверке)', '');
-    if (note === null) return;
-  }
-  const answer = status === 'todo' ? ($(`#fd-${id}`)?.value ?? '') : undefined;
-  await settleFindings([id], status, answer, note);
+function decideTheme(tid, status) {
+  const rv = AN.review, t = rv.themes.find(x => x.id === tid);
+  if (!t) return;
+  const left = new Set(rv.items.filter(x => x.status === 'open' || x.status === 'todo').map(x => x.id));
+  const ids = status === 'open' ? t.ids : t.ids.filter(i => left.has(i));
+  const answer = status === 'todo' ? ($(`#fd-${tid}`)?.value ?? '') : undefined;
+  const note = status === 'dismissed' ? ($(`#fdn-${tid}`)?.value ?? '') : undefined;
+  settleFindings(ids, status, answer, note);
 }
 function acceptSuggestions() {
-  const ids = reviewItems(AN.review).filter(x => x.status === 'open' && !x.question).map(x => x.id);
+  const left = new Set(AN.review.items.filter(x => x.status === 'open').map(x => x.id));
+  const ids = AN.review.themes.filter(t => t.blocking && t.status === 'open' && !t.question).flatMap(t => t.ids.filter(i => left.has(i)));
   if (ids.length) settleFindings(ids, 'todo', '');
 }
 async function settleFindings(ids, status, answer, note) {
@@ -3385,6 +3436,49 @@ async function settleFindings(ids, status, answer, note) {
     FIX_MSG = r.model || '';
     openAnalysis(r.analysis);
   } catch (e) { FIX_MSG = ''; alert(e.message); }
+}
+// The unsettled findings of the list as shown, one text for an analyst: numbers and [codes] to answer by.
+function findingsText() {
+  const rv = AN.review, by = Object.fromEntries(rv.items.map(x => [x.id, x]));
+  const ts = rv.themes.filter(t => themeLeft(t) && (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === t.blocking));
+  const line = (it, pad) => `${it.problem}${it.location ? ` (${it.location})` : ''}${it.suggestion ? `\n${pad}Предложение ревьюера: ${it.suggestion}` : ''}`;
+  return [`Замечания ревьюера к требованиям «${AN.feature || AN.title || 'Требования'}»`,
+    'Ответьте, как должно быть, на каждый пункт (можно кратко) или напишите «не актуально» и почему.', '',
+    ...ts.map((t, n) => {
+      const ms = t.ids.map(i => by[i]).filter(Boolean);
+      return ms.length > 1 ? `${n + 1}. [${t.id}] ${t.title || 'Об одном и том же'}\n${ms.map(it => `   - ${line(it, '     ')}`).join('\n')}`
+        : `${n + 1}. [${t.id}] ${line(ms[0], '   ')}`;
+    })].join('\n');
+}
+async function copyFindings(btn) {
+  const text = findingsText(), n = (text.match(/^\d+\. \[/gm) || []).length, was = btn.textContent;
+  if (!n) return alert('В показанном списке нет неразобранных замечаний.');
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  btn.textContent = `Скопировано: ${n}`;
+  setTimeout(() => btn.textContent = was, 2500);
+}
+async function groupFindings(btn) {
+  btn.disabled = true; btn.textContent = 'Сводим в темы…';
+  try {
+    const r = await api('POST', `/api/analyses/${AN.id}/review/group`);
+    FIX_MSG = r.groups ? `Замечания сведены в темы: ${r.analysis.review.themes.length} вместо ${r.analysis.review.items.length}.` : 'Похожих замечаний не нашлось.';
+    openAnalysis(r.analysis);
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Свести в темы'; }
+}
+async function pasteAnswers(btn) {
+  const text = $('#ansText').value.trim();
+  if (!text) return $('#ansText').focus();
+  btn.disabled = true; btn.textContent = 'Агент разносит ответы…';
+  try {
+    const r = await api('POST', `/api/analyses/${AN.id}/review/answers`, {text});
+    FIX_MSG = [`Ответы разнесены: к исправлению ${r.answered}, не актуально ${r.dismissed}.`,
+      r.answered ? 'Проверьте ответы и нажмите «Исправить ТЗ агентом».' : '', r.model].filter(Boolean).join(' ');
+    openAnalysis(r.analysis);
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Разнести по замечаниям'; }
 }
 async function fixFindings(btn) {
   btn.disabled = true; btn.textContent = 'Агент исправляет ТЗ…';
@@ -3626,7 +3720,7 @@ $('#reqBtn').onclick = () => {
   if (!requirements) { $('#reqStatus').textContent = 'Вставьте текст требований'; return; }
   if (!REQ_ABORT) runReview({requirements});
 };
-function reviewAnalysis() { if (AN && !REQ_ABORT) runReview({analysis_id: AN.id}); }
+function reviewAnalysis(standard = '') { if (AN && !REQ_ABORT) runReview({analysis_id: AN.id, standard}); }
 $('#reqStop').onclick = () => REQ_ABORT?.abort();
 function setStudioScen(v) {
   STUDIO_SCEN = v;

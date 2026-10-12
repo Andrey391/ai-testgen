@@ -52,6 +52,23 @@ def create(pid: str, requirements: str, url: str = "", user: str = "") -> dict:
     return a
 
 
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def same_text(pid: str, requirements: str) -> dict | None:
+    """The newest analysis of these very requirements (whitespace aside): checking them again updates it."""
+    want, found = _norm(requirements), None
+    for _, text, _ in fs.documents(_dir(pid)):
+        try:
+            a = json.loads(text)
+        except ValueError:
+            continue
+        if _norm(a.get("requirements", "")) == want and (not found or a["created"] > found["created"]):
+            found = a
+    return _stale(found) if found else None
+
+
 def get(aid: str) -> dict | None:
     if not re.fullmatch(r"[0-9a-f]{10}", aid or ""):
         return None
@@ -285,6 +302,15 @@ def decide(pid: str, aid: str, ids: list[str], status: str, answer: str | None =
     return _change(pid, aid, fn)
 
 
+def set_groups(pid: str, aid: str, groups: list[dict]) -> dict:
+    """The findings of the review grouped into themes (review.group) after the review."""
+    def fn(a):
+        if not a.get("review"):
+            raise KeyError("review")
+        a["review"]["groups"] = groups
+    return _change(pid, aid, fn)
+
+
 def revise(pid: str, aid: str, result: dict, user: str = "") -> dict:
     """The editor fixed the document by the findings (review.revise): the requirements become the new text, the
     previous one is kept in `revisions` with the edits; the findings applied are fixed, the others stay to fix."""
@@ -358,9 +384,11 @@ def unlink_test(pid: str, test_id: str) -> None:
 
 
 def view(a: dict) -> dict:
-    """The analysis with the tests of each scenario (name, status, last run); deleted tests drop out."""
-    from . import storage
+    """The analysis with the tests of each scenario (name, status, last run); deleted tests drop out. The review
+    with its findings and themes (review.public)."""
+    from . import review, storage
     out = dict(a)
+    out["review"] = review.public(a.get("review"))
     out["scenarios"] = []
     for s in a["scenarios"]:
         tests = []
