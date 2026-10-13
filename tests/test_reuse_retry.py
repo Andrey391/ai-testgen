@@ -94,7 +94,9 @@ def test_pipeline_waits_for_the_decision_and_reuses(monkeypatch):
 
     async def create(project, item, sc):
         created.append(sc["title"])
-        return storage.save({"project_id": p["id"], "name": sc["title"], "url": p["base_url"], "steps": []})
+        t = storage.save({"project_id": p["id"], "name": sc["title"], "url": p["base_url"], "steps": []})
+        item["test_id"] = t["id"]
+        return t
     monkeypatch.setattr(job, "_create_test", create)
 
     async def scenario():
@@ -108,9 +110,74 @@ def test_pipeline_waits_for_the_decision_and_reuses(monkeypatch):
         await asyncio.wait_for(task, 5)
     arun(scenario())
     assert job.status == "done", job.log
-    assert created == ["Профиль"]
+    # "Не дублировать" a scenario that has no test: it is automated, not skipped
+    assert created == ["Выход", "Профиль"]
     assert job.items[0]["test_id"] == login["id"] and "Переиспользован" in job.items[0]["summary"]
-    assert job.items[1]["status"] == "done" and not job.items[1]["test_id"]
+    assert job.items[1]["status"] == "done" and job.items[1]["test_id"]
+
+
+def _analysis(p: dict, titles: list[str], matches: list | None = None) -> dict:
+    a = analyses.create(p["id"], "ТЗ")
+    plan = [{"title": t, "type": "positive", "priority": "high"} | ({"match": m} if m else {})
+            for t, m in zip(titles, matches or [None] * len(titles))]
+    analyses.set_plan(p["id"], a["id"], "ТЗ", [], plan)
+    analyses.finish(p["id"], a["id"], {"feature": "ТЗ", "assumptions": [], "scenarios": [
+        dict(x, instructions="Шаги") for x in plan]})
+    return analyses.get(a["id"])
+
+
+def test_not_duplicated_scenario_is_automated_once_for_both(monkeypatch):
+    p = _project()
+    old = _analysis(p, ["Выход"])
+    earlier = old["scenarios"][0]
+    dup = {"kind": "scenario", "id": earlier["id"], "analysis_id": old["id"], "title": "Выход", "relation": "same",
+           "decision": "reuse"}
+    new = _analysis(p, ["Выход из аккаунта"], [dup])
+    sc = new["scenarios"][0]
+    assert sc["match"]["decision"] == "reuse"
+    assert analyses.view(analyses.get(new["id"]))["scenarios"][0]["match"]["automated"] is False
+    test = _test(p, "Выход")
+    analyses.link_test(p["id"], new["id"], sc["id"], test["id"])       # the test of the new scenario...
+    assert analyses.get(old["id"])["scenarios"][0]["test_ids"] == [test["id"]]     # ...automates the earlier one
+    assert analyses.view(analyses.get(new["id"]))["scenarios"][0]["match"]["automated"] is True
+    assert [t["id"] for t in reuse.scenario_tests(p["id"], dup)] == [test["id"]]
+
+    # a later run with the same decision takes the test of the earlier scenario, nothing is generated
+    given = [{"title": "Выход снова", "type": "positive", "priority": "high", "preconditions": "",
+              "instructions": "Шаги", "expected_result": "", "gherkin": "", "match": dup}]
+    job = pipeline.Job(p, [], "", "", {}, scenarios=given, feature="Аккаунт")
+    monkeypatch.setitem(pipeline.JOBS, job.id, job)
+
+    async def create(project, item, sc):
+        raise AssertionError("not generated")
+    monkeypatch.setattr(job, "_create_test", create)
+    arun(job.run())
+    assert job.items[0]["test_id"] == test["id"] and "используется его тест" in job.items[0]["summary"]
+
+
+def test_not_duplicated_items_done_without_a_test_are_automated(monkeypatch):
+    import server
+    monkeypatch.setattr(auth, "ENABLED", False)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    p = _project()
+    jid = uuid.uuid4().hex[:10]
+    dup = {"kind": "scenario", "id": "s1", "analysis_id": "a1", "title": "Выход", "relation": "same",
+           "decision": "reuse"}
+    items = [pipeline.Job._item({"title": t, "match": dup}) for t in ("Дубль", "Готово")]
+    items[0].update(status="done", summary="Сценарий уже есть: «Выход» — новый тест не создан")
+    items[1].update(status="done", test_id="t1")
+    state = {"id": jid, "project_id": p["id"], "links": [], "text": "", "url": "", "user": "alice",
+             "explore": False, "cases": None, "status": "done", "stage": "", "created": 1, "finished": 2, "log": [],
+             "requirements": [], "feature": "", "assumptions": [], "scenarios": [{"title": i["title"]} for i in items],
+             "items": items, "error": "", "usage": {}}
+    fs.write_json(pipeline._jobs_dir(p["id"]) / f"{jid}.json", state)
+    assert [pipeline.retryable(i) for i in items] == [False, False]      # not among the failed ones
+    assert [pipeline.retryable(i, explicit=True) for i in items] == [True, False]
+    monkeypatch.setattr(server, "submit", lambda coro: coro.close())
+    assert client.post(f"/api/jobs/{jid}/retry", json={}).status_code == 400
+    assert client.post(f"/api/jobs/{jid}/retry", json={"indices": [0, 1]}).json() == {"id": jid, "retried": 1}
+    job = pipeline.JOBS.pop(jid)
+    assert [i["status"] for i in job.items] == ["queued", "done"]
 
 
 def test_failed_items_are_generated_again(monkeypatch):
