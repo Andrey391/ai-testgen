@@ -174,7 +174,9 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `strengthen`, `traffic`, `mock`, `baselines`), `/api/runs` (+ `files`, `baseline`), `/api/suites`,
   `/api/jobs`, `/api/tasks`, `/api/scenarios`, `/api/requirements/fetch` и `validate`, `/api/auth/*` (+ `tokens`, `oidc`),
   `/api/users`, `/api/sso`, `/api/audit`, `/api/ready`, `/metrics`), MCP-сервер на `/mcp` (смонтирован
-  последним) и отдача `static/index.html`. Middleware `require_login` пускает без входа только пути из
+  последним) и отдача `static/index.html`. Сообщения в интерфейсе — `toast(text, kind)` (успех, исчезает само),
+  `notice(el, text)` (ошибка у кнопки или формы) и `ask({title, text, subject, actions})` (модальный вопрос, Promise),
+  не `alert`/`confirm` (`docs/usability-plan.md`, этап 7); смоук-тест интерфейса — `tests/test_ui_nav.py`. Middleware `require_login` пускает без входа только пути из
   `PUBLIC`, `/mcp` — по API-токену; передаёт запрос экземпляру-владельцу сессии Studio (`_elsewhere`),
   считает метрики и пишет журнал действий (`_audit`, `AUDIT_ACTIONS`). **Доступ к проекту** проверяет
   одна зависимость `guard` для всех маршрутов: ресурс по префиксу пути (`RESOURCES`) → проект → роль

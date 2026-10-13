@@ -80,6 +80,20 @@ button:disabled{opacity:.5;cursor:default}
 .acc-param input[type=text],.acc-param input[type=password]{margin:0}
 #credDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:520px;width:calc(100% - 32px)}
 #credDlg::backdrop{background:rgba(0,0,0,.35)}
+#askDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:460px;width:calc(100% - 32px);padding:18px}
+#askDlg::backdrop{background:rgba(0,0,0,.35)}
+#askDlg h3{margin:0 0 8px;font-size:16px}
+#askDlg .ask-text{white-space:pre-wrap;overflow-wrap:anywhere}
+#askDlg .ask-subject{margin-top:8px;padding:6px 10px;background:var(--bg);border:1px solid var(--line);border-radius:6px;font-weight:600;overflow-wrap:anywhere}
+#askDlg .ask-acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
+button.btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+#toasts{position:fixed;right:16px;bottom:16px;z-index:1000;display:flex;flex-direction:column;gap:8px;max-width:min(420px,calc(100vw - 32px));pointer-events:none}
+.toast{pointer-events:auto;cursor:pointer;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:9px 12px;box-shadow:0 4px 16px rgba(0,0,0,.15);white-space:pre-wrap;overflow-wrap:anywhere;animation:slidein .2s ease-out}
+.toast.ok{border-left-color:var(--ok)}
+.toast.warn{border-left-color:var(--warn);background:var(--warn-bg)}
+.toast.bad{border-left-color:var(--bad);background:var(--bad-bg)}
+.notice{display:block;margin-top:6px;padding:6px 10px;border-radius:6px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bad);background:var(--bad-bg);border:1px solid color-mix(in srgb, var(--bad) 35%, transparent)}
+.notice.warn{color:var(--ink);background:var(--warn-bg);border-color:color-mix(in srgb, var(--warn) 45%, transparent)}
 .st-passed{border-left:3px solid var(--ok)}
 .st-failed{border-left:3px solid var(--bad)}
 .st-running{border-left:3px solid var(--warn);background:color-mix(in srgb, var(--warn) 8%, transparent)}
@@ -1582,6 +1596,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <button class="btn" onclick="$('#credDlg').close()">Отмена</button>
     <button class="btn primary" id="cdSave">Сохранить</button></div>
 </dialog>
+
+<dialog id="askDlg" aria-labelledby="askTitle" aria-describedby="askText">
+  <h3 id="askTitle"></h3>
+  <div class="ask-text" id="askText"></div>
+  <div class="ask-subject hidden" id="askSubject"></div>
+  <div class="ask-acts" id="askActs"></div>
+</dialog>
+<div id="toasts" role="status" aria-live="polite"></div>
 <script>
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -1606,6 +1628,78 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const store = {get: k => { try { return localStorage.getItem(k) } catch { return null } },
                set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }};
 const fmtTime = t => t ? new Date(t * 1000).toLocaleString('ru-RU') : '';
+
+// ---- messages instead of alert/confirm.
+// toast(text, kind) - success or information in the corner, disappears by itself (a click closes it earlier);
+// kind: ok | info | warn | bad.
+function toast(text, kind = 'ok') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = text;
+  el.onclick = () => el.remove();
+  $('#toasts').append(el);
+  setTimeout(() => el.remove(), (kind === 'bad' || kind === 'warn' ? 9000 : 4000) + Math.min(text.length, 400) * 20);
+  return el;
+}
+// notice(el, text, kind) - a message right under the button or form it is about; an empty text removes it.
+// One notice per element: the next call replaces it.
+function notice(el, text, kind = 'bad') {
+  if (!el) return toast(text, kind);
+  let n = el._notice;
+  if (!text) { n?.remove(); el._notice = null; return null; }
+  if (!n || !n.isConnected) {
+    n = document.createElement('div');
+    n.setAttribute('role', 'alert');
+    el.insertAdjacentElement('afterend', n);
+    el._notice = n;
+  }
+  n.className = `notice ${kind}`;
+  n.textContent = text;
+  return n;
+}
+// ask({title, text, subject, actions, cancel}) - a modal question. actions: [{label, value, kind: 'primary' | 'danger'}],
+// buttons name the action ("Удалить тест"); subject - what it is about, shown highlighted. Resolves with the value
+// of the chosen action, or null for "Отмена", Esc and a click beside the dialog.
+let ASK = null;
+function ask({title = '', text = '', subject = '', actions = [{label: 'OK', value: true, kind: 'primary'}], cancel = 'Отмена'} = {}) {
+  const dlg = $('#askDlg');
+  if (ASK) ASK(null);
+  $('#askTitle').textContent = title;
+  $('#askTitle').classList.toggle('hidden', !title);
+  $('#askText').textContent = text;
+  $('#askSubject').textContent = subject;
+  $('#askSubject').classList.toggle('hidden', !subject);
+  const acts = $('#askActs');
+  acts.innerHTML = '';
+  return new Promise(resolve => {
+    const done = v => {
+      if (ASK !== done) return;
+      ASK = null;
+      if (dlg.open) dlg.close();
+      resolve(v);
+    };
+    ASK = done;
+    const button = (label, cls, v) => {
+      const b = document.createElement('button');
+      b.className = `btn ${cls}`; b.textContent = label;
+      b.onclick = () => done(v);
+      acts.append(b);
+      return b;
+    };
+    const no = cancel ? button(cancel, '', null) : null;
+    const made = actions.map(a => button(a.label, a.kind || '', a.value === undefined ? a.label : a.value));
+    dlg.onclose = () => { if (!dlg.open) done(null); };   // Esc; a late close event of the previous question is ignored
+    dlg.onclick = e => {      // a click on the backdrop, not on the dialog's own padding
+      const r = dlg.getBoundingClientRect();
+      if (e.target === dlg && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) done(null);
+    };
+    dlg.showModal();
+    // focus: the primary action; when the choice is irreversible, "Отмена" - Enter must not delete by accident
+    const primary = made.find((b, i) => actions[i].kind === 'primary');
+    const danger = actions.some(a => a.kind === 'danger');
+    (primary || (danger ? no : made.at(-1)) || no)?.focus();
+  });
+}
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 
 // ---- screenshots open over the page and close with × in the top right corner, Esc or a click beside
@@ -2240,13 +2334,16 @@ function showSaved(id) {
   $('#expApi').href = `/api/tests/${id}/export?format=api`;
 }
 $('#saveBtn').onclick = async () => {
+  const btn = $('#saveBtn');
+  notice(btn, '');
   try {
     const t = await api('POST', `/api/sessions/${SID}/save`, {});
     showSaved(t.id);
     $('#savedText').textContent = t.status === 'ready' ? 'Сохранено, в наборе' : 'Сохранено как черновик';
     $('#readyBtn').classList.toggle('hidden', t.status === 'ready');
-    if (t.warnings?.length) alert('Тест сохранён.\n\n' + t.warnings.join('\n'));
-  } catch (e) { alert(e.message); }
+    if (t.warnings?.length) toast('Тест сохранён.\n\n' + t.warnings.join('\n'), 'warn');
+    else toast(`Тест «${t.name || 'без названия'}» сохранён`);
+  } catch (e) { notice(btn, e.message); }
 };
 $('#runSavedBtn').onclick = () => { showTab('tests'); runTest(TEST_ID); };
 $('#watchSavedBtn').onclick = e => editInStudio(TEST_ID, e.target, true);
@@ -2441,9 +2538,15 @@ async function editCreds(id) {
   dlg.showModal();
 }
 async function delTest(id) {
-  if (!confirm('Удалить тест вместе с историей прогонов, эталонами и записанным трафиком?')) return;
-  await api('DELETE', `/api/tests/${id}`);
+  const name = TESTS.find(t => t.id === id)?.name || '';
+  const ok = await ask({title: 'Удалить тест?', subject: name,
+                        text: 'Вместе с тестом удалятся история прогонов, эталоны скриншотов и записанный трафик. Это нельзя отменить.',
+                        actions: [{label: 'Удалить тест', value: true, kind: 'danger'}]});
+  if (!ok) return;
+  try { await api('DELETE', `/api/tests/${id}`); }
+  catch (e) { toast(e.message, 'bad'); return; }
   if (OPEN_TEST === id) { OPEN_TEST = null; $('#testBox').classList.add('hidden'); }
+  toast(name ? `Тест «${name}» удалён` : 'Тест удалён');
   loadTests();
 }
 async function verifyTest(id, btn) {
