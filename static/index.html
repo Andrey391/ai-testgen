@@ -27,7 +27,7 @@ header h1{font-size:16px;margin:0}
 #bellBtn.has{background:var(--warn);border-color:var(--warn);color:#1c2230}
 .badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--warn);color:#1c2230;font-size:11px;font-weight:700;line-height:18px;text-align:center}
 nav button .badge{margin-left:5px}
-#bellMenu{position:absolute;top:calc(100% + 6px);left:0;z-index:50;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:8px}
+#bellMenu{position:absolute;top:calc(100% + 6px);right:0;z-index:50;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:8px}
 #bellMenu h4{margin:10px 6px 4px;font-size:12px;color:var(--muted);font-weight:600}
 #bellMenu h4:first-child{margin-top:2px}
 #bellMenu a{display:flex;gap:8px;align-items:baseline;padding:6px;border-radius:6px;color:var(--ink);text-decoration:none}
@@ -475,10 +475,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <select id="projSel" title="Проект"></select>
     <button class="btn small" id="newProjBtn" title="Новый проект" aria-label="Новый проект">+</button>
     <a href="#/projects" id="allProj">Все проекты</a>
-    <div id="bellBox" data-needs-project>
-      <button class="btn small" id="bellBtn" title="Ждёт вас: решения в проекте" aria-label="Ждёт вас" aria-haspopup="true" aria-expanded="false"><span id="bellCount" aria-live="polite">0</span></button>
-      <div id="bellMenu" class="hidden" role="menu" aria-label="Ждёт вас"></div>
-    </div>
   </div>
   <nav class="hidden">
     <button data-tab="req" data-needs-project>Требования</button>
@@ -494,6 +490,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <span class="grow"></span>
   <span class="muted hidden" id="whoami"></span>
   <button class="btn hidden" id="logoutBtn">Выйти</button>
+  <!-- «Ждёт вас» - in the top right corner, the list opens to the left -->
+    <div id="bellBox" class="hidden" data-needs-project>
+      <button class="btn small" id="bellBtn" title="Ждёт вас: решения в проекте" aria-label="Ждёт вас" aria-haspopup="true" aria-expanded="false"><span id="bellCount" aria-live="polite">0</span></button>
+      <div id="bellMenu" class="hidden" role="menu" aria-label="Ждёт вас"></div>
+    </div>
 </header>
 <main>
 
@@ -1872,7 +1873,7 @@ function showLogin() {
   clearTimeout(pollTimer); clearTimeout(jobTimer); clearTimeout(runTimer); clearTimeout(suiteTimer); clearTimeout(inboxTimer);
   INBOX = null; $('#bellMenu').classList.add('hidden');
   $$('main > section').forEach(x => x.classList.add('hidden'));
-  $('nav').classList.add('hidden'); $('#projBox').classList.add('hidden');
+  $('nav').classList.add('hidden'); $('#projBox').classList.add('hidden'); $('#bellBox').classList.add('hidden');
   $('#whoami').classList.add('hidden'); $('#logoutBtn').classList.add('hidden');
   $('#loginBox').classList.remove('hidden');
   showAuthForm('login');
