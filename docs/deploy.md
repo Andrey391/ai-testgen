@@ -63,6 +63,7 @@ $env:TESTGEN_DATABASE_URL = "postgresql+psycopg://testgen:testgen@127.0.0.1:5432
 | `TESTGEN_CACHE_DIR` | папка локального кэша (скриншоты, trace для браузера) |
 | `TESTGEN_S3_BUCKET`, `TESTGEN_S3_ENDPOINT`, `TESTGEN_S3_ACCESS_KEY`, `TESTGEN_S3_SECRET_KEY`, `TESTGEN_S3_REGION`, `TESTGEN_S3_PREFIX` | объектное хранилище для бинарных файлов; для Yandex Object Storage — `https://storage.yandexcloud.net`, регион `ru-central1` |
 | `TESTGEN_INSTANCE_URL` | адрес этого экземпляра для других экземпляров, например `http://10.1.2.3:8765` (в Helm — IP пода) |
+| `TESTGEN_PUBLIC_URL` | адрес студии для людей, например `https://testgen.company.ru`: ссылки на экраны (набор, прогон, тест) в уведомлениях и дефектах; без неё уведомления приходят без ссылок |
 | `TESTGEN_EMBEDDED_WORKER` | `on` (по умолчанию) — экземпляр студии тоже берёт задания из очереди; `off` — только воркеры |
 | `TESTGEN_QUEUE` | `off` — прогоны в процессе студии, без очереди |
 | `TESTGEN_WORKER_CONCURRENCY` | сколько тестов воркер гоняет одновременно (2): один браузер, контекст на тест |

@@ -48,7 +48,7 @@ def draft(test: dict, run: dict) -> dict:
     if events:
         lines += ["", "События браузера:"] + [f"- {e[:200]}" for e in events]
     if base:
-        lines += ["", f"Прогон в студии: {base}/#run={run['id']}"]
+        lines += ["", f"Прогон в студии: {base}/#/p/{run['project_id']}/runs/{run['id']}"]
         if run.get("trace"):
             lines.append(f"Playwright trace: {base}/api/runs/{run['id']}/files/{run['trace']}")
     return {"title": title, "text": "\n".join(lines)}

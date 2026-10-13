@@ -9,7 +9,8 @@ Events (project setting "notify.events"):
 Channels (project setting "notify"): Telegram (a bot and a chat id), Mattermost (an incoming
 webhook), e-mail (SMTP). Secrets - the bot token, the webhook address, the SMTP password -
 live in secrets/projects/<id>/notify.json. TESTGEN_PUBLIC_URL (the studio's address for
-people) adds links. Sending never breaks the work that triggered it: errors are logged.
+people) adds links to the screens (`screen()`: #/p/<project>/suites/<id>, …/runs/<id>, …/tests/<id>).
+Sending never breaks the work that triggered it: errors are logged.
 """
 from __future__ import annotations
 
@@ -71,7 +72,7 @@ def save(pid: str, cfg: dict, new_secrets: dict) -> dict:
 
 def public_view(project: dict) -> dict:
     s = secrets(project["id"])
-    return settings(project) | {"secrets_set": sorted(k for k in SECRET_KEYS if s.get(k))}
+    return settings(project) | {"secrets_set": sorted(k for k in SECRET_KEYS if s.get(k)), "links": bool(public_url())}
 
 
 # ---------- sending ----------
@@ -150,9 +151,18 @@ def _fire(coro) -> None:
 _pending: set = set()
 
 
-def _link(path: str) -> str:
-    base = os.environ.get("TESTGEN_PUBLIC_URL", "").rstrip("/")
-    return f'\n<a href="{html.escape(base + path)}">Открыть в студии</a>' if base else ""
+def public_url() -> str:
+    return os.environ.get("TESTGEN_PUBLIC_URL", "").rstrip("/")
+
+
+def screen(pid: str, *parts: str) -> str:
+    """The address of a studio screen for people (the frontend's router); "" without TESTGEN_PUBLIC_URL."""
+    base = public_url()
+    return f"{base}/#/p/{'/'.join([pid, *parts])}" if base else ""
+
+
+def _link(url: str, text: str = "Открыть в студии") -> str:
+    return f'\n<a href="{html.escape(url)}">{text}</a>' if url else ""
 
 
 def message(project: dict, kind: str, **kw) -> tuple[str, str] | None:
@@ -169,19 +179,22 @@ def message(project: dict, kind: str, **kw) -> tuple[str, str] | None:
         lines = [f"Набор {' '.join('#' + t for t in s.get('tags') or []) or '(все тесты)'}: {verdict}",
                  f"прошло {c.get('passed', 0)}, нестабильных {c.get('flaky', 0)}, упало {c.get('failed', 0)}, "
                  f"ошибок {c.get('error', 0)} из {c.get('total', 0)}"]
-        lines += [f"• {html.escape(i['name'])}: {html.escape((i.get('failed_step') or '') + ' ' + (i.get('error') or ''))[:200]}"
-                  for i in failed[:10]]
-        return f"{name}: набор — {verdict}", "\n".join(lines) + _link(f"/#suite={s['id']}")
+        for i in failed[:10]:       # each failed test - straight to its run
+            run = screen(project["id"], "runs", i["run_id"]) if i.get("run_id") else ""
+            lines.append(f"• {html.escape(i['name'])}: "
+                         f"{html.escape((i.get('failed_step') or '') + ' ' + (i.get('error') or ''))[:200]}"
+                         + (f' — <a href="{html.escape(run)}">прогон</a>' if run else ""))
+        return f"{name}: набор — {verdict}", "\n".join(lines) + _link(screen(project["id"], "suites", s["id"]))
     if kind == "streak":
         return (f"{name}: набор падает {kw['n']} раз подряд",
-                f"Последние {kw['n']} запусков набора завершились с падениями." + _link("/#tests"))
+                f"Последние {kw['n']} запусков набора завершились с падениями." + _link(screen(project["id"], "tests")))
     if kind == "proposals":
         if not ev["proposals"]:
             return None
         t, run = kw["test"], kw["run"]
         return (f"{name}: самолечение ждёт ревью",
                 f"Тест «{html.escape(t['name'])}»: новых локаторов на ревью — {run['proposals']}. Без решения человека "
-                f"они в тест не попадут." + _link(f"/#test={t['id']}"))
+                f"они в тест не попадут." + _link(screen(project["id"], "tests", t["id"])))
     if kind == "budget":
         if not ev["budget"]:
             return None
