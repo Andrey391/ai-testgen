@@ -5,6 +5,7 @@ Events (project setting "notify.events"):
     streak     the suite failed this many times in a row (0 = off)
     proposals  self-healing proposed new locators that wait for a person's review
     budget     the project spent 80% of its monthly language-model budget
+    job_waiting  a run of the pipeline waits for a person's decision (once for each kind of wait of a run)
 
 Channels (project setting "notify"): Telegram (a bot and a chat id), Mattermost (an incoming
 webhook), e-mail (SMTP). Secrets - the bot token, the webhook address, the SMTP password -
@@ -34,7 +35,7 @@ SMTP_SSL = smtplib.SMTP_SSL
 DEFAULT = {"telegram": {"enabled": False, "chat_id": ""},
            "mattermost": {"enabled": False},
            "email": {"enabled": False, "host": "", "port": 587, "user": "", "sender": "", "to": "", "tls": True},
-           "events": {"suite": "failed", "streak": 3, "proposals": True, "budget": True}}
+           "events": {"suite": "failed", "streak": 3, "proposals": True, "budget": True, "job_waiting": True}}
 SECRET_KEYS = ("telegram_token", "mattermost_webhook", "smtp_password")
 
 
@@ -161,6 +162,13 @@ def screen(pid: str, *parts: str) -> str:
     return f"{base}/#/p/{'/'.join([pid, *parts])}" if base else ""
 
 
+# What a run of the pipeline waits for (its awaiting_* status), for people.
+WAITS = {"awaiting_review": "разбора замечаний к требованиям",
+         "awaiting_model": "подтверждения жизненного цикла системы",
+         "awaiting_selection": "выбора сценариев для автоматизации",
+         "awaiting_reuse": "решения по сценариям, похожим на прежние"}
+
+
 def _link(url: str, text: str = "Открыть в студии") -> str:
     return f'\n<a href="{html.escape(url)}">{text}</a>' if url else ""
 
@@ -195,6 +203,15 @@ def message(project: dict, kind: str, **kw) -> tuple[str, str] | None:
         return (f"{name}: самолечение ждёт ревью",
                 f"Тест «{html.escape(t['name'])}»: новых локаторов на ревью — {run['proposals']}. Без решения человека "
                 f"они в тест не попадут." + _link(screen(project["id"], "tests", t["id"])))
+    if kind == "job_waiting":
+        if not ev["job_waiting"]:
+            return None
+        j = kw["job"]
+        what = WAITS.get(j["status"], "решения человека")
+        return (f"{name}: конвейер ждёт решения",
+                f"Запуск конвейера ждёт {what}." + (f" Сценариев: {len(j.get('items') or j.get('scenarios') or [])}."
+                                                    if j.get("items") or j.get("scenarios") else "")
+                + _link(screen(project["id"], "pipe", j["id"]), "Открыть запуск"))
     if kind == "budget":
         if not ev["budget"]:
             return None

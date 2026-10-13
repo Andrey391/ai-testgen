@@ -21,6 +21,21 @@ header{display:flex;align-items:center;gap:18px;padding:10px 20px;background:var
 header h1{font-size:16px;margin:0}
 #projBox{display:flex;gap:6px;align-items:center}
 #projSel{width:auto;max-width:240px;font-weight:600}
+#bellBox{position:relative}
+#bellBtn{position:relative}
+#bellBtn.has{border-color:var(--warn)}
+.badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--warn);color:#1c2230;font-size:11px;font-weight:700;line-height:18px;text-align:center}
+#bellBtn .badge{position:absolute;top:-8px;right:-9px}
+nav button .badge{margin-left:5px}
+#bellMenu{position:absolute;top:calc(100% + 6px);left:0;z-index:50;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:8px}
+#bellMenu h4{margin:10px 6px 4px;font-size:12px;color:var(--muted);font-weight:600}
+#bellMenu h4:first-child{margin-top:2px}
+#bellMenu a{display:flex;gap:8px;align-items:baseline;padding:6px;border-radius:6px;color:var(--ink);text-decoration:none}
+#bellMenu a:hover,#bellMenu a:focus{background:var(--soft);outline:none}
+#bellMenu a .t{flex:1;overflow-wrap:anywhere}
+#bellMenu a .w{font-size:12px;color:var(--muted);white-space:nowrap}
+#bellMenu .empty{padding:10px 6px;color:var(--muted)}
+#bellMenu .others{border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
 nav button{background:none;border:0;color:var(--muted);font:inherit;padding:6px 10px;border-radius:6px;cursor:pointer}
 nav button.on{color:var(--ink);background:var(--soft);font-weight:600}
 main{padding:16px 20px}
@@ -433,6 +448,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div id="projBox" class="hidden">
     <select id="projSel" title="Проект"></select>
     <button class="btn small" id="newProjBtn" title="Новый проект">+</button>
+    <div id="bellBox" data-needs-project>
+      <button class="btn small" id="bellBtn" title="Ждёт вас: решения в проекте" aria-label="Ждёт вас" aria-haspopup="true" aria-expanded="false">🔔<span class="badge hidden" id="bellCount" aria-live="polite"></span></button>
+      <div id="bellMenu" class="hidden" role="menu" aria-label="Ждёт вас"></div>
+    </div>
   </div>
   <nav class="hidden">
     <button data-tab="home" class="on">Проекты</button>
@@ -1006,7 +1025,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div><label>Итог набора</label><select id="ntSuite"><option value="failed">только при падениях</option><option value="always">всегда</option><option value="off">не присылать</option></select></div>
             <div><label>Набор падает N раз подряд (0 — нет)</label><input id="ntStreak" type="number" min="0" max="50"></div>
             <div><label>&nbsp;</label><label class="inline"><input type="checkbox" id="ntProposals"> Самолечение ждёт ревью</label>
-              <label class="inline"><input type="checkbox" id="ntBudget"> 80% месячного лимита</label></div>
+              <label class="inline"><input type="checkbox" id="ntBudget"> 80% месячного лимита</label>
+              <label class="inline"><input type="checkbox" id="ntJobWaiting"> Конвейер ждёт решения</label></div>
           </div>
           <div class="sub"><label class="inline"><input type="checkbox" id="ntTg"> Telegram</label>
             <div class="grid2"><div><label>Токен бота</label><input id="ntTgToken" type="password" autocomplete="off"></div>
@@ -1805,7 +1825,8 @@ let ME = null, PID = null, PROJ = null, PROJECTS = [], PRESETS = [], SKILLS = []
 
 // ---- login
 function showLogin() {
-  clearTimeout(pollTimer); clearTimeout(jobTimer); clearTimeout(runTimer); clearTimeout(suiteTimer);
+  clearTimeout(pollTimer); clearTimeout(jobTimer); clearTimeout(runTimer); clearTimeout(suiteTimer); clearTimeout(inboxTimer);
+  INBOX = null; $('#bellMenu').classList.add('hidden');
   $$('main > section').forEach(x => x.classList.add('hidden'));
   $('nav').classList.add('hidden'); $('#projBox').classList.add('hidden');
   $('#whoami').classList.add('hidden'); $('#logoutBtn').classList.add('hidden');
@@ -1905,6 +1926,7 @@ async function switchProject(pid) {
   if (tab === 'proj') loadSettings();
   if (tab === 'studio') loadInterrupted();
   setStudioTask(null);
+  pollInbox();
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
 $('#projSel').onchange = async () => { await switchProject($('#projSel').value); setRoute(tabPath(curTab())); };
@@ -2045,6 +2067,90 @@ window.addEventListener('hashchange', () => { if (ME && location.hash.length > 1
 window.addEventListener('beforeunload', e => {
   if (SID && STATE?.steps?.length && !TEST_ID && !STATE.test_id && STATE.status !== 'closed') e.preventDefault();
 });
+
+// ---- «Ждёт вас»: what in the project waits for a person's decision (GET …/inbox) - the bell in the header.
+// Polled every 30 s and when the browser tab is back; other projects are counted on the timer and when it opens.
+const INBOX_KINDS = {job: 'Запуски ждут решения', attention: 'Нужно подтверждение', review: 'Замечания ревьюера',
+  model: 'Модель приложения', heal: 'Ревью самолечения', session: 'Прерванные сессии', task: 'Мои задачи'};
+let INBOX = null, OTHERS = [], inboxTimer = null, BELL_HTML = '';
+function waited(t) {
+  const s = Date.now() / 1000 - (t || 0);
+  if (!t || s < 60) return 'только что';
+  return s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч` : `${Math.floor(s / 86400)} дн`;
+}
+async function pollInbox(others = true) {
+  if (others) clearTimeout(inboxTimer);
+  const pid = PID;
+  if (!ME || !pid) return;
+  try {
+    if (!document.hidden || !INBOX) {
+      const [box, all] = await Promise.all([api('GET', `/api/projects/${pid}/inbox`),
+                                            others ? api('GET', '/api/inbox') : null]);
+      if (pid !== PID) return;
+      INBOX = box;
+      if (all) OTHERS = all.filter(x => x.project_id !== pid && x.total);
+      renderBell();
+    }
+  } catch {}
+  finally { if (others && pid === PID) inboxTimer = setTimeout(pollInbox, 30000); }
+}
+function renderBell() {
+  const n = INBOX?.total || 0, count = $('#bellCount');
+  count.textContent = n > 99 ? '99+' : n; count.classList.toggle('hidden', !n);
+  $('#bellBtn').classList.toggle('has', !!n);
+  $('#bellBtn').title = n ? `Ждёт вас: ${n}` : 'Ждёт вас: решений нет';
+  // the run waits for a decision - the Pipeline button says so on any tab
+  const jobs = (INBOX?.items || []).filter(e => e.kind === 'job').length, pipe = $('nav button[data-tab="pipe"]');
+  let b = pipe.querySelector('.badge');
+  if (jobs && !b) { b = document.createElement('span'); b.className = 'badge'; pipe.appendChild(b); }
+  if (b) { b.textContent = jobs; b.classList.toggle('hidden', !jobs); pipe.title = jobs ? `Запусков ждут решения: ${jobs}` : ''; }
+  if (!$('#bellMenu').classList.contains('hidden')) renderBellMenu();
+}
+function renderBellMenu() {
+  const items = INBOX?.items || [];
+  let html = '', kind = '';
+  for (const e of items) {
+    if (e.kind !== kind) { kind = e.kind; html += `<h4>${esc(INBOX_KINDS[kind] || kind)}</h4>`; }
+    html += `<a href="#${esc(e.route)}" role="menuitem"><span class="t">${esc(e.title)}${e.count > 1 ? ` · ${e.count}` : ''}</span>`
+          + `<span class="w" title="${esc(fmtTime(e.since))}">${e.since ? 'ждёт ' + waited(e.since) : ''}</span></a>`;
+  }
+  if (!items.length) html = '<div class="empty">Вашего решения ничего не ждёт</div>';
+  if (OTHERS.length) html += '<div class="others"><h4>Другие проекты</h4>' + OTHERS.map(o =>
+    `<a href="#" role="menuitem" data-pid="${esc(o.project_id)}"><span class="t">${esc(o.name)}</span><span class="badge">${o.total}</span></a>`).join('') + '</div>';
+  if (BELL_HTML !== html) { BELL_HTML = html; $('#bellMenu').innerHTML = html; }   // the same - the focus stays
+}
+function bellOpen(open) {
+  $('#bellMenu').classList.toggle('hidden', !open);
+  $('#bellBtn').setAttribute('aria-expanded', open);
+  if (open) {
+    renderBellMenu(); pollInbox();
+    const m = $('#bellMenu'); m.style.left = '0';          // a narrow window: the menu stays on the screen
+    const over = m.getBoundingClientRect().right - (innerWidth - 8);
+    if (over > 0) m.style.left = `${-over}px`;
+  }
+}
+$('#bellBtn').onclick = () => {
+  const open = $('#bellMenu').classList.contains('hidden');
+  bellOpen(open);
+  if (open) $('#bellMenu a')?.focus();
+};
+$('#bellMenu').onclick = async e => {
+  const a = e.target.closest('a');
+  if (!a) return;
+  if (a.dataset.pid) {            // another project: its decisions, the menu stays open
+    e.preventDefault();
+    await switchProject(a.dataset.pid); setRoute(tabPath(curTab()));
+    return;
+  }
+  bellOpen(false);
+  if (a.getAttribute('href') === location.hash) { e.preventDefault(); route(); }   // the same screen: open it again
+};
+document.addEventListener('click', e => { if (!$('#bellBox').contains(e.target)) bellOpen(false); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#bellMenu').classList.contains('hidden')) { bellOpen(false); $('#bellBtn').focus(); }
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) pollInbox(); });
+window.addEventListener('hashchange', () => { if (ME && PID) pollInbox(false); });
 
 // ---- studio
 let SID = null, STATE = null, TEST_ID = null, pollTimer = null, shotBusy = false, editing = false;
@@ -5105,6 +5211,7 @@ function fillNotify() {
   $('#ntNoLinks').classList.toggle('hidden', n.links !== false);
   $('#ntSuite').value = n.events.suite; $('#ntStreak').value = n.events.streak;
   $('#ntProposals').checked = n.events.proposals; $('#ntBudget').checked = n.events.budget;
+  $('#ntJobWaiting').checked = n.events.job_waiting;
   $('#ntTg').checked = n.telegram.enabled; $('#ntTgChat').value = n.telegram.chat_id; $('#ntTgToken').value = ''; $('#ntTgToken').placeholder = ph('telegram_token');
   $('#ntMm').checked = n.mattermost.enabled; $('#ntMmHook').value = ''; $('#ntMmHook').placeholder = ph('mattermost_webhook') || 'https://mattermost.company.ru/hooks/…';
   const e = n.email;
@@ -5112,7 +5219,7 @@ function fillNotify() {
   $('#ntFrom').value = e.sender; $('#ntTo').value = e.to; $('#ntPass').value = ''; $('#ntPass').placeholder = ph('smtp_password');
 }
 $('#ntSave').onclick = async () => {
-  const body = {settings: {events: {suite: $('#ntSuite').value, streak: +$('#ntStreak').value || 0, proposals: $('#ntProposals').checked, budget: $('#ntBudget').checked},
+  const body = {settings: {events: {suite: $('#ntSuite').value, streak: +$('#ntStreak').value || 0, proposals: $('#ntProposals').checked, budget: $('#ntBudget').checked, job_waiting: $('#ntJobWaiting').checked},
       telegram: {enabled: $('#ntTg').checked, chat_id: $('#ntTgChat').value.trim()}, mattermost: {enabled: $('#ntMm').checked},
       email: {enabled: $('#ntMail').checked, host: $('#ntHost').value.trim(), port: +$('#ntPort').value || 587, user: $('#ntUser').value.trim(),
         sender: $('#ntFrom').value.trim(), to: $('#ntTo').value.trim(), tls: true}},

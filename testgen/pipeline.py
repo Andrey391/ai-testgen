@@ -329,6 +329,8 @@ class Job:
         self.sessions = sessions
         # running | awaiting_review | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
         self.status = "running"
+        self.waiting_since = None       # since when the run waits for a person (an awaiting_* status)
+        self.notified: list[str] = []   # the waits the team was told of (notify "job_waiting"): once each
         self.stage = "requirements"
         self.created = time.time()
         self.finished = None
@@ -416,7 +418,7 @@ class Job:
             "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
             "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage",
             "design", "validation", "analysis_id", "preselect", "review", "review_id", "review_accepted",
-            "spec_chars", "review_parts")}
+            "spec_chars", "review_parts", "waiting_since", "notified")}
 
     @classmethod
     def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
@@ -428,7 +430,7 @@ class Job:
                   design=j.get("design"), review_id=j.get("review_id") or "")
         job.id, job.created = j["id"], j["created"]
         for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation", "analysis_id",
-                  "preselect", "review", "review_accepted", "review_parts"):
+                  "preselect", "review", "review_accepted", "review_parts", "notified"):
             setattr(job, k, j.get(k) or getattr(job, k))
         job.spec_chars = j.get("spec_chars")     # None - cut off by a version that did not keep it
         job.requirements = j.get("requirements") or []
@@ -454,6 +456,16 @@ class Job:
         job._log(f"Перезапуск генерации ({user or 'студия'}): сценариев {len(indices)} — "
                  + ", ".join(f"«{job.items[i]['title']}»" for i in indices[:10]) + ("…" if len(indices) > 10 else ""))
         return job
+
+    def _waiting(self, status: str) -> None:
+        """The run waits for a person's decision (an awaiting_* status): the inbox shows it from now on, the team
+        is told once for each kind of wait of the run."""
+        if self.status != status:
+            self.waiting_since = time.time()
+        self.status = status
+        if status not in self.notified:
+            self.notified.append(status)
+            notify.event(projects.get(self.project_id), "job_waiting", job=self.state())
 
     def save(self) -> None:
         fs.write_json(_jobs_dir(self.project_id) / f"{self.id}.json", self.state(), indent=1)
@@ -755,7 +767,7 @@ class Job:
         units = self._model_units()
         if knowledge.is_confirmed(self.project_id, units):
             return
-        self.status = "awaiting_model"
+        self._waiting("awaiting_model")
         state = knowledge.confirmation(knowledge.get(self.project_id), units)
         todo = [u["title"] for u in state["units"] if u["state"] != "confirmed" and (units is None or u["unit"] in units)]
         self._log("Подтвердите жизненный цикл системы перед генерацией тестов: сущности, зависимости, статусы, роли "
@@ -829,7 +841,7 @@ class Job:
             status = "awaiting_review" if not r["settled"] else "awaiting_model"
             if (status, r["blocked"]) != said:
                 said = (status, r["blocked"])
-                self.status = status
+                self._waiting(status)
                 self._log("Тест-дизайн ждёт разбора требований во вкладке «Требования»: " + "; ".join(r["blocked"]),
                           "warn")
                 self.save()
@@ -851,7 +863,7 @@ class Job:
         the earlier one or refine it. A decision made in the Requirements tab counts as well."""
         if not self._undecided():
             return
-        self.status = "awaiting_reuse"
+        self._waiting("awaiting_reuse")
         self._log(f"Похожи на созданные ранее: {len(self._undecided())} — решите для каждого: создать новый тест, "
                   "переиспользовать или доработать прежний", "warn")
         while not self._cancel and self._undecided():
@@ -891,7 +903,7 @@ class Job:
         what = "кейсы" if self.cases else "сценарии"
         if mode == "manual":
             self.preselect = [i for i, s in enumerate(self.scenarios) if s.get("priority") != "low"]
-            self.status = "awaiting_selection"
+            self._waiting("awaiting_selection")
             self._log(f"Выберите {what} для автоматизации: {len(self.scenarios)}"
                       + (" — не выбранные останутся в списке «Сценарии из анализа требований»" if self.analysis_id else ""))
             await self._selected.wait()

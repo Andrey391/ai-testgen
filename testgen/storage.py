@@ -238,6 +238,11 @@ def data_refs(project_id: str) -> list[dict]:
     return repo.Sql.data_refs(project_id)
 
 
+def healing(project_id: str) -> list[dict]:
+    """Tests with self-healing proposals waiting for a person's review: {id, name, count, updated}."""
+    return repo.Sql.healing(project_id)
+
+
 def remap_data_refs(project_id: str, ids: dict[str, str]) -> None:
     """Records of the model merged into others (duplicates): the tests refer to the kept ones."""
     for t in repo.Sql.data_refs(project_id):
