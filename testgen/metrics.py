@@ -35,8 +35,7 @@ def project_metrics(pid: str, days: int = 30) -> dict:
     threshold = cfg["flaky_threshold"] / 100
     for t in tests:
         hist = runs.history(pid, t["id"], limit=0)
-        rate = runs.flip_rate(hist[-runs.FLAKY_WINDOW:])
-        if (rate is not None and rate >= threshold) or (t.get("last_run") or {}).get("flaky"):
+        if runs.is_flaky(t, hist, threshold):
             flaky += 1
         if (t.get("quarantine") or {}).get("on"):
             quarantined += 1
@@ -49,7 +48,7 @@ def project_metrics(pid: str, days: int = 30) -> dict:
 
     scores = [t["verify"]["score"] for t in tests if (t.get("verify") or {}).get("score") is not None]
     suites = [s for s in suite.list_suites(pid, limit=20) if s.get("finished") and s.get("started")]
-    durations = [{"at": s["started"], "minutes": round((s["finished"] - s["started"]) / 60, 1),
+    durations = [{"id": s["id"], "at": s["started"], "minutes": round((s["finished"] - s["started"]) / 60, 1),
                   "passed": s.get("passed"), "total": (s.get("summary") or {}).get("total")} for s in reversed(suites)]
     costs = [(t.get("authoring_usage") or {}).get("cost_usd") for t in tests]
     costs = [c for c in costs if c]
@@ -62,7 +61,8 @@ def project_metrics(pid: str, days: int = 30) -> dict:
         "stability": {"flaky": flaky, "flaky_share": round(flaky / n, 3) if n else None, "quarantined": quarantined,
                       "pass_rate": round(passed_runs / run_count, 3) if run_count else None},
         "quality": {"verified": len(scores), "mutation_score": round(statistics.mean(scores), 3) if scores else None},
-        "regression": {"suites": durations[-10:], "last_minutes": durations[-1]["minutes"] if durations else None},
+        "regression": {"suites": durations[-10:], "last_minutes": durations[-1]["minutes"] if durations else None,
+                       "last_id": durations[-1]["id"] if durations else None},
         "saved": {"runs": run_count, "manual_minutes": minutes, "hours": round(run_count * minutes / 60, 1),
                   "per_day": [{"day": d, "runs": c} for d, c in sorted(per_day.items())]},
         "spending": {"month": month["month"], "usd": month["total_usd"], "rub": month["total_rub"],

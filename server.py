@@ -1737,9 +1737,17 @@ def test_or_404(tid: str) -> dict:
 
 
 @app.get("/api/tests")
-async def tests(project_id: str, tag: str = ""):
+async def tests(project_id: str, tag: str = "", q: str = "", status: str = "", health: str = "", layer: str = "",
+                task: str = ""):
+    """The tests of a project; filters of the «Тесты» list (and the dashboard tiles): q, status, health, layer, task."""
     project(project_id)
-    return storage.list_tests(project_id, tag)
+    if status and status not in storage.STATUSES:
+        raise HTTPException(400, "Статус: " + ", ".join(storage.STATUSES))
+    if health and health not in storage.HEALTH:
+        raise HTTPException(400, "Состояние: " + ", ".join(storage.HEALTH))
+    if layer and layer not in storage.LAYERS:
+        raise HTTPException(400, "Слой: ui или api")
+    return storage.list_tests(project_id, tag, q=q[:200], status=status, health=health, layer=layer, task=task)
 
 
 @app.get("/api/tests/{tid}")

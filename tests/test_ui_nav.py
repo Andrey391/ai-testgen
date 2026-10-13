@@ -306,3 +306,49 @@ def test_pipeline_takes_requirements_from_their_tab_only(page, studio_url, proje
     expect(page.locator("#tab-req")).to_be_visible()
     expect(page.locator("#reqNew")).to_have_attribute("open", "")
     assert page.errors == []
+
+
+def test_tests_filter_by_address_and_open_beside_the_list(page, studio_url, project, save_test):
+    nav = [new_step("navigate", "open", project["base_url"])]
+    bad = save_test("Падает при оплате", nav, last_run={"status": "failed", "at": time.time()})
+    ok = save_test("Стабильный вход", nav, last_run={"status": "passed", "at": time.time()})
+    base = f"{studio_url}/#/p/{project['id']}"
+    _open(page, studio_url, project)
+    page.click("nav button[data-tab=dash]")
+    page.locator("a.tile", has_text="Успешных прогонов").click()      # the dashboard tile leads to the failing tests
+    expect(page).to_have_url(f"{base}/tests?health=failing")
+    rows = page.locator("#testsBody tr[data-id]")
+    expect(rows).to_have_count(1)
+    expect(rows).to_contain_text("Падает при оплате")
+    page.reload()
+    expect(page.locator("#healthFilter")).to_have_value("failing")
+    expect(rows).to_have_count(1)
+
+    page.select_option("#healthFilter", "")
+    expect(rows).to_have_count(2)
+    page.fill("#testQ", "стабил")
+    expect(rows).to_have_count(1)
+    expect(page).to_have_url(f"{base}/tests?q=%D1%81%D1%82%D0%B0%D0%B1%D0%B8%D0%BB")
+    page.locator("#testsBody a", has_text="Стабильный вход").click()
+    expect(page.locator("#testBox h3")).to_have_text("Стабильный вход")
+    expect(page.locator("#testsSplit")).to_have_class("split has-detail")
+    expect(page.locator("#testsBody")).to_be_visible()                # the list stays beside the test
+    page.go_back()
+    expect(page.locator("#testBox")).to_be_hidden()
+    expect(page.locator("#testQ")).to_have_value("стабил")
+
+    page.set_viewport_size({"width": 1000, "height": 800})            # narrow: the test over the list
+    page.locator("#testsBody a", has_text="Стабильный вход").click()
+    expect(page.locator("#testsBody")).to_be_hidden()
+    page.locator("#testBox button[aria-label=Закрыть]").click()
+    expect(page.locator("#testsBody")).to_be_visible()
+
+    page.get_by_role("tab", name="Запуски наборов").click()
+    expect(page).to_have_url(f"{base}/suites")
+    expect(page.locator("#suitesBody")).to_be_visible()
+    page.reload()
+    expect(page.get_by_role("tab", name="Запуски наборов")).to_have_attribute("aria-selected", "true")
+    page.goto(f"{base}/tests?task={tasks.create(project['id'], {'title': 'Оплата', 'test_ids': [bad['id']]})['id']}")
+    expect(page.locator("#taskFilter")).to_contain_text("Оплата")
+    expect(rows).to_have_count(1)
+    assert ok["id"] != bad["id"] and page.errors == []

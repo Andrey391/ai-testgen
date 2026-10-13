@@ -184,6 +184,11 @@ def exists(pid: str, tid: str) -> bool:
     return fs.is_file(_file(pid, tid))
 
 
+def recorded_tests(pid: str) -> set[str]:
+    """File names (safe test ids) of the tests with recorded traffic - one query for the test list."""
+    return {p.stem for p in fs.glob(projects.path(pid) / "traffic", "*.har")}
+
+
 def load_har(pid: str, tid: str) -> dict | None:
     return fs.read_json(_file(pid, tid))
 
