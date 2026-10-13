@@ -38,6 +38,12 @@ nav button .badge{margin-left:5px}
 #bellMenu .others{border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
 nav button{background:none;border:0;color:var(--muted);font:inherit;padding:6px 10px;border-radius:6px;cursor:pointer}
 nav button.on{color:var(--ink);background:var(--soft);font-weight:600}
+nav{display:flex;align-items:center;gap:2px;flex-wrap:wrap}
+.nav-sep{width:1px;height:18px;background:var(--line);margin:0 6px}
+#allProj{font-size:13px;white-space:nowrap}
+#allProj.on{font-weight:600;color:var(--ink);text-decoration:none}
+@keyframes bell-pulse{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--warn) 45%,transparent)}}
+#bellBtn.pulse{animation:bell-pulse 1s ease-in-out 3}
 main{padding:16px 20px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
 .card + .card{margin-top:12px}
@@ -402,6 +408,18 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .wz-steps button.done{border-color:var(--ok);color:var(--ok)}
 .wz-steps button.cur{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .wz-steps button:disabled{cursor:default}
+.seg{display:flex;flex-wrap:wrap;gap:0;margin-top:4px}
+.seg button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;margin-left:-1px}
+.seg button:first-child{border-radius:8px 0 0 8px;margin-left:0}
+.seg button:last-of-type{border-radius:0 8px 8px 0}
+.seg button[aria-checked="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);position:relative}
+.seg button[aria-checked="true"] .muted{color:inherit;opacity:.85}
+.start-choice{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px}
+.start-choice button{display:flex;flex-direction:column;gap:4px;text-align:left;font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer}
+.start-choice button:hover,.start-choice button:focus-visible{border-color:var(--accent)}
+.start-choice button.cur{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.start-choice button span{font-size:12px;color:var(--muted)}
+.start-choice button:disabled{opacity:.6;cursor:default}
 .slot{border-left:3px solid var(--line)}
 .slot.ready{border-left-color:var(--ok)}
 .slot .card{background:var(--bg);margin-top:10px}
@@ -455,20 +473,22 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <h1>AI Test Generator</h1>
   <div id="projBox" class="hidden">
     <select id="projSel" title="Проект"></select>
-    <button class="btn small" id="newProjBtn" title="Новый проект">+</button>
+    <button class="btn small" id="newProjBtn" title="Новый проект" aria-label="Новый проект">+</button>
+    <a href="#/projects" id="allProj">Все проекты</a>
     <div id="bellBox" data-needs-project>
       <button class="btn small" id="bellBtn" title="Ждёт вас: решения в проекте" aria-label="Ждёт вас" aria-haspopup="true" aria-expanded="false">🔔<span class="badge hidden" id="bellCount" aria-live="polite"></span></button>
       <div id="bellMenu" class="hidden" role="menu" aria-label="Ждёт вас"></div>
     </div>
   </div>
   <nav class="hidden">
-    <button data-tab="home" class="on">Проекты</button>
-    <button data-tab="studio" data-needs-project>Studio</button>
-    <button data-tab="tests" data-needs-project>Тесты</button>
-    <button data-tab="dash" data-needs-project>Дашборд</button>
-    <button data-tab="tasks" data-needs-project>Задачи</button>
     <button data-tab="req" data-needs-project>Требования</button>
     <button data-tab="pipe" data-needs-project>Конвейер</button>
+    <button data-tab="studio" data-needs-project>Studio</button>
+    <button data-tab="tests" data-needs-project>Тесты</button>
+    <span class="nav-sep" data-needs-project aria-hidden="true"></span>
+    <button data-tab="tasks" data-needs-project>Задачи</button>
+    <button data-tab="dash" data-needs-project>Дашборд</button>
+    <span class="nav-sep" data-needs-project aria-hidden="true"></span>
     <button data-tab="proj" data-needs-project>Проект</button>
   </nav>
   <span class="grow"></span>
@@ -590,9 +610,19 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
         <div class="hint" id="wzWarn"></div>
       </div>
-      <div class="card row" style="margin-top:12px">
-        <button class="btn" data-wzgo="3">← Назад</button><span class="err grow" id="wz3Err"></span>
-        <button class="btn primary" id="wzFinish">Готово — к требованиям</button></div>
+      <div class="card" style="margin-top:12px">
+        <div class="row"><button class="btn" data-wzgo="3">← Назад</button>
+          <h3 class="grow" style="margin:0">Готово. С чего начать?</h3><span class="err" id="wz3Err"></span></div>
+        <div class="start-choice" id="wzStart">
+          <button data-start="req"><b>Проверить требования</b>
+            <span>ТЗ из трекера, файла или текстом: ревьюер найдёт дефекты, затем конвейер спроектирует сценарии и тесты</span></button>
+          <button data-start="studio"><b>Записать тест в Studio</b>
+            <span>Опишите сценарий обычным языком — агент пройдёт его в браузере на адресе проекта и запишет тест</span></button>
+          <button data-start="explore"><b>Исследовать сайт и предложить сценарии</b>
+            <span>Planner обойдёт приложение по ссылкам, конвейер предложит сценарии по карте страниц — когда ТЗ нет</span></button>
+        </div>
+        <div class="hint">Выбор запоминается в проекте: в первый раз проект откроется здесь, дальше — на вкладке, где вы остановились.</div>
+      </div>
     </div>
   </div>
 </section>
@@ -922,37 +952,37 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <h2>Запуск конвейера</h2>
     <div class="muted">Генерация тест-кейсов и тестов по настройкам проекта: требования → ревью → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div>
     <div class="flow" id="pipeFlow"></div>
-    <label>Требования, разобранные во вкладке «Требования»</label>
-    <select id="pipeReview"></select>
-    <div class="hint" id="pipeReviewNote"></div>
-    <div id="pipeNewReq">
-    <label>Ссылки на требования (Jira / Confluence, по одной в строке)</label>
-    <textarea id="pipeLinks" rows="2" placeholder="https://company.atlassian.net/browse/PROJ-123"></textarea>
-    <div class="row"><label class="grow">Текст требований (необязательно)</label>
-      <button class="btn small" id="pipeFileBtn">Файл ТЗ</button>
-      <input type="file" id="pipeFile" accept=".md,.markdown,.txt,.docx,.pdf" multiple class="hidden"></div>
-    <textarea id="pipeText" rows="4"></textarea>
-    <div class="hint">Новые требования сначала проверит ревьюер (как во вкладке «Требования»). Сценарии конвейер спроектирует только после того, как вы разберёте замечания и подтвердите жизненный цикл во вкладке «Требования» — до тех пор запуск ждёт.</div>
+    <label>Источник</label>
+    <div class="seg" id="pipeSrc" role="radiogroup" aria-label="Источник сценариев">
+      <button type="button" role="radio" aria-checked="true" data-src="review">Проверенные требования</button>
+      <button type="button" role="radio" aria-checked="false" tabindex="-1" data-src="picks">Сценарии из анализа <span class="muted" id="pipeScenCount"></span></button>
+      <button type="button" role="radio" aria-checked="false" tabindex="-1" data-src="cases" id="pipeCasesSrc">Ручные кейсы</button>
+      <button type="button" role="radio" aria-checked="false" tabindex="-1" data-src="explore">Обход сайта</button>
     </div>
-    <details class="opt" id="pipeCasesBox">
-      <summary>Автоматизировать ручные кейсы из системы управления тестами</summary>
-      <div class="hint">Кейсы становятся сценариями без проектирования: агент проходит их шаги в браузере, автотест привязывается к исходному кейсу, результаты прогонов уходят туда же. «У нас 2000 ручных кейсов — автоматизируйте».</div>
-      <div class="grid2">
-        <div><label>Откуда</label><select id="pipeCaseConn"></select></div>
-        <div><label>Номера кейсов (через запятую; пусто — все кейсы проекта, только Test IT)</label><input id="pipeCaseIds" placeholder="101, 102, 115"></div>
-      </div>
-    </details>
-    <details class="opt" id="pipeScenBox">
-      <summary>Сценарии из анализа требований <span class="muted" id="pipeScenCount"></span></summary>
-      <div class="hint">Общий список сценариев, спроектированных раньше по проверенным требованиям. Отмеченные сразу идут на генерацию тестов — без нового проектирования; требования тогда не нужны. Тесты привяжутся к своим сценариям; «Тест в Studio» — записать тест по сценарию вручную с агентом.</div>
+    <div data-pipe-src="review">
+      <div id="pipeReviewBox"><label>Требования, разобранные во вкладке «Требования»</label>
+        <select id="pipeReview"></select></div>
+      <div class="hint" id="pipeReviewNote"></div>
+    </div>
+    <div data-pipe-src="picks" class="hidden">
+      <div class="hint">Сценарии, спроектированные раньше по проверенным требованиям. Отмеченные сразу идут на генерацию тестов — без нового проектирования. Тесты привяжутся к своим сценариям; «Тест в Studio» — записать тест по сценарию вручную с агентом.</div>
       <div class="row" style="margin-top:6px"><input id="pipeScenFind" class="grow" placeholder="Поиск по названию, шагам или анализу">
         <select id="pipeScenShow" style="width:auto"><option value="">все сценарии</option><option value="untested">без тестов</option></select></div>
       <div style="max-height:460px;overflow:auto;margin-top:6px"><table class="scen-list"><thead><tr><th class="chk"><input type="checkbox" id="pipeScenAll" title="Отметить все показанные"></th>
         <th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Тестов</th><th></th></tr></thead><tbody id="pipeScenBody"></tbody></table></div>
-    </details>
+    </div>
+    <div data-pipe-src="cases" class="hidden">
+      <div class="hint">Кейсы из системы управления тестами становятся сценариями без проектирования: агент проходит их шаги в браузере, автотест привязывается к исходному кейсу, результаты прогонов уходят туда же.</div>
+      <div class="grid2">
+        <div><label>Откуда</label><select id="pipeCaseConn"></select></div>
+        <div><label>Номера кейсов (через запятую; пусто — все кейсы проекта, только Test IT)</label><input id="pipeCaseIds" placeholder="101, 102, 115"></div>
+      </div>
+    </div>
+    <div data-pipe-src="explore" class="hidden">
+      <div class="hint">Planner обойдёт приложение по ссылкам (только GET, без форм) — от адреса ниже и его дочерних страниц; карта страниц и форм станет источником сценариев, когда ТЗ нет.</div>
+    </div>
     <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
-    <div class="design-choice" id="pipeChoice"></div>
-    <label class="inline" style="margin-top:10px"><input type="checkbox" id="pipeExplore"> Исследовать сайт (Planner): карта страниц и форм — источник сценариев, когда ТЗ нет</label>
+    <div class="design-choice" id="pipeChoice" data-pipe-design></div>
     <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
       <button class="btn primary" id="pipeStart">Запустить</button></div>
   </div>
@@ -1882,6 +1912,7 @@ async function loggedIn(me) {
   await loadProjects(parseRoute(location.hash).pid || store.get('tg_project'));
   if (!PROJECTS.length) { showTab('home'); openWizard(null); }   // first start: begin with creating a project
   else if (location.hash.length > 1) await route();
+  else if (store.get('tg_project') === PID) await openProject(PID);   // back where the person left off
   else showTab('home');
   if (SID) poll();
 }
@@ -1930,8 +1961,8 @@ async function switchProject(pid) {
   $('#pipeUrl').placeholder = PROJ.base_url || 'https://…';
   renderDesignChoices();
   AN = null; SCEN = [];
-  if ($('nav button.on')?.dataset.tab === 'req') loadAnalyses();
-  const tab = $('nav button.on').dataset.tab;
+  const tab = curTab();
+  if (tab === 'req') loadAnalyses();
   if (tab === 'home' && WIZ && WIZ.pid !== pid) showHomeList();
   else if (tab === 'home' && !WIZ) renderHome();
   if (tab === 'tests') loadTests();
@@ -1942,16 +1973,23 @@ async function switchProject(pid) {
   if (tab === 'studio') loadInterrupted();
   setStudioTask(null);
   studioForProject();
+  INBOX = null;      // the bell of the previous project is not this one's
   pollInbox();
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
-$('#projSel').onchange = async () => { await switchProject($('#projSel').value); setRoute(tabPath(curTab())); };
+// The project chosen on the projects page is entered; on a tab of a project - the same tab of the other one.
+$('#projSel').onchange = async () => {
+  const pid = $('#projSel').value;
+  if (curTab() === 'home' && !WIZ) return openProject(pid);
+  await switchProject(pid); setRoute(tabPath(curTab()));
+};
 $('#newProjBtn').onclick = () => { showTab('home'); openWizard(null); };
+$('#allProj').onclick = e => { e.preventDefault(); showTab('home', true); };
 async function refreshProject() { PROJ = await api('GET', `/api/projects/${PID}`); }
 
 // ---- tabs
 $$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
-const TABS = ['home', 'studio', 'tests', 'dash', 'tasks', 'req', 'pipe', 'proj'];
+const TABS = ['home', 'req', 'pipe', 'studio', 'tests', 'tasks', 'dash', 'proj'];
 const curTab = () => $('nav button.on')?.dataset.tab || 'home';
 // A tab writes its address when the address shows another tab (an entity opened in it writes its own first);
 // `own` - the person chose the tab: its list, not the entity open in it.
@@ -1959,7 +1997,9 @@ function showTab(t, own) {
   const at = parseRoute(location.hash);
   if (own || routeTab(at) !== t || (at.pid || null) !== (t === 'home' ? null : PID)) setRoute(tabPath(t));
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  $('#allProj').classList.toggle('on', t === 'home');
   [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
+  if (t !== 'home' && PID) store.set('tg_tab_' + PID, t);      // entering the project again opens it here
   if (t === 'home') showHomeList();
   if (t === 'studio') loadInterrupted();
   if (t === 'tests') loadTests();
@@ -2020,6 +2060,7 @@ const linkBtn = path => `<button class="btn small" onclick="copyLink('${esc(path
 function showMissing(r = {}) {
   const own = r.pid && PROJECTS.some(p => p.id === r.pid) && VIEW_TAB[r.view];
   $$('nav button').forEach(b => b.classList.remove('on'));
+  $('#allProj').classList.remove('on');
   [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== 'missing'));
   const link = $('#missingLink');
   link.href = '#' + (own ? `/p/${r.pid}/${r.view === 'settings' ? 'settings' : r.view}` : '/projects');
@@ -2094,7 +2135,7 @@ window.addEventListener('beforeunload', e => {
 // Polled every 30 s and when the browser tab is back; other projects are counted on the timer and when it opens.
 const INBOX_KINDS = {job: 'Запуски ждут решения', attention: 'Нужно подтверждение', review: 'Замечания ревьюера',
   model: 'Модель приложения', heal: 'Ревью самолечения', session: 'Прерванные сессии', task: 'Мои задачи'};
-let INBOX = null, OTHERS = [], inboxTimer = null, BELL_HTML = '';
+let INBOX = null, OTHERS = [], inboxTimer = null, BELL_HTML = '', BELL_PULSE = false;
 function waited(t) {
   const s = Date.now() / 1000 - (t || 0);
   if (!t || s < 60) return 'только что';
@@ -2120,6 +2161,11 @@ function renderBell() {
   const n = INBOX?.total || 0, count = $('#bellCount');
   count.textContent = n > 99 ? '99+' : n; count.classList.toggle('hidden', !n);
   $('#bellBtn').classList.toggle('has', !!n);
+  if (BELL_PULSE && INBOX) {       // just entered the project: once, when the inbox of this project is known
+    BELL_PULSE = false;
+    const bell = $('#bellBtn'); bell.classList.remove('pulse');
+    if (n) { void bell.offsetWidth; bell.classList.add('pulse'); }
+  }
   $('#bellBtn').title = n ? `Ждёт вас: ${n}` : 'Ждёт вас: решений нет';
   // the run waits for a decision - the Pipeline button says so on any tab
   const jobs = (INBOX?.items || []).filter(e => e.kind === 'job').length, pipe = $('nav button[data-tab="pipe"]');
@@ -3502,7 +3548,7 @@ async function loadCoverage() {
   const c = await api('GET', `/api/projects/${PID}/coverage`);
   const box = $('#covBox');
   if (!c.total) {
-    box.innerHTML = `<h3>Покрытие экранов</h3><div class="hint">Карты сайта ещё нет. Запустите конвейер с «Исследовать сайт» во вкладке <a href="#" onclick="showTab('pipe');return false">Конвейер</a> — Planner обойдёт приложение, и здесь появятся страницы без тестов.</div>`;
+    box.innerHTML = `<h3>Покрытие экранов</h3><div class="hint">Карты сайта ещё нет. Запустите <a href="#" onclick="beginWith('explore');return false">обход сайта в конвейере</a> — Planner обойдёт приложение, и здесь появятся страницы без тестов.</div>`;
     return;
   }
   const missing = c.pages.filter(p => !p.tests.length);
@@ -4323,13 +4369,14 @@ async function toPipeline() {
   if (!AN.readiness?.ready) return anTab('scenarios');
   showTab('pipe');
   await loadPipeReviews();
+  setPipeSrc('review');
   $('#pipeReview').value = AN.id; pipeReviewChanged();
   $('#pipeForm').scrollIntoView({behavior: 'smooth'});
 }
 function pickInPipeline() {     // the scenarios of this analysis, checked in the pipeline's common list
   PIPE_SEL = new Set(SCEN.filter(isReady).map(s => AN.id + ':' + s.id)); PIPE_SCEN_PID = PID;
   showTab('pipe');
-  $('#pipeScenBox').open = true;
+  setPipeSrc('picks');
   loadPipeScen();
 }
 
@@ -4466,7 +4513,8 @@ async function loadPipe() {
   if (!PID) return;
   $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process');return false">настроить</a>`;
   const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
-  $('#pipeCasesBox').classList.toggle('hidden', !tms.length);
+  $('#pipeCasesSrc').classList.toggle('hidden', !tms.length);
+  if (!tms.length && PIPE_SRC === 'cases') setPipeSrc('review');
   $('#pipeCaseConn').innerHTML = tms.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   loadPipeScen(); loadPipeReviews();
   const jobs = await api('GET', `/api/projects/${PID}/jobs`);
@@ -4495,19 +4543,46 @@ async function loadPipeReviews() {
   try { PIPE_REVIEWS = (await api('GET', `/api/projects/${PID}/analyses`)).filter(a => a.review); } catch { PIPE_REVIEWS = []; }
   const cur = $('#pipeReview').value;
   // Only the requirements that went through their steps (settled, the lifecycle confirmed) can be chosen.
-  $('#pipeReview').innerHTML = `<option value="">— новые требования: ссылки или текст ниже —</option>` + PIPE_REVIEWS.map(a =>
+  $('#pipeReview').innerHTML = PIPE_REVIEWS.map(a =>
     `<option value="${a.id}" ${a.step === 'scenarios' ? '' : 'disabled'}>${esc(fmtTime(a.created))} · ${esc(a.feature || a.title || 'Требования')} — ${esc(anStepBadge(a, a.step)[0])}${a.scenarios ? `, сценариев ${a.scenarios}` : ''}</option>`).join('');
-  if (PIPE_REVIEWS.some(a => a.id === cur && a.step === 'scenarios')) $('#pipeReview').value = cur;
+  const ready = PIPE_REVIEWS.filter(a => a.step === 'scenarios');
+  $('#pipeReview').value = ready.some(a => a.id === cur) ? cur : ready[0]?.id || '';
   pipeReviewChanged();
 }
+// New requirements are entered and reviewed only in «Требования»: here - those ready for test design.
 function pipeReviewChanged() {
-  const a = PIPE_REVIEWS.find(x => x.id === $('#pipeReview').value);
-  $('#pipeNewReq').classList.toggle('hidden', !!a);
-  $('#pipeReviewNote').innerHTML = !a ? (PIPE_REVIEWS.some(x => x.step === 'scenarios') ? '' : 'Готовых к тест-дизайну требований пока нет: проверьте и разберите их во вкладке <a href="#" onclick="showTab(\'req\');return false">«Требования»</a> (замечания, жизненный цикл) — или укажите новые требования ниже: запуск дождётся их разбора.')
+  const a = PIPE_REVIEWS.find(x => x.id === $('#pipeReview').value && x.step === 'scenarios');
+  const waiting = PIPE_REVIEWS.filter(x => x.step !== 'scenarios').length;
+  $('#pipeReviewBox').classList.toggle('hidden', !a);
+  $('#pipeReviewNote').innerHTML = !a ? `<b>Сначала проверьте требования.</b> Готовых к тест-дизайну требований пока нет${waiting ? ` (на разборе: ${waiting})` : ''}:
+      ревьюер проверит ТЗ, вы разберёте замечания и подтвердите жизненный цикл — потом здесь появятся требования для запуска.
+      <a href="#" onclick="beginWith('req');return false">Проверить требования →</a>`
     : `Конвейер спроектирует сценарии по этим требованиям (повторной проверки не будет) и сгенерирует тесты. <a href="#" onclick="showAnalysis('${a.id}');return false">Отчёт ревьюера</a>` +
       (a.scenarios ? ` · <span class="warn">по ним уже есть сценарии (${a.scenarios}) — новые добавятся к ним; уже спроектированные можно отметить в списке ниже</span>` : '');
 }
 $('#pipeReview').onchange = pipeReviewChanged;
+// The source of a run: one at a time (the API takes combinations - MCP, CI).
+let PIPE_SRC = 'review';
+function setPipeSrc(src) {
+  PIPE_SRC = src;
+  $$('#pipeSrc [data-src]').forEach(b => { b.setAttribute('aria-checked', b.dataset.src === src); b.tabIndex = b.dataset.src === src ? 0 : -1; });
+  $$('[data-pipe-src]').forEach(x => x.classList.toggle('hidden', x.dataset.pipeSrc !== src));
+  // the scenarios are already designed and the cases are scenarios: there is nothing to design
+  $('[data-pipe-design]').classList.toggle('hidden', ['picks', 'cases'].includes(src));
+  pipeStartLabel();
+}
+function pipeStartLabel() {
+  $('#pipeStart').textContent = PIPE_SRC === 'picks' ? (PIPE_SEL.size ? `Сгенерировать тесты (${PIPE_SEL.size})` : 'Сгенерировать тесты')
+    : PIPE_SRC === 'explore' ? 'Исследовать сайт' : 'Запустить';
+}
+$('#pipeSrc').addEventListener('click', e => { const b = e.target.closest('[data-src]'); if (b) setPipeSrc(b.dataset.src); });
+$('#pipeSrc').addEventListener('keydown', e => {       // a radio group: arrows move the choice
+  if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  const shown = $$('#pipeSrc [data-src]').filter(b => !b.classList.contains('hidden'));
+  const i = shown.findIndex(b => b.dataset.src === PIPE_SRC);
+  const next = shown[(i + (e.key === 'ArrowRight' ? 1 : shown.length - 1)) % shown.length];
+  setPipeSrc(next.dataset.src); next.focus(); e.preventDefault();
+});
 // The common list of the scenarios of every requirements analysis: a run can start on a choice of them.
 let PIPE_SCEN = [], PIPE_SEL = new Set(), PIPE_SCEN_PID = null;
 const scenKey = s => s.analysis_id + ':' + s.id;
@@ -4525,7 +4600,8 @@ function pipeScenShown() {
 }
 function renderPipeScen() {
   const shown = pipeScenShown();
-  $('#pipeScenCount').textContent = PIPE_SCEN.length ? `— выбрано ${PIPE_SEL.size} из ${PIPE_SCEN.length}` : '— пока нет';
+  $('#pipeScenCount').textContent = !PIPE_SCEN.length ? '' : PIPE_SEL.size ? `${PIPE_SEL.size} из ${PIPE_SCEN.length}` : PIPE_SCEN.length;
+  $('#pipeScenCount').title = PIPE_SCEN.length ? `Отмечено ${PIPE_SEL.size} из ${PIPE_SCEN.length}` : '';
   $('#pipeScenAll').checked = shown.length > 0 && shown.every(s => PIPE_SEL.has(scenKey(s)));
   let html = '', last = null;
   for (const s of shown) {
@@ -4542,7 +4618,7 @@ function renderPipeScen() {
       <td><button class="btn small" style="white-space:nowrap" data-studio="${scenKey(s)}" title="Записать тест по этому сценарию в Studio">Тест в Studio</button></td></tr>`;
   }
   $('#pipeScenBody').innerHTML = html || `<tr><td colspan="6" class="muted">${PIPE_SCEN.length ? 'Ничего не найдено.' : 'Сценариев пока нет: их проектирует конвейер по проверенным требованиям.'}</td></tr>`;
-  $('#pipeStart').textContent = PIPE_SEL.size ? `Сгенерировать тесты (${PIPE_SEL.size})` : 'Запустить';
+  pipeStartLabel();
 }
 $('#pipeScenFind').oninput = renderPipeScen;
 $('#pipeScenShow').onchange = renderPipeScen;
@@ -4558,31 +4634,23 @@ $('#pipeScenBody').addEventListener('change', e => {
     .forEach(s => el.checked ? PIPE_SEL.add(scenKey(s)) : PIPE_SEL.delete(scenKey(s)));
   renderPipeScen();
 });
-$('#pipeFileBtn').onclick = () => $('#pipeFile').click();
-$('#pipeFile').onchange = async e => {
-  try { for (const f of e.target.files) { const d = await readSpec(f); appendText($('#pipeText'), d.title, d.text); } }
-  catch (err) { $('#pipeErr').textContent = err.message; }
-  e.target.value = '';
-};
 $('#pipeStart').onclick = async () => {
   $('#pipeErr').textContent = '';
-  const links = $('#pipeLinks').value.split('\n').map(s => s.trim()).filter(Boolean);
-  const text = $('#pipeText').value.trim(), explore = $('#pipeExplore').checked;
-  const caseConn = $('#pipeCasesBox').open ? $('#pipeCaseConn').value : '';
-  if (PIPE_SEL.size) return startPicked();
-  const reviewed = PIPE_REVIEWS.find(a => a.id === $('#pipeReview').value);
-  if (!reviewed && !links.length && !text && !explore && !caseConn) { $('#pipeErr').textContent = 'Выберите проверенные требования, укажите ссылки, текст, ручные кейсы или включите исследование сайта'; return; }
-  if (reviewed && (explore || caseConn)) { $('#pipeErr').textContent = 'Проверенные требования запускаются отдельно: снимите «Исследовать сайт» и ручные кейсы'; return; }
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
+  if (PIPE_SRC === 'picks') return startPicked();
+  const url = $('#pipeUrl').value.trim();
+  let body;
+  if (PIPE_SRC === 'review') {
+    const reviewed = PIPE_REVIEWS.find(a => a.id === $('#pipeReview').value && a.step === 'scenarios');
+    if (!reviewed) { $('#pipeErr').textContent = 'Сначала проверьте требования во вкладке «Требования»'; return; }
+    body = {review_id: reviewed.id, url, ...readDesign('pipe')};
+  } else if (PIPE_SRC === 'cases') {
+    if (!$('#pipeCaseConn').value) { $('#pipeErr').textContent = 'Подключите систему управления тестами в «Проект → Подключения»'; return; }
+    body = {case_connection: $('#pipeCaseConn').value, case_ids: $('#pipeCaseIds').value, url};
+  } else body = {explore: true, url, ...readDesign('pipe')};
   $('#pipeStart').disabled = true;
   try {
-    const r = await api('POST', `/api/projects/${PID}/jobs`, reviewed
-      ? {review_id: reviewed.id, url: $('#pipeUrl').value.trim(), ...readDesign('pipe')}
-      : {links, text, explore, url: $('#pipeUrl').value.trim(),
-         case_connection: caseConn, case_ids: caseConn ? $('#pipeCaseIds').value : '', ...readDesign('pipe')});
-    $('#pipeReview').value = ''; pipeReviewChanged();
-    $('#pipeExplore').checked = false;
-    $('#pipeLinks').value = $('#pipeText').value = '';
+    const r = await api('POST', `/api/projects/${PID}/jobs`, body);
     openJob(r.id); loadPipe();
   } catch (e) { $('#pipeErr').textContent = e.message; }
   finally { $('#pipeStart').disabled = false; }
@@ -4590,14 +4658,16 @@ $('#pipeStart').onclick = async () => {
 async function startPicked() {
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
   const picks = [...PIPE_SEL].map(k => { const [analysis_id, scenario_id] = k.split(':'); return {analysis_id, scenario_id}; });
+  if (!picks.length) { $('#pipeErr').textContent = 'Отметьте сценарии в списке'; return; }
   const tested = PIPE_SCEN.filter(s => PIPE_SEL.has(scenKey(s)) && s.tests).length;
-  if (!confirm(`Сгенерировать тесты по ${picks.length} сценариям? Агент пройдёт их в браузере по очереди — расход модели.` +
-    (tested ? `
-У ${tested} из них тесты уже есть — будут созданы ещё.` : ''))) return;
+  const go = await ask({title: `Сгенерировать тесты по ${picks.length} сценариям?`,
+    text: 'Агент пройдёт их в браузере по очереди — расход модели.' + (tested ? ` У ${tested} из них тесты уже есть — будут созданы ещё.` : ''),
+    actions: [{label: 'Сгенерировать тесты', value: true, kind: 'primary'}]});
+  if (!go) return;
   $('#pipeStart').disabled = true;
   try {
     const r = await api('POST', `/api/projects/${PID}/jobs`, {picks, url: $('#pipeUrl').value.trim()});
-    PIPE_SEL = new Set(); $('#pipeScenBox').open = false;
+    PIPE_SEL = new Set();
     openJob(r.id); loadPipe();
   } catch (e) { $('#pipeErr').textContent = e.message; }
   finally { $('#pipeStart').disabled = false; }
@@ -4910,9 +4980,14 @@ async function renderHome() {
         <button class="btn small" onclick="openWizard('${p.id}')">Настроить</button></div></div>`;
   }).join('') || '<div class="card muted">Проектов пока нет.</div>';
 }
+// Entering a project: the tab the person left it on, the first time - the first step chosen after the wizard
+// (PROJ.start); the bell draws the eye when decisions wait.
+const START_TAB = {req: 'req', studio: 'studio', explore: 'pipe'};
 async function openProject(pid) {
   if (pid !== PID) await switchProject(pid);
-  showTab('req');
+  const last = store.get('tg_tab_' + pid);
+  showTab(TABS.includes(last) && last !== 'home' ? last : START_TAB[PROJ.start] || 'req', true);
+  BELL_PULSE = true; renderBell();
 }
 $('#homeNew').onclick = () => openWizard(null);
 $('#wzClose').onclick = () => { if (PID) showTab('home', true); };
@@ -4941,7 +5016,7 @@ function renderWizard() {
   $$('[data-wz]').forEach(x => x.classList.toggle('hidden', +x.dataset.wz !== w.step));
   if (w.step === 2) renderModel();
   if (w.step === 3) renderSlots();
-  if (w.step === 4) fillWizardProcess();
+  if (w.step === 4) { fillWizardProcess(); $$('#wzStart button').forEach(b => b.classList.toggle('cur', b.dataset.start === PROJ.start)); }
 }
 document.addEventListener('click', e => {
   const go = e.target.closest('[data-wzgo]');
@@ -5036,7 +5111,9 @@ function wizardWarn() {
 }
 ['#wzReq', '#wzEngine', '#wzPub', '#wzTools'].forEach(s => $(s).addEventListener('change', wizardWarn));
 
-$('#wzFinish').onclick = async () => {
+// The wizard ends with the first step: saved in the project (start) - entering it the first time opens there.
+$('#wzStart').addEventListener('click', e => { const b = e.target.closest('[data-start]'); if (b) wizardFinish(b.dataset.start); });
+async function wizardFinish(start) {
   $('#wz3Err').textContent = '';
   const p = structuredClone(PROJ.pipeline);
   p.requirements.connection = $('#wzReq').value;
@@ -5046,15 +5123,32 @@ $('#wzFinish').onclick = async () => {
   p.publish.enabled = !!$('#wzPub').value;
   if ($('#wzPub').value) p.publish.connection = $('#wzPub').value;
   p.scenarios.select = $('#wzSelect').value;
-  $('#wzFinish').disabled = true;
+  const btns = $$('#wzStart button');
+  btns.forEach(b => b.disabled = true);
   try {
-    PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: p});
+    PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: p, start});
     $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
     WIZ = null;
-    showTab('req');
+    beginWith(start);
   } catch (e) { $('#wz3Err').textContent = e.message; }
-  finally { $('#wzFinish').disabled = false; }
-};
+  finally { btns.forEach(b => b.disabled = false); }
+}
+function beginWith(start) {
+  if (start === 'studio') {
+    showTab('studio', true);
+    if (SID) leaveSession(true);
+    $('#fUrl').value = PROJ.base_url || ''; $('#fUrl').dataset.auto = '1';
+    $('#fScenario').focus();
+  } else if (start === 'explore') {
+    showTab('pipe', true);
+    setPipeSrc('explore');
+    $('#pipeStart').focus();
+  } else {
+    showTab('req', true);
+    $('#reqNew').open = true;
+    $('#srcLink').focus();
+  }
+}
 
 // ---- project settings
 function openSettings(sub, sec) {

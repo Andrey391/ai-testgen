@@ -604,6 +604,7 @@ class ProjectBody(BaseModel):
     base_url: str | None = None
     language: str | None = None      # "" | ru | en: steps, scenarios, Gherkin
     pipeline: dict | None = None
+    start: str | None = None         # the first step chosen after the wizard: req | studio | explore
 
 
 @app.get("/api/projects")

@@ -20,7 +20,8 @@ from playwright.sync_api import expect, sync_playwright
 from testgen import agent, auth, pipeline, projects, storage, tasks
 from testgen.steps import new_step
 
-TABS = ["studio", "tests", "dash", "tasks", "req", "pipe", "proj", "home"]
+# the menu in the order of work: requirements, pipeline, Studio, tests | tasks, dashboard | project
+TABS = ["req", "pipe", "studio", "tests", "tasks", "dash", "proj"]
 
 
 def _free_port() -> int:
@@ -64,7 +65,7 @@ def _open(page, studio_url, project) -> None:
     page.goto(studio_url)
     expect(page.locator("nav")).to_be_visible()
     expect(page.locator("#projSel")).to_have_value(project["id"])
-    page.wait_for_load_state("networkidle")     # loggedIn() ends with showTab('home'): a click before it is lost
+    page.wait_for_load_state("networkidle")     # loggedIn() ends by entering the project: a click before it is lost
 
 
 def test_tabs_switch_without_errors(page, studio_url, project):
@@ -73,6 +74,8 @@ def test_tabs_switch_without_errors(page, studio_url, project):
         page.click(f"nav button[data-tab={tab}]")
         expect(page.locator(f"#tab-{tab}")).to_be_visible()
         expect(page.locator(f"nav button[data-tab={tab}]")).to_have_class("on")
+    page.click("#allProj")
+    expect(page.locator("#tab-home")).to_be_visible()
     page.wait_for_load_state("networkidle")
     assert page.errors == []
 
@@ -245,4 +248,61 @@ def test_sessions_of_two_projects_switch_with_the_project(page, studio_url, proj
     page.click("#sessBar >> text=+ Ещё сессия")
     expect(page.locator("#startForm")).to_be_visible()
     expect(page.locator("#sessBar .sess-chip")).to_have_count(2)
+    assert page.errors == []
+
+
+# ---- the menu by the stages of work and the first start (stage 5)
+
+def test_menu_follows_the_work_and_a_project_opens_where_it_was_left(page, studio_url, project):
+    _open(page, studio_url, project)
+    assert page.locator("nav button:visible").evaluate_all("bs => bs.map(b => b.dataset.tab)") == TABS
+    expect(page.locator("#tab-req")).to_be_visible()             # the first time - the requirements
+    page.click("nav button[data-tab=tests]")
+    page.click("#allProj")
+    expect(page).to_have_url(f"{studio_url}/#/projects")
+    page.locator("#projCards .card", has_text=project["name"]).get_by_role("button", name="Открыть").click()
+    expect(page.locator("#tab-tests")).to_be_visible()          # the tab it was left on
+    page.reload()
+    expect(page.locator("#tab-tests")).to_be_visible()
+    page.goto(studio_url)                                        # no address: the last project, its last tab
+    expect(page.locator("#tab-tests")).to_be_visible()
+    assert page.errors == []
+
+
+def test_wizard_ends_with_the_first_step_and_studio_is_five_clicks_away(page, studio_url, project):
+    _open(page, studio_url, project)
+    name = "Магазин " + uuid.uuid4().hex[:6]
+    page.click("#allProj")
+    page.click("#homeNew")                                       # 1
+    page.fill("#wzName", name)
+    page.fill("#wzUrl", project["base_url"])
+    page.click("#wz1Next")                                       # 2
+    page.locator("[data-wz='2'] [data-wzgo='3']").click()        # 3
+    page.locator("[data-wz='3'] [data-wzgo='4']").click()        # 4
+    page.locator("#wzStart [data-start=studio]").click()         # 5 - then «Начать» starts the agent
+    expect(page.locator("#tab-studio")).to_be_visible()
+    expect(page.locator("#startForm")).to_be_visible()
+    expect(page.locator("#fUrl")).to_have_value(project["base_url"])
+    expect(page.locator("#fScenario")).to_be_focused()
+    made = next(p for p in projects.list_projects() if p["name"] == name)
+    assert projects.get(made["id"])["start"] == "studio"
+    assert page.errors == []
+
+
+def test_pipeline_takes_requirements_from_their_tab_only(page, studio_url, project):
+    _open(page, studio_url, project)
+    page.click("nav button[data-tab=pipe]")
+    form = page.locator("#pipeForm")
+    expect(form.locator("#pipeReviewNote")).to_contain_text("Сначала проверьте требования")
+    expect(form.locator("textarea")).to_have_count(0)            # no new requirements here
+    expect(page.locator("[data-pipe-design]")).to_be_visible()
+    page.get_by_role("radio", name="Сценарии из анализа").click()
+    expect(page.locator("[data-pipe-src=picks]")).to_be_visible()
+    expect(page.locator("[data-pipe-design]")).to_be_hidden()   # the scenarios are designed already
+    page.get_by_role("radio", name="Обход сайта").click()
+    expect(page.locator("#pipeStart")).to_have_text("Исследовать сайт")
+    page.get_by_role("radio", name="Проверенные требования").click()
+    page.locator("#pipeReviewNote a", has_text="Проверить требования").click()
+    expect(page.locator("#tab-req")).to_be_visible()
+    expect(page.locator("#reqNew")).to_have_attribute("open", "")
     assert page.errors == []
