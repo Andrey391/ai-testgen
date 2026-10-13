@@ -138,7 +138,8 @@ def _change(pid: str, aid: str, fn) -> dict:
 
 
 def list_analyses(pid: str, limit: int = 50) -> list[dict]:
-    """The history, newest first; `step` - where each analysis is on the way to test design (readiness())."""
+    """The history, newest first; `step` - where each analysis is on the way to test design, `blocked` - what
+    holds it back (readiness())."""
     from . import knowledge
     out, project, doc = [], projects.get(pid), knowledge.get(pid)
     for _, text, _ in fs.documents(_dir(pid)):
@@ -148,11 +149,12 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
             continue
         ready = [s for s in a["scenarios"] if not s.get("pending")]
         rv = a.get("review") or {}
+        state = readiness(a, project, doc)
         out.append({k: a.get(k) for k in ("id", "created", "finished", "user", "title", "feature", "status", "error",
                                           "url")}
                    | {"scenarios": len(ready), "tests": sum(len(s.get("test_ids") or []) for s in ready),
                       "review": {"verdict": rv.get("verdict"), "at": rv.get("at")} if rv else None,
-                      "step": readiness(a, project, doc)["step"]})
+                      "step": state["step"], "blocked": state["blocked"]})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:limit]
 
 

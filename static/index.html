@@ -127,6 +127,7 @@ th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-a
 th{font-size:12px;color:var(--muted);font-weight:500}
 tr.click{cursor:pointer}
 tr.click:hover td{background:var(--bg)}
+.pipe-an{margin-top:6px;padding:7px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px}
 .std-about{font-size:13px;margin-top:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px}
 .std-about tr.on td{background:var(--soft)}
 .live-log{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:calc(5 * 1.5em + 16px);max-height:calc(12 * 1.5em + 16px);overflow-y:auto;margin-top:8px}
@@ -1000,6 +1001,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div id="pipeReviewBox"><label>Требования, разобранные во вкладке «Требования»</label>
         <select id="pipeReview"></select></div>
       <div class="hint" id="pipeReviewNote"></div>
+      <div id="pipeLeft"></div>
     </div>
     <div data-pipe-src="picks" class="hidden">
       <div class="hint">Сценарии, спроектированные раньше по проверенным требованиям. Отмеченные сразу идут на генерацию тестов — без нового проектирования. Тесты привяжутся к своим сценариям; «Тест в Studio» — записать тест по сценарию вручную с агентом.</div>
@@ -4657,27 +4659,48 @@ function pipeBusy(job) {
     <span class="muted" style="font-size:12px">Новый запуск станет доступен, когда этот завершится или будет остановлен</span></div>`;
 }
 // Requirements reviewed in the Requirements tab: a run designs their scenarios (no new review).
-let PIPE_REVIEWS = [];
+let PIPE_REVIEWS = [], PIPE_ANS = [];
+const pipeReady = () => PIPE_REVIEWS.find(a => a.id === $('#pipeReview').value && a.step === 'scenarios');
 async function loadPipeReviews() {
-  try { PIPE_REVIEWS = (await api('GET', `/api/projects/${PID}/analyses`)).filter(a => a.review); } catch { PIPE_REVIEWS = []; }
+  try { PIPE_ANS = await api('GET', `/api/projects/${PID}/analyses`); } catch { PIPE_ANS = []; }
+  PIPE_REVIEWS = PIPE_ANS.filter(a => a.review);
   const cur = $('#pipeReview').value;
-  // Only the requirements that went through their steps (settled, the lifecycle confirmed) can be chosen.
-  $('#pipeReview').innerHTML = PIPE_REVIEWS.map(a =>
-    `<option value="${a.id}" ${a.step === 'scenarios' ? '' : 'disabled'}>${esc(fmtTime(a.created))} · ${esc(a.feature || a.title || 'Требования')} — ${esc(anStepBadge(a, a.step)[0])}${a.scenarios ? `, сценариев ${a.scenarios}` : ''}</option>`).join('');
+  // Only the requirements that went through their steps (settled, the lifecycle confirmed) can be chosen;
+  // the others are listed below with what is left to do.
   const ready = PIPE_REVIEWS.filter(a => a.step === 'scenarios');
+  $('#pipeReview').innerHTML = ready.map(a =>
+    `<option value="${a.id}">${esc(fmtTime(a.created))} · ${esc(a.feature || a.title || 'Требования')}${a.scenarios ? ` — сценариев ${a.scenarios}` : ''}</option>`).join('');
   $('#pipeReview').value = ready.some(a => a.id === cur) ? cur : ready[0]?.id || '';
   pipeReviewChanged();
 }
+const PIPE_LEFT_SHOWN = 5;
+function pipeAnRow(a) {        // requirements on their way to test design: the step, why, where to go on
+  const [st, cls] = anStepBadge(a, a.step);
+  const why = a.status === 'running' ? 'ревьюер проверяет требования'
+    : a.status === 'error' && !a.review ? 'проверка не удалась — запустите её заново' : (a.blocked || []).slice(0, 2).join('; ');
+  return `<div class="row pipe-an"><span class="badge ${cls}">${esc(st)}</span>
+    <span class="grow"><b>${esc(a.feature || a.title || 'Требования')}</b> <span class="muted" style="font-size:12px">— ${fmtTime(a.created)}</span>
+      ${why ? `<div class="hint">Осталось: ${esc(why)}</div>` : ''}</span>
+    <button class="btn small" style="white-space:nowrap" onclick="showAnalysis('${a.id}')">${a.status === 'running' ? 'Открыть' : a.review ? 'Продолжить разбор →' : 'Проверить →'}</button></div>`;
+}
 // New requirements are entered and reviewed only in «Требования»: here - those ready for test design.
 function pipeReviewChanged() {
-  const a = PIPE_REVIEWS.find(x => x.id === $('#pipeReview').value && x.step === 'scenarios');
-  const waiting = PIPE_REVIEWS.filter(x => x.step !== 'scenarios').length;
+  const a = pipeReady();
+  const left = PIPE_ANS.filter(x => !(x.review && x.step === 'scenarios'));
   $('#pipeReviewBox').classList.toggle('hidden', !a);
-  $('#pipeReviewNote').innerHTML = !a ? `<b>Сначала проверьте требования.</b> Готовых к тест-дизайну требований пока нет${waiting ? ` (на разборе: ${waiting})` : ''}:
-      ревьюер проверит ТЗ, вы разберёте замечания и подтвердите жизненный цикл — потом здесь появятся требования для запуска.
-      <a href="#" onclick="beginWith('req');return false">Проверить требования →</a>`
+  // Scenarios designed earlier (of requirements not under review) can be run without waiting.
+  const held = new Set(PIPE_ANS.filter(x => x.review && ['review', 'findings'].includes(x.step)).map(x => x.id));
+  const untested = PIPE_SCEN.filter(s => !s.tests && !held.has(s.analysis_id)).length;
+  $('#pipeReviewNote').innerHTML = !a ? `<b>Запустить пока нечего.</b> Конвейер берёт в работу только требования, разобранные во вкладке «Требования»:
+      ревьюер проверил ТЗ, вы разобрали замечания и подтвердили жизненный цикл. ${left.length ? 'Ниже — что осталось сделать по каждым требованиям.' : ''}
+      ${!left.length ? '<a href="#" onclick="beginWith(\'req\');return false">Проверить требования →</a>' : ''}
+      ${untested ? `<div style="margin-top:4px">Уже спроектированные сценарии без тестов (${untested}) можно запустить сразу — <a href="#" onclick="setPipeSrc('picks');return false">Сценарии из анализа</a>.</div>` : ''}`
     : `Конвейер спроектирует сценарии по этим требованиям (повторной проверки не будет) и сгенерирует тесты. <a href="#" onclick="showAnalysis('${a.id}');return false">Отчёт ревьюера</a>` +
       (a.scenarios ? ` · <span class="warn">по ним уже есть сценарии (${a.scenarios}) — новые добавятся к ним; уже спроектированные можно отметить в списке ниже</span>` : '');
+  $('#pipeLeft').innerHTML = !left.length ? '' : (a ? `<div class="hint" style="margin-top:8px">Ещё на разборе:</div>` : '') +
+    left.slice(0, PIPE_LEFT_SHOWN).map(pipeAnRow).join('') +
+    (left.length > PIPE_LEFT_SHOWN ? `<div class="hint" style="margin-top:6px">и ещё ${left.length - PIPE_LEFT_SHOWN} — <a href="#" onclick="beginWith('req');return false">во вкладке «Требования»</a></div>` : '');
+  pipeStartLabel();
 }
 $('#pipeReview').onchange = pipeReviewChanged;
 // The source of a run: one at a time (the API takes combinations - MCP, CI).
@@ -4693,6 +4716,10 @@ function setPipeSrc(src) {
 function pipeStartLabel() {
   $('#pipeStart').textContent = PIPE_SRC === 'picks' ? (PIPE_SEL.size ? `Сгенерировать тесты (${PIPE_SEL.size})` : 'Сгенерировать тесты')
     : PIPE_SRC === 'explore' ? 'Исследовать сайт' : 'Запустить';
+  // Nothing to start on: the button waits for a choice, the reason is next to it.
+  const none = PIPE_SRC === 'review' ? !pipeReady() : PIPE_SRC === 'picks' && !PIPE_SEL.size;
+  $('#pipeStart').disabled = none;
+  $('#pipeStart').title = !none ? '' : PIPE_SRC === 'picks' ? 'Отметьте сценарии в списке' : 'Нет требований, готовых к тест-дизайну';
 }
 $('#pipeSrc').addEventListener('click', e => { const b = e.target.closest('[data-src]'); if (b) setPipeSrc(b.dataset.src); });
 $('#pipeSrc').addEventListener('keydown', e => {       // a radio group: arrows move the choice
@@ -4737,7 +4764,7 @@ function renderPipeScen() {
       <td><button class="btn small" style="white-space:nowrap" data-studio="${scenKey(s)}" title="Записать тест по этому сценарию в Studio">Тест в Studio</button></td></tr>`;
   }
   $('#pipeScenBody').innerHTML = html || `<tr><td colspan="6" class="muted">${PIPE_SCEN.length ? 'Ничего не найдено.' : 'Сценариев пока нет: их проектирует конвейер по проверенным требованиям.'}</td></tr>`;
-  pipeStartLabel();
+  pipeReviewChanged();      // the hint counts the scenarios ready to run
 }
 $('#pipeScenFind').oninput = renderPipeScen;
 $('#pipeScenShow').onchange = renderPipeScen;
@@ -4772,7 +4799,7 @@ $('#pipeStart').onclick = async () => {
     const r = await api('POST', `/api/projects/${PID}/jobs`, body);
     openJob(r.id); loadPipe();
   } catch (e) { $('#pipeErr').textContent = e.message; }
-  finally { $('#pipeStart').disabled = false; }
+  finally { pipeStartLabel(); }
 };
 async function startPicked() {
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
@@ -4789,7 +4816,7 @@ async function startPicked() {
     PIPE_SEL = new Set();
     openJob(r.id); loadPipe();
   } catch (e) { $('#pipeErr').textContent = e.message; }
-  finally { $('#pipeStart').disabled = false; }
+  finally { pipeStartLabel(); }
 }
 async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
   clearTimeout(jobTimer);

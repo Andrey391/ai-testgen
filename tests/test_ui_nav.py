@@ -293,7 +293,8 @@ def test_pipeline_takes_requirements_from_their_tab_only(page, studio_url, proje
     _open(page, studio_url, project)
     page.click("nav button[data-tab=pipe]")
     form = page.locator("#pipeForm")
-    expect(form.locator("#pipeReviewNote")).to_contain_text("Сначала проверьте требования")
+    expect(form.locator("#pipeReviewNote")).to_contain_text("Запустить пока нечего")
+    expect(page.locator("#pipeStart")).to_be_disabled()          # nothing ready: the reason is in the note
     expect(form.locator("textarea")).to_have_count(0)            # no new requirements here
     expect(page.locator("[data-pipe-design]")).to_be_visible()
     page.get_by_role("radio", name="Сценарии из анализа").click()
@@ -301,6 +302,7 @@ def test_pipeline_takes_requirements_from_their_tab_only(page, studio_url, proje
     expect(page.locator("[data-pipe-design]")).to_be_hidden()   # the scenarios are designed already
     page.get_by_role("radio", name="Обход сайта").click()
     expect(page.locator("#pipeStart")).to_have_text("Исследовать сайт")
+    expect(page.locator("#pipeStart")).to_be_enabled()
     page.get_by_role("radio", name="Проверенные требования").click()
     page.locator("#pipeReviewNote a", has_text="Проверить требования").click()
     expect(page.locator("#tab-req")).to_be_visible()
