@@ -32,14 +32,25 @@ def _plan(steps):
 
 
 async def _drive(s: StudioSession, timeout: float = 90) -> None:
-    """Start in Auto-Pilot and wait until the agent finishes or waits for a person."""
+    """Start in Auto-Pilot and wait until the agent finishes or waits for a person. A script of the fake
+    model that fails (the page is not what it expects) fails the test at once, with what the browser saw."""
     await s.start()
     s.set_autopilot(True)
     for _ in range(int(timeout * 10)):
         if s.status in ("done", "error") or (s.status == "idle" and s._auto_task.done()):
             return
+        task = s._auto_task
+        if task and task.done() and not task.cancelled() and task.exception():
+            raise AssertionError(f"Auto-Pilot упал: {task.exception()}\n{_seen(s)}") from task.exception()
         await asyncio.sleep(0.1)
-    raise AssertionError(f"Сессия не остановилась: {s.status} {s.chat}")
+    raise AssertionError(f"Сессия не остановилась: {s.status} {s.chat}\n{_seen(s)}")
+
+
+def _seen(s: StudioSession) -> str:
+    steps = [(x["action"], x["description"], x["status"], x.get("error", "")) for x in s.steps]
+    events = (getattr(s.bs, "events", None) or [])[-10:]
+    in_flight = [f"{r.method} {r.url}" for r in getattr(s.bs, "_in_flight", ())]
+    return f"Шаги: {steps}\nСтраница: {s.page_url}\nСобытия браузера: {events}\nЗапросы в пути: {in_flight}"
 
 
 LOGIN = [("fill", {"text": "{{username}}", "press_enter": False, "description": "Ввести логин"}, "Логин"),

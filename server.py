@@ -25,9 +25,9 @@ from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Re
                                StreamingResponse)
 from pydantic import BaseModel
 
-from testgen import (access, analyses, apiclient, audit, auth, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
+from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
-                     publisher, reports, reuse, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
+                     publisher, reports, reuse, review, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
 from testgen import worker as worker_mod
 from testgen import agent as agent_mod
@@ -213,6 +213,8 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/knowledge/pending"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/sort"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/duplicates"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/blocks/{key}/accept"): "test.module",
+    ("POST", "/api/projects/{pid}/blocks/{key}/dismiss"): "test.module",
     ("POST", "/api/projects/{pid}/files"): "file.upload",
     ("DELETE", "/api/projects/{pid}/files/{name}"): "file.delete",
     ("POST", "/api/projects/{pid}/runs"): "suite.start",
@@ -2301,7 +2303,7 @@ class ReqBody(BaseModel):
     types: list[str] | None = None
     layers: list[str] | None = None
     techniques: list[str] | None = None
-    validate_spec: bool | None = None   # validate the specification first (None = "requirements.validate")
+    validate_spec: bool = False     # validate the specification first (the Requirements tab reviews it: review.py)
 
 
 async def _learn(p: dict, requirements: str, user: str, log=None) -> None:
@@ -2321,17 +2323,22 @@ async def _learn(p: dict, requirements: str, user: str, log=None) -> None:
 
 @app.post("/api/scenarios")
 async def gen_scenarios(body: ReqBody, request: Request):
-    """Requirements -> scenarios; every generation is kept in the project's analysis history."""
+    """Requirements -> scenarios at once, for API clients; every generation is kept in the project's analysis
+    history. The studio itself reviews requirements first (/api/requirements/review) and designs scenarios in
+    the pipeline."""
     p = project(body.project_id, "editor")
     _require_model(p)
-    a = analyses.create(p["id"], body.requirements, body.url, request.state.user)
+    a = analyses.create(p["id"], body.requirements, body.url, request.state.user, work="generate")
     cfg = scenarios.settings(p, body.types, body.layers, body.techniques)
-    check = p["pipeline"]["requirements"]["validate"] if body.validate_spec is None else body.validate_spec
+    check = body.validate_spec
     user = request.state.user
     if not body.stream:
+        async def generate():
+            async with analyses.working(p["id"], a["id"]):
+                return await scenarios.generate(body.requirements, body.url, project=p, cfg=cfg, record=False)
         try:
             learn = submit(_learn(p, body.requirements, user))
-            res = await call(scenarios.generate(body.requirements, body.url, project=p, cfg=cfg, record=False))
+            res = await call(generate())
             await asyncio.wrap_future(learn)
         except Exception as e:
             analyses.finish(p["id"], a["id"], error=llm.api_error_text(e))
@@ -2360,6 +2367,10 @@ async def gen_scenarios(body: ReqBody, request: Request):
         send({"type": "log", "text": text})
 
     async def work():
+        async with analyses.working(p["id"], a["id"]):
+            await generating()
+
+    async def generating():
         learn = asyncio.create_task(_learn(p, body.requirements, user, log))
         try:
             if check:
@@ -2451,6 +2462,127 @@ async def validate_requirements(body: ValidateBody, request: Request):
     return report
 
 
+class ReviewBody(BaseModel):
+    project_id: str
+    requirements: str = ""
+    analysis_id: str = ""       # review again the requirements of this analysis (the new report replaces the old)
+    standard: str = ""          # empty = the project's ("requirements.standard")
+
+
+async def _learn_reviewed(p: dict, aid: str, user: str, log=None) -> str:
+    """The application model learns from the reviewed requirements ("requirements.learn_model") only when every
+    finding of the review is fixed or marked not relevant: the lifecycle of the system does not take in what
+    the authors have not settled. What happened, for the person ("" - nothing to do)."""
+    say = log or (lambda line: None)
+    a = analyses.get(aid)
+    text = (a or {}).get("requirements", "")
+    if not a or a.get("learned") or not p["pipeline"]["requirements"].get("learn_model") \
+            or text.lstrip().startswith(explorer.MAP_TITLE):
+        return ""
+    left = review.unresolved(a.get("review"))
+    if left:
+        line = (f"Модель приложения обновится по требованиям, когда замечания, блокирующие тест-дизайн, будут "
+                f"исправлены или отмечены неактуальными (осталось {len(left)})")
+        say(line)
+        return line
+    say("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
+    try:
+        doc = await knowledge.extract(p, text, user)
+    except Exception as e:      # the model is a help: the review is done without it
+        line = f"Модель приложения не обновлена: {llm.api_error_text(e)}"
+        say(line)
+        return line
+    analyses.mark_learned(p["id"], aid)
+    line = f"Модель приложения: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}"
+    say(line)
+    return line
+
+
+@app.post("/api/requirements/review")
+async def review_requirements(body: ReviewBody, request: Request):
+    """The first job of the Requirements tab: the reviewer subagent (review.py), on a clean context of its own,
+    finds the defects of the specification and where it disagrees with the lifecycle of the system; then the
+    application model learns from it ("requirements.learn_model"). The analysis keeps the report; scenarios and
+    tests are designed from it in the pipeline. NDJSON events: analysis, log, review, done | error; the page
+    went away («Остановить») - the review stops and the previous report stays."""
+    p = project(body.project_id, "editor")
+    _require_model(p)
+    a = analyses.get(body.analysis_id) if body.analysis_id else None
+    if body.analysis_id and (not a or a["project_id"] != p["id"]):
+        raise HTTPException(404, "Анализ не найден")
+    text = body.requirements.strip() or (a or {}).get("requirements", "")
+    if not text.strip():
+        raise HTTPException(400, "Нет текста требований")
+    user = request.state.user
+    same = None if a else analyses.same_text(p["id"], text)     # the same text checked again updates its analysis
+    again = bool(same) and same["status"] != "running"
+    if again:
+        a = same
+    if a:
+        try:
+            a = analyses.restart(p["id"], a["id"])
+        except analyses.Conflict as e:
+            raise HTTPException(409, str(e))
+    else:
+        a = analyses.create(p["id"], text, "", user, work="review")
+    pid, aid = p["id"], a["id"]
+    notes = review.notes(a.get("review"))
+    # A review cut off (a restart of the studio, «Остановить») kept the checks it finished: only the rest is asked.
+    key = review.parts_key(p, text, body.standard, notes)
+    done = analyses.review_parts(a, key)
+    loop, queue = asyncio.get_running_loop(), asyncio.Queue()
+
+    def send(event: dict) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event | {"at": time.time()})
+
+    def log(line: str) -> None:
+        send({"type": "log", "text": line})
+
+    def keep(name: str, value: dict) -> None:
+        analyses.keep_review_part(pid, aid, key, name, value)
+
+    async def work():
+        async with analyses.working(pid, aid):
+            await reviewing()
+
+    async def reviewing():
+        try:
+            report = await review.review(p, text, body.standard, log=log, notes=notes, done=done, keep=keep)
+            analyses.set_review(pid, aid, report)
+            send({"type": "review", "review": review.public(report)})
+            await _learn_reviewed(p, aid, user, log)
+            analyses.finish(pid, aid)
+            send({"type": "done", "analysis": analyses.view(analyses.get(aid))})
+        except asyncio.CancelledError:
+            analyses.finish(pid, aid, error="Проверка остановлена", status="cancelled")
+            raise
+        except Exception as e:
+            analyses.finish(pid, aid, error=llm.api_error_text(e))
+            send({"type": "error", "text": llm.api_error_text(e)})
+
+    send({"type": "analysis", "analysis": analyses.view(a)})
+    if again:
+        log("Эти требования уже проверялись: обновляю их анализ — решения по прежним замечаниям ревьюер учтёт")
+    future = submit(work())
+
+    async def events():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), 15)
+                except asyncio.TimeoutError:
+                    yield "\n"      # keeps proxies from closing a quiet connection
+                    continue
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if event["type"] in ("done", "error"):
+                    return
+        finally:
+            future.cancel()
+
+    return StreamingResponse(events(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 # ---------- The application model: entities, dependencies, lifecycles, test data, memory ----------
 
 @app.get("/api/projects/{pid}/knowledge")
@@ -2478,11 +2610,18 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
     a = analyses.get(body.analysis_id) if body.analysis_id else None
     if body.analysis_id and (not a or a["project_id"] != pid):
         raise HTTPException(404, "Анализ не найден")
+    left = review.unresolved((a or {}).get("review"))
+    if a and left:
+        raise HTTPException(409, f"Сначала разберите замечания ревьюера, блокирующие тест-дизайн (осталось {len(left)}): "
+                                 "исправьте их в ТЗ или отметьте неактуальными — модель приложения учится только на "
+                                 "согласованных требованиях")
     text = body.requirements.strip() or (a or {}).get("requirements", "")
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
     try:
         await call(knowledge.extract(p, text, request.state.user))
+        if a:
+            analyses.mark_learned(pid, a["id"])
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
     return knowledge.view(pid)
@@ -2522,6 +2661,54 @@ async def sort_knowledge(pid: str, request: Request, body: SortBody | None = Non
     except llm.ProviderError as e:
         raise HTTPException(502, str(e))
     return knowledge.view(pid) | {"sorting": res}
+
+
+@app.get("/api/projects/{pid}/blocks")
+async def reusable_blocks(pid: str):
+    """Chains of actions repeated in stable tests (candidates for modules) and the project's modules, with
+    their sections and the tests that call them."""
+    project(pid)
+    tests = storage.all_tests(pid)
+    used: dict[str, list[str]] = {}
+    for t in tests:
+        for s in t.get("steps") or []:
+            if s.get("action") == "use_module":
+                try:
+                    mid = json.loads(s.get("value") or "{}").get("module")
+                except ValueError:
+                    continue
+                used.setdefault(mid, [])
+                if t["name"] not in used[mid]:
+                    used[mid].append(t["name"])
+    mods = [{"id": m["id"], "name": m["name"], "steps": len(m.get("steps") or []),
+             "section": blocks.section_label(m.get("section") or [], blocks.module_start(m)
+                                             or blocks.path_key(m.get("url") or "")),
+             "start_path": blocks.module_start(m), "used_by": used.get(m["id"], [])}
+            for m in tests if m.get("role") == "module"]
+    return {"candidates": await asyncio.to_thread(blocks.candidates, pid), "modules": mods}
+
+
+class BlockAccept(BaseModel):
+    name: str = ""
+    replace: bool = True
+
+
+@app.post("/api/projects/{pid}/blocks/{key}/accept")
+async def accept_block(pid: str, key: str, body: BlockAccept):
+    """The repeated chain becomes a module; with `replace` the tests call it instead of their copies."""
+    project(pid, "editor")
+    try:
+        res = await asyncio.to_thread(blocks.accept, pid, key, body.name, body.replace)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    return {"module": {"id": res["module"]["id"], "name": res["module"]["name"]}, "replaced": res["replaced"]}
+
+
+@app.post("/api/projects/{pid}/blocks/{key}/dismiss")
+async def dismiss_block(pid: str, key: str):
+    project(pid, "editor")
+    blocks.dismiss(pid, key)
+    return {"ok": True}
 
 
 @app.get("/api/projects/{pid}/knowledge/duplicates")
@@ -2651,6 +2838,114 @@ async def delete_scenario(aid: str, scid: str):
     return {"ok": True}
 
 
+class FindingsBody(BaseModel):
+    ids: list[str]
+    status: str                     # todo - fix by the answer | dismissed - not relevant | open - undecided
+    answer: str | None = None       # how it should be (empty - by the reviewer's suggestion)
+    note: str | None = None         # why it is not relevant
+
+
+def _review_result(aid: str, model: str = "", **extra) -> dict:
+    a = analyses.view(analyses.get(aid))
+    return {"analysis": a, "unresolved": len(review.unresolved(a.get("review"))), "model": model} | extra
+
+
+@app.put("/api/analyses/{aid}/review/findings")
+async def decide_findings(aid: str, body: FindingsBody, request: Request):
+    """A person settles findings of the review. The last one settled - the model learns from the requirements."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    try:
+        analyses.decide(p["id"], aid, body.ids, body.status, body.answer, body.note, request.state.user)
+    except KeyError:
+        raise HTTPException(404, "Замечание не найдено: проверьте требования заново")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    model = await call(_learn_reviewed(p, aid, request.state.user)) if body.status == review.DISMISSED else ""
+    return _review_result(aid, model)
+
+
+@app.post("/api/analyses/{aid}/review/group")
+async def group_findings(aid: str, request: Request):
+    """The findings of a report made before themes, grouped now (review.group): the same thing - one answer."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    _require_model(p)
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    try:
+        groups = await _while_connected(request, review.group(p, a["review"]))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Отменено")
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    analyses.set_groups(p["id"], aid, groups)
+    return _review_result(aid, groups=len(groups))
+
+
+class AnswersBody(BaseModel):
+    text: str           # the answers of an analyst to the findings, in one text
+
+
+@app.post("/api/analyses/{aid}/review/answers")
+async def answer_findings(aid: str, body: AnswersBody, request: Request):
+    """The answers of an analyst pasted as one text: a model matches them to the unsettled themes of findings
+    (review.distribute); an answer - the theme waits for the editor, «not relevant» - it is dismissed."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    _require_model(p)
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    if not body.text.strip():
+        raise HTTPException(400, "Вставьте ответы аналитика")
+    try:
+        found = await _while_connected(request, review.distribute(p, a["review"], body.text))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Разбор ответов отменён")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    answered = dismissed = 0
+    for x in found:
+        ids = review.unsettled_ids(analyses.get(aid)["review"], x["id"])
+        if not ids:
+            continue
+        if x["not_relevant"]:
+            analyses.decide(p["id"], aid, ids, review.DISMISSED, note=x["note"], user=request.state.user)
+            dismissed += 1
+        else:
+            analyses.decide(p["id"], aid, ids, review.TODO, x["answer"], user=request.state.user)
+            answered += 1
+    model = await call(_learn_reviewed(p, aid, request.state.user)) if dismissed else ""
+    return _review_result(aid, model, answered=answered, dismissed=dismissed)
+
+
+@app.post("/api/analyses/{aid}/review/fix")
+async def fix_findings(aid: str, request: Request):
+    """The editor (review.revise) fixes the requirements by the findings a person answered: the corrected text
+    replaces the requirements of the analysis (the previous one is kept). Then, every finding settled, the model
+    learns from the corrected requirements."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    _require_model(p)
+    if a["status"] == "running":
+        raise HTTPException(409, "Анализ в работе: дождитесь окончания проверки или генерации")
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    try:
+        result = await _while_connected(request, review.revise(p, a["requirements"], a["review"]))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Исправление отменено")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    analyses.revise(p["id"], aid, result, request.state.user)
+    model = await call(_learn_reviewed(p, aid, request.state.user)) if result["fixed"] else ""
+    return _review_result(aid, model, fixed=result["fixed"], failed=result["failed"], summary=result["summary"])
+
+
 class FetchBody(BaseModel):
     project_id: str
     link: str
@@ -2699,6 +2994,7 @@ class JobBody(BaseModel):
     analysis_id: str = ""               # or scenarios of a requirements analysis (all, or `scenario_ids`)
     scenario_ids: list[str] = []
     picks: list[ScenarioPick] = []      # or scenarios of several analyses (the pipeline's common list)
+    review_id: str = ""                 # or requirements reviewed in the Requirements tab: design their scenarios
     types: list[str] | None = None      # this run's kinds of checks, layers, techniques (None = the project's)
     layers: list[str] | None = None
     techniques: list[str] | None = None
@@ -2741,12 +3037,23 @@ async def start_job(pid: str, body: JobBody, request: Request):
             raise HTTPException(400, "Нет готовых сценариев" if body.picks else "В анализе нет готовых сценариев")
     if body.scenarios and not ready:
         raise HTTPException(400, "У сценариев нет названия или шагов")
+    reviewed = None
+    if body.review_id:
+        reviewed = analyses.get(body.review_id)
+        if not reviewed or reviewed["project_id"] != p["id"]:
+            raise HTTPException(404, "Анализ не найден")
+        if not analyses.reviewed(reviewed):
+            raise HTTPException(400, "Требования ещё не проверены: «Проверить требования» во вкладке «Требования»")
+        if reviewed["status"] == "running":
+            raise HTTPException(409, "Анализ уже в работе: дождитесь окончания проверки или генерации")
+        if ready or body.links or body.text.strip() or body.explore or cases:
+            raise HTTPException(400, "Проверенные требования запускаются отдельно от других источников")
     if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases \
-            and not ready:
+            and not ready and not reviewed:
         raise HTTPException(400, "Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта")
     _require_model(p)
     job = pipeline.Job(p, body.links, body.text, body.url, SESSIONS, user=request.state.user, explore=body.explore,
-                       cases=cases, scenarios=ready, feature=feature,
+                       cases=cases, scenarios=ready, feature=feature, review_id=body.review_id if reviewed else "",
                        design={k: v for k, v in (("types", body.types), ("layers", body.layers),
                                                  ("techniques", body.techniques)) if v is not None})
     pipeline.JOBS[job.id] = job
@@ -2835,6 +3142,18 @@ async def decide_reuse(jid: str, body: ReuseBody):
     if any(d not in reuse.DECISIONS for d in body.decisions.values()):
         raise HTTPException(400, "Решение: new, reuse или refine")
     WORKER.call_soon_threadsafe(job.decide, dict(body.decisions))
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{jid}/review")
+async def accept_job_review(jid: str, request: Request):
+    """A person read the reviewer's findings that block test design and lets the run go on."""
+    job = pipeline.JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Запуск не найден")
+    if job.status != "awaiting_review":
+        raise HTTPException(409, "Запуск не ждёт решения по проверке требований")
+    WORKER.call_soon_threadsafe(job.accept_review, request.state.user or "")
     return {"ok": True}
 
 
