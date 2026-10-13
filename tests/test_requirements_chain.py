@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from fakes import Resp, dump
 from helpers import arun
-from testgen import auth, pipeline, projects, scenarios, validation
+from testgen import analyses, auth, pipeline, projects, review, scenarios, validation
 from testgen.scenarios import ScenarioBatch, ScenarioPlan
 
 SPEC = "# Заказы\n1. Покупатель оформляет заказ.\n2. Менеджер подтверждает оплаченный заказ."
@@ -245,11 +245,28 @@ def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monk
         item["status"], item["test_id"] = "done", t["id"]
     monkeypatch.setattr(job, "_process", process)
 
+    def settle():
+        """The person in the Requirements tab: the check against the lifecycle made again, the findings settled."""
+        a = analyses.get(job.analysis_id)
+        analyses.set_lifecycle(p["id"], a["id"], {"summary": "", "conflicts": [], "questions": []})
+        a = analyses.get(job.analysis_id)
+        analyses.decide(p["id"], a["id"], [it["id"] for it in review.unresolved(a["review"])], review.DISMISSED,
+                        note="не про это", user="alice")
+        analyses.mark_learned(p["id"], a["id"])     # the model is not reachable here: taught by hand
+        job.model_confirmed()
+
     async def go():
         task = asyncio.create_task(job.run())
+        settled = False
         while job.status != "awaiting_selection":
             assert not task.done(), job.error
+            if job.status == "awaiting_review" and not settled:
+                # Nothing is designed until the requirements are settled: the failed check holds them back too.
+                assert "ScenarioPlan" not in order
+                settle()
+                settled = True
             await asyncio.sleep(0.01)
+        assert settled
         # A person chooses; all but the low-priority ones are checked to begin with.
         assert job.preselect == [0, 2] and job.items == []
         job.select([2])
@@ -272,10 +289,10 @@ def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monk
     assert a["scenarios"][2]["test_data"][0]["record_id"] == job.scenarios[2]["test_data"][0]["record_id"]
     text = " ".join(e["text"] for e in job.log)
     assert "стандарт и качество 55/100" in text and "жизненный цикл: не удалось" in text
-    assert a["review"]["verdict"] == "ready" and a["review"]["lifecycle"] is None
+    assert a["review"]["verdict"] == "ready" and a["review"]["errors"] == {}
     assert "Тестовые данные сценариев записаны" in text
-    # The reviewer's findings are not settled yet: the model does not learn from these requirements.
-    assert "Модель приложения не обновляется по требованиям" in text and "не выбранные останутся" in text
+    assert "Тест-дизайн ждёт разбора требований" in text and "Требования разобраны" in text
+    assert "не выбранные останутся" in text
 
 
 def test_automatic_selection_keeps_the_rest_in_the_list(monkeypatch, fake_llm):
@@ -288,7 +305,7 @@ def test_automatic_selection_keeps_the_rest_in_the_list(monkeypatch, fake_llm):
                 _planned(1), _planned(2, priority="low"), _planned(3, priority="medium")]}))
         return _batch(_task(kw))
     fake_llm.script = script
-    p = _project("Авто", requirements={"learn_model": False}, scenarios={"select": "high"})
+    p = _project("Авто", requirements={"learn_model": False, "validate": False}, scenarios={"select": "high"})
     job = pipeline.Job(p, [], SPEC, "", {})
     seen = []
 
@@ -304,7 +321,7 @@ def test_automatic_selection_keeps_the_rest_in_the_list(monkeypatch, fake_llm):
 
 def test_stopping_interrupts_the_design_at_once_and_keeps_what_is_ready(monkeypatch, fake_llm):
     from testgen import analyses
-    p = _project("Стоп", requirements={"learn_model": False})
+    p = _project("Стоп", requirements={"learn_model": False, "validate": False})
     started = []
 
     async def generate(requirements, url="", project=None, log=None, progress=None, cfg=None, record=True,
@@ -338,7 +355,7 @@ def test_stopping_while_a_person_chooses(fake_llm):
                                                             "scenarios": [_planned(1)]}))
         return _batch(_task(kw))
     fake_llm.script = script
-    p = _project("Выбор", requirements={"learn_model": False}, scenarios={"select": "manual"})
+    p = _project("Выбор", requirements={"learn_model": False, "validate": False}, scenarios={"select": "manual"})
     job = pipeline.Job(p, [], SPEC, "", {})
 
     async def go():

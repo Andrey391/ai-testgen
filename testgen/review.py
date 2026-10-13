@@ -242,6 +242,20 @@ async def review(project: dict, document: str, standard: str = "", log=None, not
     return out
 
 
+def with_lifecycle(report: dict, lc: dict) -> dict:
+    """The report with the check against the lifecycle made again (it failed, or the model changed): the check of
+    the document and the decisions on it stay; the decisions on the earlier conflicts and questions of the
+    lifecycle (l<i>, lq<i>) are about other findings now and go, with them in themes."""
+    out = dict(report)
+    out["lifecycle"] = lc
+    out["errors"] = {k: v for k, v in (report.get("errors") or {}).items() if k != "жизненный цикл"}
+    out["resolutions"] = {k: v for k, v in (report.get("resolutions") or {}).items() if not k.startswith("l")}
+    groups = [g | {"ids": [i for i in g["ids"] if not i.startswith("l")]} for g in report.get("groups") or []]
+    out["groups"] = [g for g in groups if len(g["ids"]) > 1]
+    out["verdict"] = verdict(out)
+    return out
+
+
 def blocking(report: dict | None) -> bool:
     """The review found what blocks test design: critical findings or the document is not ready."""
     return bool(report) and report.get("verdict") == "not_ready"

@@ -1366,6 +1366,9 @@ async def create_session(body: NewSession, request: Request):
         a = None
     sc = next((x for x in (a or {}).get("scenarios") or [] if x.get("id") == body.scenario_id), None)
     if body.analysis_id:
+        if a and a.get("review") and not analyses.readiness(a, p)["settled"]:
+            raise HTTPException(409, "Сначала разберите требования этого сценария во вкладке «Требования»: замечания "
+                                     "ревьюера и расхождения с жизненным циклом")
         _require_lifecycle(p, sc)
     # A scenario of the API layer is written without a browser.
     if sc and sc.get("layer") == "api":
@@ -2626,6 +2629,7 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
             analyses.mark_learned(pid, a["id"])
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
+    _wake_jobs(pid)
     return knowledge.view(pid)
 
 
@@ -2756,10 +2760,15 @@ async def confirm_knowledge(pid: str, request: Request, body: ConfirmBody | None
         doc = knowledge.confirm(pid, request.state.user, body.units if body else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    for job in list(pipeline.JOBS.values()):
-        if job.project_id == pid and job.status == "awaiting_model":
-            WORKER.call_soon_threadsafe(job.model_confirmed)
+    _wake_jobs(pid)
     return doc
+
+
+def _wake_jobs(pid: str) -> None:
+    """The requirements or the application model the runs of the project wait for changed: they look again."""
+    for job in list(pipeline.JOBS.values()):
+        if job.project_id == pid and job.status in ("awaiting_model", "awaiting_review"):
+            WORKER.call_soon_threadsafe(job.model_confirmed)
 
 
 @app.get("/api/projects/{pid}/analyses")
@@ -2849,6 +2858,7 @@ class FindingsBody(BaseModel):
 
 def _review_result(aid: str, model: str = "", **extra) -> dict:
     a = analyses.view(analyses.get(aid))
+    _wake_jobs(a["project_id"])
     return {"analysis": a, "unresolved": len(review.unresolved(a.get("review"))), "model": model} | extra
 
 
@@ -2948,6 +2958,28 @@ async def fix_findings(aid: str, request: Request):
     return _review_result(aid, model, fixed=result["fixed"], failed=result["failed"], summary=result["summary"])
 
 
+@app.post("/api/analyses/{aid}/review/lifecycle")
+async def recheck_lifecycle(aid: str, request: Request):
+    """The check against the lifecycle of the system made again (it failed, or the model changed since): the check
+    of the document and the decisions on it stay. Every finding settled - the model learns from the requirements."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    _require_model(p)
+    if a["status"] == "running":
+        raise HTTPException(409, "Анализ в работе: дождитесь окончания проверки или генерации")
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    try:
+        lc = await _while_connected(request, review.lifecycle(p, a["requirements"], notes=review.notes(a["review"])))
+    except asyncio.CancelledError:
+        raise HTTPException(499, "Проверка отменена")
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+    analyses.set_lifecycle(p["id"], aid, lc)
+    model = await call(_learn_reviewed(p, aid, request.state.user))
+    return _review_result(aid, model)
+
+
 class FetchBody(BaseModel):
     project_id: str
     link: str
@@ -3022,6 +3054,9 @@ async def start_job(pid: str, body: JobBody, request: Request):
         a = analyses.get(aid)
         if not a or a["project_id"] != p["id"]:
             raise HTTPException(404, "Анализ не найден")
+        if a.get("review") and not analyses.readiness(a, p)["settled"]:
+            raise HTTPException(409, f"Требования «{a['feature'] or a['title'] or 'без названия'}» не разобраны: "
+                                     "замечания ревьюера и расхождения с жизненным циклом — во вкладке «Требования»")
         chosen = [s for s in a["scenarios"] if not s.get("pending") and (not ids or s["id"] in ids)]
         empty = [s["title"] or "без названия" for s in chosen if not s["title"].strip() or not s["instructions"].strip()]
         if empty:
@@ -3046,6 +3081,10 @@ async def start_job(pid: str, body: JobBody, request: Request):
             raise HTTPException(404, "Анализ не найден")
         if not analyses.reviewed(reviewed):
             raise HTTPException(400, "Требования ещё не проверены: «Проверить требования» во вкладке «Требования»")
+        try:
+            analyses.require_ready(reviewed, p)
+        except analyses.NotReady as e:
+            raise HTTPException(409, str(e))
         if reviewed["status"] == "running":
             raise HTTPException(409, "Анализ уже в работе: дождитесь окончания проверки или генерации")
         if ready or body.links or body.text.strip() or body.explore or cases:
@@ -3144,18 +3183,6 @@ async def decide_reuse(jid: str, body: ReuseBody):
     if any(d not in reuse.DECISIONS for d in body.decisions.values()):
         raise HTTPException(400, "Решение: new, reuse или refine")
     WORKER.call_soon_threadsafe(job.decide, dict(body.decisions))
-    return {"ok": True}
-
-
-@app.post("/api/jobs/{jid}/review")
-async def accept_job_review(jid: str, request: Request):
-    """A person read the reviewer's findings that block test design and lets the run go on."""
-    job = pipeline.JOBS.get(jid)
-    if not job:
-        raise HTTPException(404, "Запуск не найден")
-    if job.status != "awaiting_review":
-        raise HTTPException(409, "Запуск не ждёт решения по проверке требований")
-    WORKER.call_soon_threadsafe(job.accept_review, request.state.user or "")
     return {"ok": True}
 
 

@@ -175,7 +175,14 @@ def test_the_pipeline_designs_test_cases_from_reviewed_requirements(monkeypatch,
     assert r.status_code == 400 and "не проверены" in r.json()["detail"]
 
     analyses.finish(p["id"], a["id"])
-    analyses.set_review(p["id"], a["id"], {"validation": None, "lifecycle": None, "errors": {}, "verdict": "not_ready"})
+    analyses.set_review(p["id"], a["id"], {"validation": None, "errors": {}, "verdict": "not_ready",
+                                           "lifecycle": {"summary": "", "conflicts": [CONFLICT], "questions": []}})
+    # A conflict with the lifecycle not settled: no test design from these requirements, nobody skips it.
+    r = client.post(f"/api/projects/{p['id']}/jobs", json={"review_id": a["id"]})
+    assert r.status_code == 409 and "расхождения с жизненным циклом: 1" in r.json()["detail"]
+    assert analyses.view(analyses.get(a["id"]))["readiness"]["step"] == "lifecycle"
+    analyses.decide(p["id"], a["id"], ["l0"], review.DISMISSED, note="правка разрешена", user="ann")
+    assert analyses.view(analyses.get(a["id"]))["readiness"]["ready"]
     earlier = analyses.add_scenario(p["id"], a["id"], {"title": "Прежний", "instructions": "Шаги"})
     assert client.post(f"/api/projects/{p['id']}/jobs", json={"review_id": a["id"], "text": "x"}).status_code == 400
 
@@ -196,10 +203,9 @@ def test_the_pipeline_designs_test_cases_from_reviewed_requirements(monkeypatch,
     monkeypatch.setattr(job, "_process", process)
     arun(job.run())
 
-    # The person sent them to the pipeline after reading the report: no wait, no second review.
+    # Settled in the Requirements tab before: no wait, no second review.
     assert job.status == "done", job.error
     assert seen == ["Сценарий 1"] and job.analysis_id == a["id"] and job.review["verdict"] == "not_ready"
-    assert job.review_accepted == "ann"
     after = analyses.get(a["id"])
     assert after["status"] == "done"
     assert [s["title"] for s in after["scenarios"]] == ["Сценарий 1", "Прежний"]      # the earlier one stays
@@ -234,12 +240,18 @@ def test_blocking_findings_wait_for_a_person(monkeypatch, fake_llm):
             await asyncio.sleep(0.01)
         assert not any(kw.get("output_format") is ScenarioPlan for _, kw in fake_llm.calls)   # nothing designed yet
         assert job.state()["review"]["verdict"] == "not_ready"
-        job.accept_review("bob")
+        await asyncio.sleep(0.05)
+        assert job.status == "awaiting_review"      # it waits for the findings, not for a button
+        # The person settles every finding in the Requirements tab: the run goes on by itself.
+        a = analyses.get(job.analysis_id)
+        analyses.decide(p["id"], a["id"], [it["id"] for it in review.unresolved(a["review"])], review.DISMISSED,
+                        note="не про это", user="bob")
+        job.model_confirmed()
         await task
     arun(go())
-    assert job.status == "done" and seen == ["Сценарий 1"] and job.review_accepted == "bob"
+    assert job.status == "done" and seen == ["Сценарий 1"]
     assert analyses.get(job.analysis_id)["review"]["verdict"] == "not_ready"
-    assert any("продолжена (bob)" in e["text"] for e in job.log)
+    assert any("Требования разобраны" in e["text"] for e in job.log)
 
     # Stopped while it waits: nothing is designed.
     fake_llm.calls.clear()
@@ -256,15 +268,28 @@ def test_blocking_findings_wait_for_a_person(monkeypatch, fake_llm):
     assert not any(kw.get("output_format") is ScenarioPlan for _, kw in fake_llm.calls)
 
 
-def test_accepting_a_review_over_the_api(monkeypatch):
+def test_the_lifecycle_is_checked_again_alone(monkeypatch, fake_llm):
+    """The check against the lifecycle failed (the API timed out): checked again, the check of the document and
+    the decisions on it stay; until then test design waits."""
     import server
     monkeypatch.setattr(auth, "ENABLED", False)
-    p = _project("API ревью")
-    job = pipeline.Job(p, [], SPEC, "", {})
-    pipeline.JOBS[job.id] = job
-    try:
-        client = TestClient(server.app, base_url="http://127.0.0.1:8765")
-        assert client.post(f"/api/jobs/{job.id}/review").status_code == 409       # it does not wait
-        assert client.post("/api/jobs/0123456789/review").status_code == 404
-    finally:
-        pipeline.JOBS.pop(job.id, None)
+    p = _project("Сверка", requirements={"learn_model": False})
+    a = analyses.create(p["id"], SPEC, "", "ann")
+    analyses.finish(p["id"], a["id"])
+    v = _validation().parsed_output.model_dump()
+    analyses.set_review(p["id"], a["id"], {"validation": v, "lifecycle": None, "verdict": "needs_work",
+                                           "errors": {"жизненный цикл": "Gateway Timeout"}})
+    analyses.decide(p["id"], a["id"], ["d0"], review.DISMISSED, note="есть в приложении", user="ann")
+    analyses.decide(p["id"], a["id"], ["vq0"], review.DISMISSED, note="никто", user="ann")
+    r = analyses.view(analyses.get(a["id"]))["readiness"]
+    assert not r["ready"] and r["done"]["findings"] and not r["done"]["lifecycle"] and r["step"] == "lifecycle"
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.post(f"/api/projects/{p['id']}/jobs", json={"review_id": a["id"]}).status_code == 409
+
+    fake_llm.script = lambda kind, kw: _report(CONFLICT)
+    body = client.post(f"/api/analyses/{a['id']}/review/lifecycle").json()
+    rv = analyses.get(a["id"])["review"]
+    assert rv["errors"] == {} and rv["lifecycle"]["conflicts"][0]["problem"] == CONFLICT["problem"]
+    assert rv["resolutions"]["d0"]["status"] == review.DISMISSED          # the decisions on the document stay
+    assert body["analysis"]["readiness"]["lifecycle_left"] == 2           # the conflict and the question
+    assert client.post("/api/analyses/0123456789/review/lifecycle").status_code == 404
