@@ -147,6 +147,14 @@ def test_model_comes_from_the_project_settings():
     assert projects.get(p["id"])["llm"]["models"] == []
 
 
+def test_project_remembers_the_first_step_after_the_wizard():
+    p = projects.create(f"Старт {uuid.uuid4().hex[:6]}")
+    assert "start" not in p
+    assert projects.update(p["id"], {"start": "studio"})["start"] == "studio"
+    assert projects.update(p["id"], {"name": p["name"]})["start"] == "studio"      # kept without the field
+    assert projects.update(p["id"], {"start": "elsewhere"})["start"] == ""
+
+
 def test_har_roundtrip():
     entries = [{"method": "GET", "url": "https://app.test/api/items?q=1", "request_headers": {}, "post_data": "",
                 "status": 200, "response_headers": {"content-type": "application/json"}, "mime": "application/json",

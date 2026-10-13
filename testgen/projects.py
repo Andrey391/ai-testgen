@@ -283,6 +283,9 @@ def set_access(pid: str, visibility: str, members: dict) -> dict:
     return save(p)
 
 
+START = ("req", "studio", "explore")
+
+
 def update(pid: str, patch: dict) -> dict:
     p = get(pid)
     if not p:
@@ -293,6 +296,9 @@ def update(pid: str, patch: dict) -> dict:
     if "language" in patch:
         # Language of step descriptions, scenarios and Gherkin: "" = as the scenario / requirements are written.
         p["language"] = patch["language"] if patch["language"] in ("", "ru", "en") else ""
+    if "start" in patch:
+        # The first step chosen after the wizard: where the project opens until the person picks a tab.
+        p["start"] = patch["start"] if patch["start"] in START else ""
     if not p["name"]:
         raise ValueError("Укажите название проекта")
     if "pipeline" in patch:
