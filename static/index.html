@@ -300,6 +300,8 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .lc-st{font-size:11px;padding:1px 7px;border:1px solid var(--accent);border-radius:10px;color:var(--accent);max-width:100%;box-sizing:border-box;overflow-wrap:anywhere}
 .lc-chain i{font-style:normal;color:var(--muted);font-size:11px}
 .lc-chain em{font-style:normal;color:var(--warn)}
+.jm-part summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.jm-ent{padding:4px 0 4px 12px;border-left:2px solid var(--line)}
 .sm-wrap{overflow:auto}
 .sm-svg{display:block}
 .sm-svg path{fill:none;stroke:var(--muted);stroke-width:1.5;transition:opacity .15s}
@@ -626,6 +628,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
       <div class="hint">Агент вводит их как <code>{{username}}</code> и <code>{{password}}</code>: пароль не передаётся в модель и не попадает в шаги теста и экспорт. Если поля пустые, используются логин и пароль проекта.</div>
     </details>
+    <div class="box bad hidden" id="preflightBox" role="alert"></div>
     <div class="row" style="margin-top:10px">
       <label class="inline"><input type="checkbox" id="fAuto"> Auto-Pilot</label>
       <label class="inline"><input type="checkbox" id="fHeaded"> Показать реальное окно браузера</label>
@@ -1256,6 +1259,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
       <!-- Application model and test data -->
       <div data-subpanel="data" class="hidden">
+        <div class="box next hidden" id="knBack"></div>
         <div data-kn-sec="overview">
           <div class="card">
             <h3>Модель приложения и тестовые данные</h3>
@@ -1984,7 +1988,10 @@ function parseRoute(hash) {
   if (!parts.length) return {};
   if (parts[0] === 'projects' && parts.length <= 2) return {tab: 'home', wizard: parts[1] === 'new'};
   if (parts[0] !== 'p' || !parts[1]) return {unknown: true};
-  return {pid: parts[1], view: parts[2] || 'req', id: parts[3] || '', sec: parts[4] || ''};
+  // ?back=pipe/<jid> | studio - the screen was opened from a run or a test stopped by it: the way back
+  const back = new URLSearchParams(h.split('?')[1] || '').get('back') || '';
+  return {pid: parts[1], view: parts[2] || 'req', id: parts[3] || '', sec: parts[4] || '',
+          back: /^(pipe\/[\w-]+|studio)$/.test(back) ? back : ''};
 }
 const routeTab = r => r.tab || (r.pid ? VIEW_TAB[r.view] : '');
 const projPath = (...parts) => `/p/${PID}/` + parts.filter(Boolean).join('/');
@@ -2040,6 +2047,8 @@ async function openRoute(r) {
   if (r.view === 'setup') { showTab('home'); return openWizard(PID); }
   if (r.view === 'settings') {
     if (id) { store.set('tg_settings_sub', id); if (id === 'data' && r.sec) store.set('tg_kn_sec', r.sec); }
+    if (r.back) KN_BACK = {pid: r.pid, path: r.back};
+    renderKnBack();
     $('#tab-proj').dataset.opened = '1';
     showTab('proj');
     return showSub(store.get('tg_settings_sub') || 'general', r.sec || undefined);
@@ -2171,28 +2180,39 @@ const STATUS = {starting: 'Запуск браузера…', thinking: 'Аге�
   awaiting_approval: 'Ожидает подтверждения', idle: 'Ожидает вас', done: 'Готово', error: 'Ошибка', closed: 'Закрыта'};
 const ENGINES = {'builtin': 'Playwright', 'playwright-mcp': 'Playwright MCP', 'api': 'API — без браузера'};
 
-$('#startBtn').onclick = async () => {
+// The check before a test of a scenario stopped it (409): why, where to fix it, and «Запустить всё равно»
+// when only the lifecycle check did (X-Preflight: lifecycle; the account of the role is checked always).
+const PREFLIGHT_FIX = {model: ['Подтвердить модель', 'overview'], account: ['Учётные записи и роли', 'accounts']};
+function showPreflight(e) {
+  const box = $('#preflightBox'), fix = PREFLIGHT_FIX[e?.preflight];
+  box.classList.toggle('hidden', !e);
+  if (!e) return;
+  box.innerHTML = `<div><b>Тест не запущен — проверка перед тестом</b></div><div style="white-space:pre-wrap;margin-top:4px">${esc(e.message.replace(/^Тест не запущен:\s*/, ''))}</div>
+    ${e.preflight === 'lifecycle' ? `<div class="hint">${esc(LIFECYCLE_ANYWAY)}</div>` : ''}
+    <div class="row" style="margin-top:8px;gap:6px"><span class="grow"></span>
+      ${fix ? `<button class="btn small" onclick="location.hash = '#' + settingsPath('data', '${fix[1]}') + '?back=studio'">${fix[0]} →</button>` : ''}
+      ${e.preflight === 'lifecycle' ? '<button class="btn primary small" onclick="startGeneration(true)">Запустить всё равно</button>' : ''}</div>`;
+  box.scrollIntoView({block: 'nearest'});
+}
+$('#startBtn').onclick = () => startGeneration(false);
+$('#fScenario').addEventListener('input', () => showPreflight(null));
+async function startGeneration(anyway) {
   const url = $('#fUrl').value.trim(), scenario = $('#fScenario').value.trim();
-  if (!url || !scenario) return alert('Укажите URL и сценарий');
-  $('#startBtn').disabled = true;
+  if (!url || !scenario) return notice($('#startBtn'), 'Укажите URL и сценарий');
+  $('#startBtn').disabled = true; showPreflight(null);
   const body = {project_id: PID, url, scenario,
     name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
     engine: $('#fEngine').value, username: $('#fLogin').value, password: $('#fPass').value, account: $('#fAccount').value,
     task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked,
     analysis_id: STUDIO_SCEN?.analysis_id || '', scenario_id: STUDIO_SCEN?.scenario_id || ''};
   try {
-    const post = extra => startSession(() => api('POST', '/api/sessions', {...body, ...extra}));
-    let r;
-    try { r = await post({}); }
-    catch (e) {      // only the lifecycle check stopped it: the person decides
-      if (e.preflight !== 'lifecycle' || !confirm(e.message + '\n\n' + LIFECYCLE_ANYWAY)) throw e;
-      r = await post({accept_lifecycle: true});
-    }
+    const r = await startSession(() => api('POST', '/api/sessions', {...body, ...(anyway ? {accept_lifecycle: true} : {})}));
     if (!r) return;
     setStudioTask(null); setStudioScen(null);
     openSession(r.id);
-  } catch (e) { if (e.preflight !== 'lifecycle') alert(e.message) } finally { $('#startBtn').disabled = false; }
-};
+  } catch (e) { if (e.status === 409 && e.preflight) showPreflight(e); else notice($('#startBtn'), e.message); }
+  finally { $('#startBtn').disabled = false; }
+}
 
 // `quiet` - the project was switched: its session is shown in Studio without going there.
 function openSession(sid, quiet) {
@@ -4421,6 +4441,7 @@ function toStudio(sc, url = '') {
     if (role && [...$('#fAccount').options].some(o => o.value === role.account)) $('#fAccount').value = role.account;
   }).catch(() => {});
   setStudioScen({analysis_id: sc.analysis_id, scenario_id: sc.id, title: sc.title});
+  showPreflight(null);
   showTab('studio');
 }
 
@@ -4586,6 +4607,7 @@ async function openJob(jid, quiet) {     // quiet: a refresh, or the running job
   if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); }
   try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
   renderJob();
+  if (JOB.status === 'awaiting_model') loadJobModel(jid);
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
   else if (PIPE_BUSY?.id === JOB.id) pipeBusy(null);
   if (LIVE_JOB.includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid, true), 1500);
@@ -4680,10 +4702,13 @@ function renderJob() {
       ${j.analysis_id ? `<button class="btn primary" onclick="showAnalysis('${j.analysis_id}')">Разобрать требования →</button>` : ''}</div>
       ${j.review ? `<details class="opt" style="margin:0 10px 8px"><summary>Отчёт ревьюера</summary>${reviewHtml(j.review)}</details>` : ''}</div>`;
   } else if (j.status === 'awaiting_model') {
-    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите жизненный цикл системы — сущности, статусы и переходы, роли и их возможности. Тесты генерируются только по подтверждённой модели.</span>
-      <button class="btn" onclick="openSettings('data', 'overview')">Открыть модель</button>
+    const m = JOB_MODEL.id === j.id ? JOB_MODEL.data : null, todo = (m?.units || []).filter(u => u.state !== 'confirmed');
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите ${m?.all ? 'жизненный цикл системы' : 'части модели приложения, которые нужны сценариям запуска'} — статусы и переходы сущностей, роли и их возможности. Тесты генерируются только по подтверждённой модели; запуск продолжится сам.</span>
+      <button class="btn" onclick="editModelFromJob()" title="Открыть «Проект → Тестовые данные»; оттуда — «Вернуться к запуску»">Изменить в модели</button>
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
-      <button class="btn primary" onclick="confirmModelFromJob()">Подтвердить</button></div></div>`;
+      <button class="btn primary" onclick="confirmModelFromJob(null, this)" ${m?.missing?.length ? 'disabled' : ''}>${todo.length > 1 ? `Подтвердить все нужные (${todo.length})` : 'Подтвердить'}</button></div>
+      <div id="jobModel" style="margin:0 10px 8px">${m ? jobModelHtml(m) : '<div class="muted">Загрузка частей модели…</div>'}</div>
+      ${JOB_MODEL.id === j.id && JOB_MODEL.msg ? `<div class="err" style="margin:0 10px 8px">${esc(JOB_MODEL.msg)}</div>` : ''}</div>`;
   }
   if (j.status === 'awaiting_reuse') {
     const rows = j.items.map((it, i) => [it, i]).filter(([it]) => it.match && !it.match.decision && !['done', 'needs_attention'].includes(it.status));
@@ -4759,18 +4784,68 @@ async function retryJob() {
   if (!confirm(`Перезапустить генерацию ${n} сценариев с ошибкой? Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.`)) return;
   try { await api('POST', `/api/jobs/${JOB.id}/retry`, {}); openJob(JOB.id); } catch (e) { alert(e.message); }
 }
-const LIFECYCLE_ANYWAY = 'Сгенерировать тест всё равно? Проверка по жизненному циклу будет пропущена для этого сценария — сделайте так, если она ошиблась (например, приняла тестовые данные за нарушение правил) или сценарий так и задуман.';
+const LIFECYCLE_WHY = 'Проверка по жизненному циклу будет пропущена для этого сценария — сделайте так, если она ошиблась (например, приняла тестовые данные за нарушение правил) или сценарий так и задуман.';
+const LIFECYCLE_ANYWAY = 'Сгенерировать тест всё равно? ' + LIFECYCLE_WHY;
 async function runAnyway(i) {    // the lifecycle check stopped the item: a person runs it anyway
-  if (!confirm(`«${JOB.items[i].title}»\n\n${JOB.items[i].error}\n\n${LIFECYCLE_ANYWAY}`)) return;
-  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices: [i], accept_lifecycle: true}); openJob(JOB.id); } catch (e) { alert(e.message); }
+  const ok = await ask({title: 'Сгенерировать тест всё равно?', subject: JOB.items[i].title,
+                        text: `${JOB.items[i].error} ${LIFECYCLE_WHY}`, actions: [{label: 'Запустить всё равно', value: true}]});
+  if (!ok) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices: [i], accept_lifecycle: true}); openJob(JOB.id); } catch (e) { toast(e.message, 'bad'); }
 }
 async function applyReuse() {
   const decisions = Object.fromEntries($$('#jobBox select[data-reuse]').map(el => [el.dataset.reuse, el.value]).filter(([, v]) => v));
   try { await api('POST', `/api/jobs/${JOB.id}/reuse`, {decisions}); JOB_REUSE = {}; setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
 }
-async function confirmModelFromJob() {
-  try { await api('POST', `/api/projects/${PID}/knowledge/confirm`); openJob(JOB.id); }
-  catch (e) { if (confirm(e.message + '\n\nОткрыть «Проект → Тестовые данные»?')) openSettings('data', 'overview'); }
+// The parts of the model the run waits for, with what is confirmed: statuses and transitions, roles.
+let JOB_MODEL = {id: null, at: 0, data: null, msg: ''};
+async function loadJobModel(jid) {
+  if (JOB_MODEL.id === jid && Date.now() - JOB_MODEL.at < 10000) return;
+  try {
+    const data = await api('GET', `/api/jobs/${jid}/model`);
+    JOB_MODEL = {id: jid, at: Date.now(), data, msg: JOB_MODEL.id === jid ? JOB_MODEL.msg : ''};
+  } catch (e) { JOB_MODEL = {id: jid, at: Date.now(), data: {units: [], missing: [], all: true}, msg: e.message}; }
+  if (JOB?.id === jid && JOB.status === 'awaiting_model') renderJob();
+}
+function jobModelHtml(m) {
+  if (m.missing?.length) return `<div class="err">Модель нельзя подтвердить: ${esc(m.missing.join('; '))} — дополните её («Изменить в модели»).</div>`;
+  if (!m.units.length) return '<div class="muted">В модели нет частей для подтверждения.</div>';
+  const dep = e => e.depends_on?.length ? `<div class="hint">нужно раньше: ${esc(e.depends_on.join(', '))}</div>` : '';
+  const ent = e => `<div class="jm-ent"><b>${esc(e.name)}</b>${lcChainHtml(e.lifecycle)}${dep(e)}
+      ${e.create ? `<div class="hint">создаёт: ${esc(e.create)}</div>` : ''}${e.rules ? `<div class="hint">правила: ${esc(e.rules)}</div>` : ''}</div>`;
+  const role = r => `<div class="jm-ent"><b>${esc(r.name)}</b>${r.capabilities ? `<div class="hint">может: ${esc(r.capabilities)}</div>` : ''}${r.restrictions ? `<div class="hint">не может: ${esc(r.restrictions)}</div>` : ''}</div>`;
+  return m.units.map(u => `<details class="opt jm-part" data-unit="${esc(u.unit)}" ${u.state !== 'confirmed' ? 'open' : ''}><summary>
+      <span class="badge ${u.state === 'confirmed' ? 'ok' : u.state === 'changed' ? 'warn' : 'off'}">${esc(MODEL_STATE[u.state] || u.state)}</span>
+      <b>${esc(u.title)}</b>${u.items ? ` <span class="muted">· сущностей: ${u.items.length}</span>` : ''}
+      ${u.state !== 'confirmed' ? `<button class="btn small" onclick="event.preventDefault(); confirmModelFromJob([this.closest('[data-unit]').dataset.unit], this)">Подтвердить часть</button>` : ''}</summary>
+      ${(u.items || []).map(ent).join('') || (u.roles || []).map(role).join('') || '<div class="muted">пусто</div>'}</details>`).join('');
+}
+// units: null - all the parts the run needs (the whole model when it names no entity)
+async function confirmModelFromJob(units, btn) {
+  const m = JOB_MODEL.id === JOB.id ? JOB_MODEL.data : null;
+  units = units || (m && !m.all ? m.units.filter(u => u.state !== 'confirmed').map(u => u.unit) : null);
+  if (btn) btn.disabled = true;
+  try {
+    await api('POST', `/api/projects/${PID}/knowledge/confirm`, units ? {units} : {});
+    JOB_MODEL = {id: null, at: 0, data: null, msg: ''};
+    toast(units?.length === 1 ? 'Часть модели подтверждена' : 'Модель подтверждена: запуск продолжается');
+    openJob(JOB.id, true);
+  } catch (e) { JOB_MODEL.msg = e.message; if (btn) btn.disabled = false; renderJob(); }
+}
+function editModelFromJob() { location.hash = '#' + settingsPath('data', 'overview') + `?back=pipe/${JOB.id}`; }
+// «Изменить в модели» from a run: the way back to it stays above the model until the person goes back.
+let KN_BACK = null;
+function renderKnBack() {
+  const box = $('#knBack'), on = KN_BACK && KN_BACK.pid === PID;
+  box.classList.toggle('hidden', !on);
+  const studio = on && KN_BACK.path === 'studio';
+  if (on) box.innerHTML = `<div class="row"><span class="grow">${studio ? 'Тест сценария ждёт модели приложения: подтвердите нужные части или заведите учётную запись роли, затем вернитесь в Studio и запустите генерацию.'
+      : 'Запуск конвейера ждёт подтверждения модели: проверьте и подтвердите нужные части, затем вернитесь — запуск продолжится сам.'}</span>
+    <button class="btn primary small" onclick="knGoBack()">← ${studio ? 'Вернуться в Studio' : 'Вернуться к запуску'}</button></div>`;
+}
+function knGoBack() {
+  const path = KN_BACK.path; KN_BACK = null; renderKnBack();
+  if (path === 'studio') showPreflight(null);
+  location.hash = '#' + projPath(path);
 }
 async function selectScenarios() {
   const indices = [...JOB_PICK.sel];

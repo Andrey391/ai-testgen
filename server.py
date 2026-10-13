@@ -594,7 +594,8 @@ def _require_lifecycle(p: dict, sc: dict | None = None) -> None:
         todo = [u["title"] for u in state["units"] if u["state"] != "confirmed" and (only is None or u["unit"] in only)]
         raise HTTPException(409, "Сначала подтвердите жизненный цикл системы — сущности, статусы, роли и их "
                                  "возможности — в «Проект → Тестовые данные»"
-                                 + (f": {', '.join(todo)}" if todo and only is not None else ""))
+                                 + (f": {', '.join(todo)}" if todo and only is not None else ""),
+                            headers={"X-Preflight": "model"})
 
 
 class ProjectBody(BaseModel):
@@ -1430,7 +1431,7 @@ async def create_session(body: NewSession, request: Request):
             raise HTTPException(502, f"Проверка сценария перед тестом не удалась: {llm.api_error_text(e)}")
         if not check["ok"]:   # only the lifecycle check: the studio offers to run it anyway
             raise HTTPException(409, knowledge.preflight_text(check),
-                                headers={"X-Preflight": "lifecycle"} if knowledge.lifecycle_only(check) else None)
+                                headers={"X-Preflight": "lifecycle" if knowledge.lifecycle_only(check) else "account"})
         if not body.account and not any(creds.values()):     # no account chosen: the role's one
             account, guest = check["account"], check["guest"]
             creds = {} if guest else projects.account_credentials(p["id"], account)
@@ -3307,6 +3308,17 @@ async def get_job(jid: str):
     if not j:
         raise HTTPException(404, "Запуск не найден")
     return pipeline.reconcile(jid, j, SESSIONS)
+
+
+@app.get("/api/jobs/{jid}/model")
+async def job_model(jid: str):
+    """The parts of the application model the run waits for (its scenarios' groups of entities and the
+    roles; `all` - the whole model) and what a person confirms in each: statuses and transitions, roles."""
+    j = pipeline.get_job(jid)
+    if not j:
+        raise HTTPException(404, "Запуск не найден")
+    units = pipeline.model_units(j["project_id"], j.get("scenarios") or [])
+    return knowledge.parts(knowledge.get(j["project_id"]), units) | {"all": units is None}
 
 
 class SelectBody(BaseModel):
