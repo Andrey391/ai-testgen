@@ -4,7 +4,8 @@ When new scenarios are designed, the model sees what the project already has: it
 scenarios of earlier analyses that have no test yet (candidates()). A planned scenario that checks the
 same thing as one of them ("same"), or that one of them would check after a refinement ("refine"),
 gets a `match`. A person decides what to do with it (DECISIONS): create a new test anyway, reuse the
-earlier one (its test is linked to the new scenario, nothing is generated) or refine it (the agent
+earlier one (its test is linked to the new scenario, nothing is generated; an earlier scenario without a
+test - "Не дублировать" - is automated once, its test is linked to both scenarios) or refine it (the agent
 replays the earlier test and extends it to the new scenario; the test keeps its id). The pipeline
 waits for the decisions before authoring (Job._await_reuse); the Requirements tab asks in the row
 of the scenario.
@@ -91,6 +92,32 @@ def test_of(pid: str, match) -> dict | None:
         return None
     t = storage.load(match["id"])
     return t if t and t.get("project_id") == pid else None
+
+
+def scenario_tests(pid: str, match) -> list[dict]:
+    """The tests of the earlier scenario the match points to (still there, in this project); [] - the earlier
+    scenario is not automated yet."""
+    from . import analyses, storage
+    if not match or match.get("kind") != "scenario" or not match.get("analysis_id"):
+        return []
+    a = analyses.get(match["analysis_id"]) or {}
+    if a.get("project_id") != pid:
+        return []
+    s = next((x for x in a.get("scenarios") or [] if x.get("id") == match["id"]), None) or {}
+    out = []
+    for tid in s.get("test_ids") or []:
+        t = storage.load(tid)
+        if t and t.get("project_id") == pid:
+            out.append(t)
+    return out
+
+
+def unautomated(item: dict) -> bool:
+    """A run item done as "Не дублировать" without a test (before the studio automated the earlier scenario
+    without a test): "Автоматизировать" generates it, or links the test the earlier scenario has by now."""
+    m = item.get("match") or {}
+    return (item.get("status") == "done" and not item.get("test_id") and m.get("kind") == "scenario"
+            and m.get("decision") == "reuse")
 
 
 REFINE_TASK = (

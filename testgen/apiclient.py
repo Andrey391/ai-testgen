@@ -175,7 +175,7 @@ class ApiClient:
     async def settle(self) -> None:
         return None
 
-    def settled_quietly(self) -> None:
+    def settled_quietly(self, quiet: bool = True) -> None:
         return None
 
     def just_settled(self) -> bool:

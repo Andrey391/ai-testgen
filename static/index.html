@@ -82,6 +82,9 @@ button:disabled{opacity:.5;cursor:default}
 #credDlg::backdrop{background:rgba(0,0,0,.35)}
 .st-passed{border-left:3px solid var(--ok)}
 .st-failed{border-left:3px solid var(--bad)}
+.st-running{border-left:3px solid var(--warn);background:color-mix(in srgb, var(--warn) 8%, transparent)}
+.st-pending{opacity:.65}
+.st-pending.st-broken{opacity:1;border-left:3px solid var(--bad)}
 .err{color:var(--bad);font-size:12px}
 .ok{color:var(--ok)}
 table{width:100%;border-collapse:collapse}
@@ -694,6 +697,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <span class="muted grow" id="savedText">Сохранено</span>
         <button class="btn" id="readyBtn" title="Вы проверили тест: он войдёт в регрессионный набор">В набор</button>
         <button class="btn" id="runSavedBtn">Запустить</button>
+        <button class="btn" id="watchSavedBtn" title="Прогнать сохранённый тест заново в Studio шаг за шагом">Прогон в Studio</button>
         <a class="btn small" id="expPy" target="_blank">.py</a>
         <a class="btn small" id="expFeat" target="_blank">.feature</a>
         <a class="btn small hidden" id="expApi" target="_blank" title="API-тесты (pytest + httpx) по запросам, записанным при генерации">API</a>
@@ -813,10 +817,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </div>
 </section>
 
-<!-- ============ REQUIREMENTS -> SCENARIOS ============ -->
+<!-- ============ REQUIREMENTS REVIEW ============ -->
 <section id="tab-req" class="hidden">
   <div class="card">
-    <div class="muted">Загрузите требования из Jira, Confluence, YouTrack, Яндекс Трекера или Kaiten (через подключения проекта), из файла ТЗ (.docx, .pdf, .md) или вставьте текст — AI предложит тест-сценарии по правилам этапа «Сценарии» из настроек проекта. Любой сценарий можно отправить в Studio, а все требования целиком — в конвейер.</div>
+    <div class="muted">Сначала требования проверяются. Загрузите ТЗ из Jira, Confluence, YouTrack, Яндекс Трекера или Kaiten (через подключения проекта), из файла (.docx, .pdf, .md) или вставьте текст — ревьюер, отдельный субагент со своим чистым контекстом, найдёт дефекты документа (стандарт, качество требований, правила команды) и расхождения с жизненным циклом системы (статусы, переходы, зависимости, роли из «Тестовых данных»). Тест-кейсы по проверенным требованиям генерирует <a href="#" onclick="showTab('pipe');return false">конвейер</a>.</div>
     <label>Ссылка на задачу (Jira, YouTrack, Яндекс Трекер, Kaiten) или страницу Confluence</label>
     <div class="row">
       <input id="srcLink" class="grow" placeholder="https://company.atlassian.net/browse/PROJ-123  ·  …/wiki/spaces/TEAM/pages/123456/…  ·  PROJ-123">
@@ -824,31 +828,23 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <span class="muted">или</span>
       <button class="btn" id="srcFileBtn" title="Техническое задание: Word, PDF, Markdown или текст">Файл ТЗ</button>
       <input type="file" id="srcFile" accept=".md,.markdown,.txt,.docx,.pdf,text/markdown,text/plain" multiple class="hidden">
-      <span class="muted">или</span>
-      <button class="btn" id="exploreBtn" title="Planner: обойти по ссылкам адрес приложения и его дочерние страницы (пути под ним) и составить карту страниц и форм — вместо ТЗ">Исследовать сайт</button>
     </div>
     <div class="hint" id="srcStatus"></div>
     <label>Требования</label>
     <textarea id="reqText" rows="7" placeholder="Как покупатель, я хочу добавлять товары в корзину, чтобы оформить заказ…"></textarea>
-    <label>URL приложения (необязательно)</label><input id="reqUrl">
-    <div class="design-choice" id="reqChoice"></div>
     <div class="row" style="margin-top:10px"><span class="muted grow" id="reqStatus"></span>
-      <label class="inline" title="Структура по стандарту, качество требований, вопросы авторам — до проектирования сценариев"><input type="checkbox" id="reqCheck"> проверить ТЗ перед генерацией</label>
-      <button class="btn" id="reqValidate" title="Проверить ТЗ на соответствие требованиям к документации (стандарт — в «Проект → Требования»)">Проверить ТЗ</button>
-      <button class="btn" id="reqToPipe">В конвейер →</button>
-      <button class="btn primary" id="reqBtn">Сгенерировать сценарии</button></div>
+      <button class="btn primary" id="reqBtn" title="Ревьюер проверит ТЗ по стандарту (задаётся в «Проект → Требования») и сверит с жизненным циклом системы">Проверить требования</button></div>
   </div>
-  <div id="reqValidation" class="card hidden" style="margin-top:12px"></div>
   <div id="reqLive" class="card hidden" style="margin-top:12px">
-    <div class="row"><span class="dot run" id="reqDot"></span><b class="grow" id="reqStage">Анализ требований…</b>
+    <div class="row"><span class="dot run" id="reqDot"></span><b class="grow" id="reqStage">Ревью требований…</b>
       <span class="muted" id="reqTimer">0 с</span>
       <button class="btn small" id="reqStop">Остановить</button></div>
     <div class="pbar"><i id="reqBar"></i></div>
     <div class="live-log" id="reqLog" aria-live="polite"></div>
   </div>
   <div class="card" style="margin-top:12px">
-    <div class="row"><h3 class="grow" style="margin:0">История анализа требований</h3><span class="muted" id="anCount"></span></div>
-    <div class="hint">Каждая генерация сценариев сохраняется здесь вместе с требованиями. Раскройте анализ, чтобы посмотреть и изменить сценарии (изменения сохраняются сразу) и сгенерировать по ним тесты; под каждым сценарием — тесты, созданные по нему.</div>
+    <div class="row"><h3 class="grow" style="margin:0">Проверенные требования</h3><span class="muted" id="anCount"></span></div>
+    <div class="hint">Каждая проверка сохраняется здесь вместе с требованиями и отчётом ревьюера. Исправили ТЗ — проверьте заново; требования готовы — «Генерировать тест-кейсы в конвейере». Сценарии, спроектированные конвейером, и тесты по ним появятся под требованиями.</div>
     <div id="anList" data-paged></div>
   </div>
 </section>
@@ -858,14 +854,20 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="card hidden" id="pipeBusy"></div>
   <div class="card" id="pipeForm">
     <h2>Запуск конвейера</h2>
-    <div class="muted">Полный процесс по настройкам проекта: требования → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div>
+    <div class="muted">Генерация тест-кейсов и тестов по настройкам проекта: требования → ревью → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div>
     <div class="flow" id="pipeFlow"></div>
+    <label>Требования, проверенные во вкладке «Требования»</label>
+    <select id="pipeReview"></select>
+    <div class="hint" id="pipeReviewNote"></div>
+    <div id="pipeNewReq">
     <label>Ссылки на требования (Jira / Confluence, по одной в строке)</label>
     <textarea id="pipeLinks" rows="2" placeholder="https://company.atlassian.net/browse/PROJ-123"></textarea>
     <div class="row"><label class="grow">Текст требований (необязательно)</label>
       <button class="btn small" id="pipeFileBtn">Файл ТЗ</button>
       <input type="file" id="pipeFile" accept=".md,.markdown,.txt,.docx,.pdf" multiple class="hidden"></div>
     <textarea id="pipeText" rows="4"></textarea>
+    <div class="hint">Новые требования сначала проверит ревьюер (как во вкладке «Требования»); если он найдёт критичное, конвейер дождётся вашего решения.</div>
+    </div>
     <details class="opt" id="pipeCasesBox">
       <summary>Автоматизировать ручные кейсы из системы управления тестами</summary>
       <div class="hint">Кейсы становятся сценариями без проектирования: агент проходит их шаги в браузере, автотест привязывается к исходному кейсу, результаты прогонов уходят туда же. «У нас 2000 ручных кейсов — автоматизируйте».</div>
@@ -876,11 +878,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     </details>
     <details class="opt" id="pipeScenBox">
       <summary>Сценарии из анализа требований <span class="muted" id="pipeScenCount"></span></summary>
-      <div class="hint">Общий список сценариев, сгенерированных раньше во вкладке «Требования». Отмеченные сразу идут на генерацию тестов — без нового анализа требований; ссылки и текст тогда не нужны. Тесты привяжутся к своим сценариям.</div>
+      <div class="hint">Общий список сценариев, спроектированных раньше по проверенным требованиям. Отмеченные сразу идут на генерацию тестов — без нового проектирования; требования тогда не нужны. Тесты привяжутся к своим сценариям; «Тест в Studio» — записать тест по сценарию вручную с агентом.</div>
       <div class="row" style="margin-top:6px"><input id="pipeScenFind" class="grow" placeholder="Поиск по названию, шагам или анализу">
         <select id="pipeScenShow" style="width:auto"><option value="">все сценарии</option><option value="untested">без тестов</option></select></div>
       <div style="max-height:460px;overflow:auto;margin-top:6px"><table class="scen-list"><thead><tr><th class="chk"><input type="checkbox" id="pipeScenAll" title="Отметить все показанные"></th>
-        <th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Тестов</th></tr></thead><tbody id="pipeScenBody"></tbody></table></div>
+        <th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Тестов</th><th></th></tr></thead><tbody id="pipeScenBody"></tbody></table></div>
     </details>
     <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
     <div class="design-choice" id="pipeChoice"></div>
@@ -923,6 +925,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <button data-sub="data" data-sec="data">Данные стенда <span class="nb" data-kn-count="data"></span></button>
         <button data-sub="data" data-sec="memory">Память <span class="nb" data-kn-count="memory"></span></button>
       </div>
+      <button data-sub="blocks">Повторяющиеся шаги</button>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
     </div>
@@ -1115,8 +1118,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
 
         <div class="card stage">
-          <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Проверка ТЗ на соответствие требованиям к документации</h3></div>
-          <div class="hint">Структура документа по стандарту, качество каждого требования (полнота, однозначность, непротиворечивость, проверяемость, трассируемость), правила команды и вопросы авторам. Кнопка «Проверить ТЗ» — во вкладке «Требования». Проверка не блокирует генерацию: решает человек.</div>
+          <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Ревью требований</h3></div>
+          <div class="hint">Ревьюер — отдельный субагент со своим чистым контекстом (только документ, стандарт и жизненный цикл системы). Он ищет дефекты ТЗ: структура по стандарту, качество каждого требования (полнота, однозначность, непротиворечивость, проверяемость, трассируемость), правила команды — и сверяет ТЗ с жизненным циклом системы из «Тестовых данных»: статусы и переходы, зависимости сущностей, возможности и ограничения ролей. Кнопка «Проверить требования» — во вкладке «Требования»; тест-кейсы по проверенным требованиям генерирует конвейер. Если ревьюер нашёл критичное, конвейер ждёт решения человека.</div>
           <div class="grid2">
             <div><label>Стандарт</label><select data-p="requirements.standard" data-options="standards" onchange="showStandard()"></select></div>
             <div></div>
@@ -1125,7 +1128,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <label>Правила команды для ТЗ (по одному в строке)</label>
           <textarea data-p="requirements.checklist" rows="4" placeholder="У каждого требования есть номер REQ-…&#10;Для каждой формы описаны сообщения об ошибках&#10;Указаны роли, которым доступна функция"></textarea>
           <div class="checks" style="margin-top:8px">
-            <label class="inline"><input type="checkbox" data-p="requirements.validate"> Проверять ТЗ перед каждой генерацией сценариев (и в конвейере)</label>
+            <label class="inline"><input type="checkbox" data-p="requirements.validate"> Конвейер проверяет новые требования ревьюером перед проектированием сценариев</label>
             <label class="inline"><input type="checkbox" data-p="requirements.learn_model"> Обновлять модель приложения из требований: сущности, зависимости, жизненный цикл, роли и их возможности; тестовые данные сценариев («Проект → Тестовые данные»)</label>
             <label class="inline"><input type="checkbox" data-p="requirements.confirm_model"> Генерировать тесты только по подтверждённому жизненному циклу системы: конвейер ждёт подтверждения модели</label>
             <label class="inline"><input type="checkbox" data-p="requirements.preflight"> Проверять сценарий перед тестом: у его роли заведена учётная запись, сценарий не нарушает ограничения ролей и жизненный цикл сущностей (иначе тест не запускается)</label>
@@ -1309,6 +1312,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
 
       <!-- Process -->
+      <div data-subpanel="blocks" class="hidden">
+        <div class="card" id="blocksBox"></div>
+      </div>
       <div data-subpanel="process" class="hidden">
         <div class="card">
           <h3>Процесс генерации тест-кейсов</h3>
@@ -2069,13 +2075,15 @@ function usageText(u) {
 function renderSteps(steps) {
   $('#stepCount').textContent = steps.length ? `(${steps.length})` : '';
   $('#steps').innerHTML = steps.map((st, i) => `
-    <div class="step st-${st.status}${(STATE?.finish?.assertions || []).includes(i + 1) ? ' evidence' : ''}" data-i="${i}">
+    <div class="step st-${st.status}${st.replay_error ? ' st-broken' : ''}${(STATE?.finish?.assertions || []).includes(i + 1) ? ' evidence' : ''}" data-i="${i}">
       <div class="n">${i + 1}</div>
       <div>
         <span class="badge ${st.action.startsWith('assert') ? 'assert' : ''}">${esc(st.action)}</span>
         <span class="d" contenteditable="true" data-i="${i}">${esc(st.description)}</span>
         <div class="meta">${st.value ? 'значение: ' + esc(st.value) + ' · ' : ''}${esc(locText(st.locator))}${st.source !== 'ai' ? ' · ' + esc(st.source) : ''}${st.healed ? ' · healed' : ''}</div>
         ${st.error ? `<div class="err">${esc(st.error)}</div>` : ''}
+        ${st.status === 'running' ? '<div class="hint">выполняется…</div>' : ''}
+        ${st.replay_error ? `<div class="err">✘ Упал при прогоне: ${esc(st.replay_error)}</div>` : ''}
       </div>
       <div class="acts">
         <button title="Вверх" data-op="up" data-i="${i}">▲</button>
@@ -2230,6 +2238,7 @@ $('#saveBtn').onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 $('#runSavedBtn').onclick = () => { showTab('tests'); runTest(TEST_ID); };
+$('#watchSavedBtn').onclick = e => editInStudio(TEST_ID, e.target, true);
 $('#readyBtn').onclick = async () => {
   try { await api('PATCH', `/api/tests/${TEST_ID}/meta`, {status: 'ready'}); $('#savedText').textContent = 'Сохранено, в наборе'; $('#readyBtn').classList.add('hidden'); }
   catch (e) { alert(e.message); }
@@ -2296,6 +2305,7 @@ async function loadTests() {
       <td>${verifyCell(t)}</td>
       <td>${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
+        ${canRole('editor') ? `<button class="btn small" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
         <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
           <button onclick="openTest('${t.id}').then(() => editSteps('${t.id}'))">Редактировать шаги</button>
@@ -2321,6 +2331,43 @@ async function loadTests() {
   if (OPEN_TEST && !$('#testBox').classList.contains('hidden')) openTest(OPEN_TEST, true);
 }
 $('#tagFilter').onchange = loadTests;
+// Repeated actions -> modules: a chain of actions found in several stable tests is offered as a module (blocks.py);
+// the tests then call the module instead of keeping copies. Assertions never go into a module.
+async function loadBlocks() {
+  const box = $('#blocksBox');
+  let d;
+  try { d = await api('GET', `/api/projects/${PID}/blocks`); } catch (e) { box.innerHTML = ''; return; }
+  const bySection = list => list.reduce((acc, x) => ((acc[x.section || 'Без раздела'] ||= []).push(x), acc), {});
+  const cands = bySection(d.candidates), mods = bySection(d.modules);
+  const candHtml = Object.entries(cands).map(([sec, list]) => `<div style="margin-top:8px"><b>${esc(sec)}</b>${list.map(c => `
+    <details class="card" style="margin:6px 0;padding:8px"><summary><b>${esc(c.name)}</b>
+      <span class="muted">— ${c.steps.length} действий, в ${c.tests.length} тестах${c.params ? `, параметров: ${c.params}` : ''}</span></summary>
+      <ol style="margin:6px 0">${c.steps.map(s => `<li><code>${esc(s.action)}</code> ${esc(s.description)}${s.value ? ` <span class="muted">— ${esc(s.value)}</span>` : ''}</li>`).join('')}</ol>
+      <div class="muted" style="font-size:12px">Тесты: ${c.tests.map(t => esc(t.name) + (t.count > 1 ? ` (×${t.count})` : '')).join(', ')}${c.start_path ? ` · начинается на ${esc(c.start_path)}` : ''}</div>
+      <div class="row" style="margin-top:6px"><input class="grow" id="blk-${c.key}" value="${esc(c.name)}" title="Название модуля">
+        <label class="inline" title="Шаги в этих тестах заменятся вызовом модуля (новая версия теста)"><input type="checkbox" id="blkr-${c.key}" checked> заменить в тестах</label>
+        <button class="btn primary small" onclick="acceptBlock('${c.key}', this)">Сделать модулем</button>
+        <button class="btn small" onclick="dismissBlock('${c.key}')">Не предлагать</button></div>
+    </details>`).join('')}</div>`).join('');
+  const modHtml = Object.entries(mods).map(([sec, list]) => `<div style="margin-top:6px"><b>${esc(sec)}</b>: ${list.map(m =>
+    `<a href="#" onclick="openTest('${m.id}');return false">${esc(m.name)}</a> <span class="muted">(${m.steps} шагов${m.start_path ? ', ' + esc(m.start_path) : ''}; ${m.used_by.length ? 'используют: ' + m.used_by.length : 'не используется'})</span>`).join('; ')}</div>`).join('');
+  box.innerHTML = `<h3>Повторяющиеся шаги и модули</h3>
+    <div class="hint" style="margin-top:0">Одинаковые цепочки действий (без проверок) из стабильных тестов — их лучше вынести в модуль: тесты будут вызывать его, а не хранить копии, самолечение починит его один раз. При записи новых тестов агент сам ищет готовые действия по разделу сценария и переиспользует их как модуль. Разделы — группы сущностей модели приложения или страница, с которой начинаются действия.</div>
+    ${candHtml || '<div class="muted" style="margin-top:6px">Повторяющихся цепочек действий в стабильных тестах нет.</div>'}
+    ${modHtml ? `<div style="margin-top:10px"><b>Модули проекта</b>${modHtml}</div>` : ''}`;
+}
+async function acceptBlock(key, btn) {
+  btn.disabled = true;
+  try {
+    const r = await api('POST', `/api/projects/${PID}/blocks/${key}/accept`, {name: $('#blk-' + key).value, replace: $('#blkr-' + key).checked});
+    alert(`Модуль «${r.module.name}» создан${r.replaced ? `, заменено вхождений: ${r.replaced}` : ''}`);
+  } catch (e) { alert(e.message); }
+  loadBlocks();
+}
+async function dismissBlock(key) {
+  try { await api('POST', `/api/projects/${PID}/blocks/${key}/dismiss`); } catch (e) { alert(e.message); }
+  loadBlocks();
+}
 document.addEventListener('click', e => $$('details.menu[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
 async function editTags(id) {
   const t = TESTS.find(x => x.id === id);
@@ -2719,7 +2766,8 @@ function stepsViewHtml(t) {
   const can = canRole('editor');
   return `<div class="row"><b class="grow">Шаги (${t.steps.length})</b>
       ${can ? `<button class="btn small" onclick="editSteps('${t.id}')" title="Изменить описания, значения, локаторы и порядок шагов">Редактировать</button>
-      <button class="btn small" onclick="editInStudio('${t.id}', this)" title="Тест воспроизводится в браузере Studio: шаги можно дописать, перезаписать кликом или попросить агента">Править в Studio</button>` : ''}</div>
+      <button class="btn small" onclick="editInStudio('${t.id}', this)" title="Тест воспроизводится в браузере Studio: шаги можно дописать, перезаписать кликом или попросить агента">Править в Studio</button>
+      <button class="btn small" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: шаги выполняются по одному, Live View показывает каждый">Прогон в Studio</button>` : ''}</div>
     <div class="hint" style="margin-top:2px">${t.steps.map((s, i) => `<div style="margin:2px 0">${i + 1}. <span class="badge ${s.action.startsWith('assert') ? 'assert' : ''}">${esc(STEP_ACTIONS[s.action] || s.action)}</span> ${esc(s.description)}${s.value ? ` <span class="muted">— ${esc(s.value.length > 80 ? s.value.slice(0, 80) + '…' : s.value)}</span>` : ''}</div>`).join('') || 'Шагов нет.'}</div>`;
 }
 async function editSteps(tid) {
@@ -2777,12 +2825,13 @@ async function saveSteps(btn) {
     STEP_EDIT = null; openTest(OPEN_TEST, true); loadTests();
   } catch (e) { $('#stepsMsg').textContent = e.message; btn.disabled = false; }
 }
-async function editInStudio(tid, btn) {
+// watch - «Прогон в Studio»: the steps run one by one, Live View follows them; then the test can be edited
+async function editInStudio(tid, btn, watch = false) {
   if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
   btn.disabled = true;
   try {
     if (SID) await api('DELETE', `/api/sessions/${SID}`);
-    const {id} = await api('POST', `/api/tests/${tid}/edit`, {headless: true});
+    const {id} = await api('POST', `/api/tests/${tid}/edit`, {headless: true, watch});
     openSession(id);
   } catch (e) { alert(e.message); btn.disabled = false; }
 }
@@ -2934,14 +2983,14 @@ async function loadCoverage() {
   const c = await api('GET', `/api/projects/${PID}/coverage`);
   const box = $('#covBox');
   if (!c.total) {
-    box.innerHTML = `<h3>Покрытие экранов</h3><div class="hint">Карты сайта ещё нет. Запустите «Исследовать сайт» во вкладке <a href="#" onclick="showTab('req');return false">Требования</a> — Planner обойдёт приложение, и здесь появятся страницы без тестов.</div>`;
+    box.innerHTML = `<h3>Покрытие экранов</h3><div class="hint">Карты сайта ещё нет. Запустите конвейер с «Исследовать сайт» во вкладке <a href="#" onclick="showTab('pipe');return false">Конвейер</a> — Planner обойдёт приложение, и здесь появятся страницы без тестов.</div>`;
     return;
   }
   const missing = c.pages.filter(p => !p.tests.length);
   box.innerHTML = `<h3>Покрытие экранов: ${c.covered} из ${c.total}</h3>
-    <div class="hint">По карте сайта от ${fmtTime(c.at)} (${esc(c.start)}). Страница покрыта, если её открывает хотя бы один тест.</div>
+    <div class="hint">По карте сайта от ${fmtTime(c.at)} (${esc(c.start)}${c.site_title ? `, «${esc(c.site_title)}»` : ''}). Страница покрыта, если её открывает хотя бы один тест.</div>
     <div class="bar"><span style="width:${c.covered / c.total * 100}%;background:var(--ok)"></span></div>
-    ${missing.length ? '<b style="font-size:13px">Без тестов:</b>' + missing.map(p => `<div class="hint" style="margin:2px 0">• <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.path)}</a> ${esc(p.title)}${p.forms ? ` <span class="badge">форм: ${p.forms}</span>` : ''}</div>`).join('') : '<div class="ok">Все страницы карты открываются тестами.</div>'}`;
+    ${missing.length ? '<b style="font-size:13px">Без тестов:</b>' + missing.map(p => `<div class="hint" style="margin:2px 0">• <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.path)}</a>${p.forms ? ` <span class="badge">форм: ${p.forms}</span>` : ''} — ${esc(p.summary || p.title || 'нет текста на странице')}</div>`).join('') : '<div class="ok">Все страницы карты открываются тестами.</div>'}`;
 }
 
 // ---- requirements sources: Jira / Confluence (MCP) and .md files
@@ -3084,40 +3133,11 @@ $('#srcFile').onchange = async e => {
   } catch (err) { $('#srcStatus').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
   e.target.value = '';
 };
-$('#reqToPipe').onclick = () => {
-  $('#pipeText').value = $('#reqText').value; $('#pipeUrl').value = $('#reqUrl').value;
-  showTab('pipe');
-};
-// Planner: crawl the site into a map of pages and forms, used as requirements
-$('#exploreBtn').onclick = async () => {
-  const url = $('#reqUrl').value.trim() || PROJ.base_url;
-  if (!url) { $('#srcStatus').innerHTML = '<span class="err">Укажите URL приложения (ниже) или в настройках проекта</span>'; return; }
-  $('#exploreBtn').disabled = true; $('#srcStatus').textContent = 'Planner: обход сайта…';
-  try {
-    const {id} = await api('POST', `/api/projects/${PID}/explore`, {url});
-    const tick = async () => {
-      let r;
-      try { r = await api('GET', `/api/projects/${PID}/explore/${id}`); } catch (e) { r = {status: 'error', error: e.message}; }
-      if (r.status === 'running') {
-        $('#srcStatus').textContent = `Planner: страниц ${r.pages.length}… ${r.log?.at(-1) || ''}`;
-        setTimeout(tick, 1200); return;
-      }
-      $('#exploreBtn').disabled = false;
-      if (r.status !== 'done') { $('#srcStatus').innerHTML = `<span class="err">${esc(r.error || 'Исследование не удалось')}</span>`; return; }
-      appendText($('#reqText'), '', r.requirements);
-      if (!$('#reqUrl').value) $('#reqUrl').value = url;
-      const learned = (r.log || []).filter(x => x.startsWith('Модель приложения ')).at(-1);
-      $('#srcStatus').innerHTML = `<span class="ok">Карта сайта:</span> страниц ${r.pages.length}, пропущено ссылок ${r.skipped} (выход, удаление, файлы, другие сайты).${learned ? ' ' + esc(learned) + ' («Проект → Тестовые данные»).' : ''} Теперь «Сгенерировать сценарии».`;
-    };
-    tick();
-  } catch (e) { $('#srcStatus').innerHTML = `<span class="err">${esc(e.message)}</span>`; $('#exploreBtn').disabled = false; }
-};
-
-// ---- requirements -> scenarios
-// Generation streams its intermediate results (NDJSON): the plan of titles appears first as
-// placeholder cards, each detailed batch fills them in, the last 5 lines of the log show what is going on.
-// The history of analyses: one is open at a time (AN, its scenarios in SCEN); a scenario is edited in place
-// and saved at once; "Generate all" runs the pipeline with its scenarios, the tests made show under each.
+// ---- the review of requirements
+// The reviewer subagent streams what it does (NDJSON): the log shows its steps, the report fills the analysis.
+// The history of analyses: one is open at a time (AN, the scenarios the pipeline designed in SCEN); a scenario
+// is edited in place and saved at once; the tests made from it show under each. Test cases are generated in
+// the pipeline: «Генерировать тест-кейсы в конвейере» starts it from the reviewed requirements.
 let ANALYSES = [], AN = null, SCEN = [], SCEN_OPEN = new Set(), REQ_ABORT = null, STUDIO_SCEN = null;
 const LOG_LINES = 300;
 const scTypes = () => Object.fromEntries(Object.entries(PROJ.catalog.types).map(([k, v]) => [k, v.label]));
@@ -3137,12 +3157,13 @@ function reuseHtml(s, attrs) {
   const m = s.match;
   if (!m) return '';
   return `<div class="hint" style="margin-top:3px;${m.decision ? '' : 'color:var(--warn)'}">≈ Похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${esc(m.title)}» (${REUSE_RELATION[m.relation] || ''}):
-    <select ${attrs} style="width:auto;padding:1px 4px;font-size:12px">${reuseOptions(m)}</select></div>`;
+    <select ${attrs} style="width:auto;padding:1px 4px;font-size:12px">${reuseOptions(m)}</select>${m.kind === 'scenario' && m.decision === 'reuse' && m.automated === false && !(s.tests || []).length ? ' <span style="color:var(--warn)">прежний сценарий не автоматизирован — тест будет создан один на оба</span>' : ''}</div>`;
 }
 const roleBadge = s => s.role ? ` <span class="badge" title="Роль, от которой выполняется сценарий">${esc(s.role)}</span>` : '';
 // ids: [id …] of the records of the application model - the agent fulfils them, the test keeps them (Studio)
 const scDataText = (s, ids) => (s.test_data || []).map(d => `${d.entity} «${d.name}»` + (d.state ? ` (${d.state})` : '') + (d.details ? ` — ${d.details}` : '') + (d.role ? `; роль: ${d.role}` : '') + (ids && d.record_id ? ` [id ${d.record_id}]` : '')).join('\n');
-const AN_STATUS = {running: ['генерация…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
+const AN_STATUS = {running: ['в работе…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
+const REVIEW_VERDICT = {ready: ['требования готовы', 'ok'], needs_work: ['требования нужно доработать', 'warn'], not_ready: ['требования не готовы', 'bad']};
 const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
 const isReady = s => !s.pending;
 // Lines wrap in full; the box scrolls once they do not fit and follows the newest unless scrolled up.
@@ -3169,24 +3190,27 @@ function anSummary(a) {
   const [st, cls] = AN_STATUS[a.status] || [a.status, 'off'];
   const n = AN && AN.id === a.id ? SCEN.filter(isReady).length : a.scenarios;
   const tests = AN && AN.id === a.id ? SCEN.reduce((k, s) => k + (s.tests || []).length, 0) : a.tests;
+  const rv = AN && AN.id === a.id ? AN.review : a.review;
+  const [vt, vcls] = rv ? REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'] : ['не проверены', 'off'];
   return `<span class="arrow">▸</span>
     <span class="muted" style="font-size:12px;white-space:nowrap">${fmtTime(a.created)}</span>
     <span class="an-title" title="${esc(a.title)}">${esc(a.feature || a.title || 'Требования')}${a.feature && a.title && a.feature !== a.title ? ` <span class="muted" style="font-weight:400">— ${esc(a.title)}</span>` : ''}</span>
-    <span class="badge">сценариев: ${n}</span><span class="badge ${tests ? 'ok' : 'off'}">тестов: ${tests}</span>
-    <span class="badge ${cls}" title="${esc(a.error || '')}">${esc(st)}</span>
+    <span class="badge ${vcls}" title="Отчёт ревьюера">${esc(vt)}</span>
+    ${n ? `<span class="badge">сценариев: ${n}</span><span class="badge ${tests ? 'ok' : 'off'}">тестов: ${tests}</span>` : ''}
+    ${a.status !== 'done' ? `<span class="badge ${cls}" title="${esc(a.error || '')}">${esc(st)}</span>` : ''}
     ${a.user ? `<span class="muted" style="font-size:12px">${esc(a.user)}</span>` : ''}`;
 }
 function renderAnalyses() {
   $('#anCount').textContent = ANALYSES.length ? `${ANALYSES.length}` : '';
   $('#anList').innerHTML = ANALYSES.map(a => `<details class="an" data-aid="${a.id}" ${AN && AN.id === a.id ? 'open' : ''}>
       <summary>${anSummary(a)}</summary><div class="an-body" id="an-body-${a.id}"></div></details>`).join('')
-    || '<div class="muted" style="margin-top:8px">Анализов пока нет: вставьте требования выше и нажмите «Сгенерировать сценарии».</div>';
+    || '<div class="muted" style="margin-top:8px">Проверок пока нет: вставьте требования выше и нажмите «Проверить требования».</div>';
   if (AN && $(`#an-body-${AN.id}`)) renderAnalysis();
 }
 function refreshSummary() {
   if (!AN) return;
   const a = ANALYSES.find(x => x.id === AN.id), el = $(`details.an[data-aid="${AN.id}"] > summary`);
-  if (a && el) { Object.assign(a, {feature: AN.feature, status: AN.status, error: AN.error}); el.innerHTML = anSummary(a); }
+  if (a && el) { Object.assign(a, {feature: AN.feature, status: AN.status, error: AN.error, review: AN.review}); el.innerHTML = anSummary(a); }
 }
 $('#anList').addEventListener('toggle', async e => {
   const d = e.target;
@@ -3200,34 +3224,39 @@ $('#anList').addEventListener('toggle', async e => {
   catch (err) { $(`#an-body-${aid}`).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
 }, true);
 function openAnalysis(a) {
+  if (AN?.id !== a.id) FIX_MSG = '';
   AN = a; SCEN = a.scenarios.map(s => ({...s, sel: true})); SCEN_OPEN = new Set();
   renderAnalysis(); refreshSummary();
 }
 function renderAnalysis() {
   const body = AN && $(`#an-body-${AN.id}`);
   if (!body) return;
+  const busy = AN.status === 'running' || !!REQ_ABORT;
+  const rv = AN.review, revs = AN.revisions || [];
+  const unsettled = rv?.items ? rv.items.filter(x => x.blocking && (x.status === 'open' || x.status === 'todo')).length : 0;
   body.innerHTML = `
-    <details class="opt"><summary>Требования${AN.url ? ` · ${esc(AN.url)}` : ''}</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
+    <details class="opt"><summary>Требования${AN.url ? ` · ${esc(AN.url)}` : ''}${revs.length ? ` · исправлены агентом: ${revs.length}` : ''}</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
+      ${revs.length ? `<details class="opt"><summary>Последнее исправление — ${fmtTime(revs[revs.length - 1].at)}${revs[revs.length - 1].by ? `, ${esc(revs[revs.length - 1].by)}` : ''}</summary>
+        <div class="hint">${esc(revs[revs.length - 1].summary || '')}</div>
+        ${(revs[revs.length - 1].edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
+          <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}</details>` : ''}
       <button class="btn small" onclick="reuseRequirements()">Вставить в поле требований</button></details>
-    ${AN.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${AN.assumptions.map(esc).join('; ')}</div>` : ''}
-    ${AN.validation ? `<details class="opt"><summary>Проверка ТЗ: ${AN.validation.score}/100 — ${esc(VERDICTS[AN.validation.verdict] || AN.validation.verdict)}</summary>${validationHtml(AN.validation)}</details>` : ''}
+    ${rv ? reviewHtml(rv, true) : !AN.validation && !busy ? '<div class="hint">Требования ещё не проверены ревьюером.</div>' : ''}
+    ${!rv && AN.validation ? `<details class="opt"><summary>Проверка ТЗ: ${AN.validation.score}/100 — ${esc(VERDICTS[AN.validation.verdict] || AN.validation.verdict)}</summary>${validationHtml(AN.validation)}</details>` : ''}
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
-    <div class="row" style="margin-top:8px"><span class="grow muted" id="scenCount"></span>
-      <button class="btn small" onclick="validateAnalysis(this)" title="Проверить требования этого анализа на соответствие стандарту документации">Проверить ТЗ</button>
-      <button class="btn small" onclick="learnFromAnalysis(this)" title="Дополнить модель приложения (сущности, зависимости, жизненный цикл, роли) требованиями этого анализа">В модель приложения</button>
-      <button class="btn small" id="scenAdd">+ Сценарий</button>
-      <button class="btn small" id="anDelete" style="color:var(--bad)">Удалить анализ</button>
-      <button class="btn primary" id="scenGenAll">Сгенерировать все</button></div>
-    <table class="scen-list" style="margin-top:8px"><thead><tr><th class="chk"><input type="checkbox" id="scenAll" title="Отметить все"></th><th>#</th><th>Сценарий и тесты по нему</th><th>Тип</th><th>Приоритет</th><th></th></tr></thead>
-      <tbody id="scenList"></tbody></table>`;
-  $('#scenAdd').onclick = addScenario;
+    <div class="row" style="margin-top:8px"><span class="grow"></span>
+      <button class="btn small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''} title="Проверить требования этого анализа ревьюером заново: дефекты ТЗ и соответствие жизненному циклу системы">${rv ? 'Проверить заново' : 'Проверить требования'}</button>
+      <button class="btn small" onclick="learnFromAnalysis(this)" ${unsettled ? 'disabled' : ''} title="${unsettled ? `Сначала разберите замечания ревьюера, блокирующие тест-дизайн (осталось ${unsettled}): модель приложения учится только на согласованных требованиях` : 'Дополнить модель приложения (сущности, зависимости, жизненный цикл, роли) требованиями этого анализа'}">В модель приложения</button>
+      <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''}>Удалить анализ</button>
+      <button class="btn primary" onclick="toPipeline()" ${busy || !rv ? 'disabled' : ''} title="${rv ? 'Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты' : 'Сначала проверьте требования'}">Генерировать тест-кейсы в конвейере →</button></div>
+    ${AN.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${AN.assumptions.map(esc).join('; ')}</div>` : ''}
+    <div id="scenBox" class="${SCEN.length ? '' : 'hidden'}">
+      <div class="row" style="margin-top:12px"><b class="grow">Сценарии из конвейера и тесты по ним</b><span class="muted" id="scenCount"></span>
+        <button class="btn small" onclick="pickInPipeline()" title="Отметить сценарии этих требований в списке конвейера, чтобы сгенерировать по ним тесты">Выбрать в конвейере →</button></div>
+      <table class="scen-list" style="margin-top:8px"><thead><tr><th>#</th><th>Сценарий и тесты по нему</th><th>Тип</th><th>Приоритет</th><th></th></tr></thead>
+        <tbody id="scenList"></tbody></table></div>`;
   $('#anDelete').onclick = deleteAnalysis;
-  $('#scenGenAll').onclick = generateAll;
-  $('#scenAll').onchange = () => {
-    SCEN.filter(isReady).forEach(x => x.sel = $('#scenAll').checked);
-    $$('.sc-sel').forEach(c => c.checked = $('#scenAll').checked);
-    updateScenCounts();
-  };
+  applyFindFilter();
   renderScenarios();
 }
 // ---- what to design in this generation: layers, kinds of checks, techniques (defaults: Проект → Сценарии)
@@ -3236,7 +3265,7 @@ function renderDesignChoices() {
   const cfg = PROJ.pipeline.scenarios, cat = PROJ.catalog;
   const boxes = (prefix, kind, entries, cur) => entries.map(([k, label, hint]) =>
     `<label class="inline" ${hint ? `title="${esc(hint)}"` : ''}><input type="checkbox" data-design="${prefix}-${kind}" value="${k}" ${cur.includes(k) ? 'checked' : ''}> ${esc(label)}</label>`).join('');
-  for (const prefix of ['req', 'pipe']) {
+  for (const prefix of ['pipe']) {
     const box = $(`#${prefix}Choice`); if (!box) continue;
     box.innerHTML = `<div class="row" style="margin-top:10px;align-items:baseline"><b style="font-size:13px">Слои:</b>
         ${boxes(prefix, 'layers', Object.entries(cat.layers), cfg.layers)}
@@ -3247,7 +3276,6 @@ function renderDesignChoices() {
         ${boxes(prefix, 'techniques', Object.entries(cat.techniques).map(([k, v]) => [k, v.label, v.hint]), cfg.techniques)}</div></details>
       <div class="hint">Выбор только для этого запуска; значения по умолчанию — в «Проект → Сценарии».</div>`;
   }
-  if ($('#reqCheck')) $('#reqCheck').checked = !!PROJ.pipeline.requirements.validate;
 }
 function readDesign(prefix) {
   const pick = kind => $$(`[data-design="${prefix}-${kind}"]`).filter(c => c.checked).map(c => c.value);
@@ -3262,50 +3290,218 @@ function readDesign(prefix) {
 const VERDICTS = {ready: 'готово к тест-дизайну', needs_work: 'нужна доработка', not_ready: 'не готово'};
 const SEVERITY = {critical: ['критично', 'bad'], major: ['существенно', 'warn'], minor: ['незначительно', 'off']};
 const SECTION = {present: ['есть', 'ok'], partial: ['частично', 'warn'], missing: ['нет', 'bad']};
-function validationHtml(v) {
-  const q = PROJ.catalog.quality;
+const criterionLabel = c => PROJ.catalog.quality[c] || (c === 'checklist' ? 'правила команды' : c === 'section' ? 'структура' : c);
+function findingCard(f) {     // a defect of the document or a conflict with the lifecycle, as the reviewer gave it
+  return `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
+      <div><span class="badge ${SEVERITY[f.severity]?.[1] || ''}">${esc(SEVERITY[f.severity]?.[0] || f.severity)}</span>
+        <span class="badge">${esc(f.kind && CONFLICT_KIND[f.kind] ? CONFLICT_KIND[f.kind] : criterionLabel(f.criterion))}</span>
+        <span class="muted" style="font-size:12px">${esc(f.location)}</span></div>
+      <div style="margin-top:4px">${esc(f.problem)}</div>
+      ${f.model_rule ? `<div class="hint" style="margin:2px 0 0">По модели: ${esc(f.model_rule)}</div>` : ''}
+      ${f.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(f.suggestion)}</div>` : ''}</div>`;
+}
+// brief - the findings and questions are listed as themes (reviewHtml): only the score and the sections here
+function validationHtml(v, brief) {
   const color = v.score >= 80 ? 'var(--ok)' : v.score >= 50 ? 'var(--warn)' : 'var(--bad)';
   return `<div class="row" style="margin-top:6px"><b class="grow">${esc(v.standard_title || '')}</b>
       <span class="badge" style="background:${color};color:#fff">${v.score}/100</span> <span class="badge">${esc(VERDICTS[v.verdict] || v.verdict)}</span></div>
     <div class="bar"><span style="width:${v.score}%;background:${color}"></span></div>
+    ${v.document_kind ? `<div class="hint" style="margin:4px 0 0">Документ: ${esc(v.document_kind)}</div>` : ''}
     <div style="margin-top:6px">${esc(v.summary)}</div>
-    <details class="opt" open><summary>Разделы по стандарту (${v.sections.filter(x => x.status === 'present').length} из ${v.sections.length})</summary>
+    <details class="opt" ${brief ? '' : 'open'}><summary>Разделы по стандарту (${v.sections.filter(x => x.status === 'present').length} из ${v.sections.length})</summary>
       <table data-nopage><tbody>${v.sections.map(x => `<tr><td>${esc(x.section)}</td><td><span class="badge ${SECTION[x.status]?.[1] || ''}">${esc(SECTION[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.comment)}</td></tr>`).join('')}</tbody></table></details>
-    <details class="opt" open><summary>Замечания (${v.findings.length})</summary>
-      ${v.findings.map(f => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px">
-        <div><span class="badge ${SEVERITY[f.severity]?.[1] || ''}">${esc(SEVERITY[f.severity]?.[0] || f.severity)}</span>
-          <span class="badge">${esc(q[f.criterion] || (f.criterion === 'checklist' ? 'правила команды' : f.criterion === 'section' ? 'структура' : f.criterion))}</span>
-          <span class="muted" style="font-size:12px">${esc(f.location)}</span></div>
-        <div style="margin-top:4px">${esc(f.problem)}</div>
-        ${f.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(f.suggestion)}</div>` : ''}</div>`).join('') || '<div class="hint">Замечаний нет.</div>'}</details>
-    ${v.questions?.length ? `<details class="opt" open><summary>Вопросы авторам (${v.questions.length})</summary><ol style="margin:4px 0">${v.questions.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>` : ''}`;
+    ${brief ? '' : `<details class="opt" open><summary>Замечания (${v.findings.length})</summary>
+      ${v.findings.map(f => findingCard(f)).join('') || '<div class="hint">Замечаний нет.</div>'}</details>
+    ${v.questions?.length ? `<details class="opt" open><summary>Вопросы авторам (${v.questions.length})</summary><ol style="margin:4px 0">${v.questions.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>` : ''}`}`;
 }
-$('#reqValidate').onclick = async () => {
-  const requirements = $('#reqText').value.trim();
-  if (!requirements) { $('#reqStatus').textContent = 'Вставьте текст требований'; return; }
-  const box = $('#reqValidation'), btn = $('#reqValidate');
-  const stop = new AbortController();
-  btn.disabled = true; box.classList.remove('hidden');
-  box.innerHTML = '<div class="row"><span class="dot run"></span><b class="grow">Проверка ТЗ на соответствие стандарту…</b><button class="btn small" id="reqValidateStop">Отменить</button></div>';
-  $('#reqValidateStop').onclick = () => stop.abort();
+// ---- the reviewer's report: defects of the document and conflicts with the lifecycle of the system
+const CONFLICT_KIND = {contradiction: 'противоречит жизненному циклу', role: 'роли', gap: 'пробел в жизненном цикле', new: 'новое для модели'};
+const MODEL_STATE = {confirmed: 'подтверждена', changed: 'изменилась после подтверждения', none: 'не подтверждена'};
+function lifecycleHtml(lc, brief) {
+  const bad = lc.conflicts.filter(c => c.kind !== 'new'), fresh = lc.conflicts.filter(c => c.kind === 'new');
+  const m = lc.model || {};
+  return `<div class="hint" style="margin-top:6px">Модель приложения: ${m.entities || m.roles ? `сущностей ${m.entities}, ролей ${m.roles} — ${esc(MODEL_STATE[m.state] || m.state || '')}` : 'пуста — проверен жизненный цикл, который описывает сам документ'}
+      · <a href="#" onclick="openSettings('data', 'overview');return false">открыть</a></div>
+    <div style="margin-top:6px">${esc(lc.summary)}</div>
+    ${brief ? '' : `<details class="opt" open><summary>Расхождения с жизненным циклом (${bad.length})</summary>${bad.map(c => findingCard(c)).join('') || '<div class="hint">Расхождений нет.</div>'}</details>`}
+    ${fresh.length ? `<details class="opt"><summary>Новое для модели приложения (${fresh.length})</summary>${fresh.map(c => findingCard(c)).join('')}</details>` : ''}
+    ${!brief && lc.questions?.length ? `<details class="opt" open><summary>Вопросы о жизненном цикле (${lc.questions.length})</summary><ol style="margin:4px 0">${lc.questions.map(x => `<li>${esc(x)}</li>`).join('')}</ol></details>` : ''}`;
+}
+// ---- what a person settles: themes (review.themes) - the findings of both checks on the same thing, one answer
+// for all of them, or a finding of its own. Blocking ones hold back test design and the application model; the
+// others are the quality of the document (its form, minor findings): worth fixing, not required.
+const FINDING_STATE = {open: ['не разобрано', 'warn'], todo: ['ждёт исправления агентом', 'off'], fixed: ['исправлено в ТЗ', 'ok'], dismissed: ['не актуально', 'off']};
+let FIX_MSG = '';               // what the last fix or decision did, under the progress of the findings
+let FIND_SHOW = 'blocking', FIND_LEFT = true;     // the filter of the list: blocking | quality | all; only unsettled
+const themeLeft = t => t.status === 'open' || t.status === 'todo';
+const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running';
+function themeItem(it, many) {
+  const tag = it.kind === 'question' ? '<span class="badge">вопрос авторам</span>'
+    : `<span class="badge ${SEVERITY[it.severity]?.[1] || ''}">${esc(SEVERITY[it.severity]?.[0] || it.severity)}</span>
+       <span class="badge">${esc(it.kind === 'lifecycle' ? CONFLICT_KIND[it.criterion] || 'жизненный цикл' : criterionLabel(it.criterion))}</span>`;
+  return `<div style="${many ? 'border-left:3px solid var(--line);padding-left:8px;' : ''}margin-top:6px">
+      <div>${tag} <span class="muted" style="font-size:12px">${esc(it.location)}</span></div>
+      <div style="margin-top:2px">${esc(it.problem)}</div>
+      ${it.model_rule ? `<div class="hint" style="margin:2px 0 0">По модели: ${esc(it.model_rule)}</div>` : ''}
+      ${it.suggestion ? `<div class="hint" style="margin:2px 0 0">Исправить: ${esc(it.suggestion)}</div>` : ''}</div>`;
+}
+function themeCtl(t) {
+  const busy = reviewBusy(), [label, cls] = FINDING_STATE[t.status] || [t.status, 'off'];
+  const badge = `<span class="badge ${cls}">${esc(label)}</span>`;
+  if (!themeLeft(t))
+    return `<div class="row" style="margin-top:6px;gap:6px">${badge}
+      <span class="hint grow" style="margin:0">${t.answer ? `Ответ: ${esc(t.answer)}` : t.status === 'fixed' ? 'По предложению ревьюера' : ''}${t.note ? `Почему: ${esc(t.note)}` : ''}</span>
+      <button class="btn small" onclick="decideTheme('${t.id}', 'open')" ${busy ? 'disabled' : ''} title="Снова считать неразобранным">Вернуть</button></div>`;
+  return `<div style="margin-top:6px">
+    <div class="row" style="gap:6px">${badge}${t.error ? `<span class="err" style="margin:0">Агент не исправил: ${esc(t.error)} — уточните ответ</span>` : ''}</div>
+    <textarea id="fd-${t.id}" rows="2" style="width:100%;margin-top:4px" placeholder="${t.question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(t.answer || '')}</textarea>
+    <div class="row" style="gap:6px;margin-top:4px"><span class="grow"></span>
+      <button class="btn small" onclick="decideTheme('${t.id}', 'todo')" ${busy ? 'disabled' : ''} title="Агент исправит ТЗ по ответу при «Исправить ТЗ агентом»">${t.status === 'todo' ? 'Сохранить ответ' : 'Ответить'}</button>
+      <button class="btn small" onclick="$('#fdis-${t.id}').classList.toggle('hidden');$('#fdn-${t.id}').focus()" ${busy ? 'disabled' : ''} title="ТЗ не меняется, при повторной проверке ревьюер это не повторит">Не актуально</button></div>
+    <div class="row hidden" id="fdis-${t.id}" style="gap:6px;margin-top:4px">
+      <input id="fdn-${t.id}" class="grow" placeholder="Почему не актуально (необязательно) — ревьюер учтёт при повторной проверке" onkeydown="if (event.key === 'Enter') decideTheme('${t.id}', 'dismissed')">
+      <button class="btn small" onclick="decideTheme('${t.id}', 'dismissed')">Отметить неактуальным</button></div></div>`;
+}
+function themeCard(rv, t, editable) {
+  const by = Object.fromEntries(rv.items.map(x => [x.id, x])), ms = t.ids.map(i => by[i]).filter(Boolean);
+  const many = ms.length > 1;
+  const quality = t.blocking ? '' : '<span class="badge off" title="Не мешает тест-дизайну и обновлению модели приложения: исправлять не обязательно">качество документа</span>';
+  const head = many ? `<div class="row" style="gap:6px"><b class="grow">${esc(t.title || 'Об одном и том же')}</b>
+      ${t.severity ? `<span class="badge ${SEVERITY[t.severity]?.[1] || ''}">${esc(SEVERITY[t.severity]?.[0] || t.severity)}</span>` : ''}
+      <span class="badge" title="Замечания обеих проверок об одном и том же: один ответ на все">замечаний: ${ms.length}</span>${quality}</div>`
+    : quality ? `<div class="row">${quality}</div>` : '';
+  return `<div class="card" data-theme="${t.id}" data-blocking="${t.blocking ? 1 : 0}" data-left="${themeLeft(t) ? 1 : 0}" style="margin-top:6px;background:var(--bg);padding:8px">
+    ${head}${ms.map(it => themeItem(it, many)).join('')}${editable ? themeCtl(t) : ''}</div>`;
+}
+function applyFindFilter() {
+  const cards = $$('#findList [data-theme]');
+  let shown = 0;
+  cards.forEach(c => {
+    const on = (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === (c.dataset.blocking === '1')) && (!FIND_LEFT || c.dataset.left === '1');
+    c.classList.toggle('hidden', !on); shown += on;
+  });
+  $('#findEmpty')?.classList.toggle('hidden', !!shown || !cards.length);
+}
+function reviewHtml(rv, editable) {
+  const [vt, vcls] = REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'];
+  const errors = Object.entries(rv.errors || {}), v = rv.validation, busy = reviewBusy();
+  const head = `<div class="row" style="margin-top:8px"><b class="grow">Отчёт ревьюера${rv.at ? ` <span class="muted" style="font-weight:400;font-size:12px">— ${fmtTime(rv.at)}</span>` : ''}</b>
+      <span class="badge ${vcls}">${esc(vt)}</span></div>
+    ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(e)}</div>`).join('')}`;
+  if (!rv.themes)       // a report kept elsewhere (a run of the pipeline): as the reviewer gave it
+    return head + (v ? `<details class="opt" open><summary><b>Дефекты ТЗ</b> — ${v.score}/100, замечаний ${v.findings.length}</summary>${validationHtml(v)}</details>` : '')
+      + (rv.lifecycle ? `<details class="opt" open><summary><b>Соответствие жизненному циклу системы</b> — расхождений ${rv.lifecycle.conflicts.filter(c => c.kind !== 'new').length}</summary>${lifecycleHtml(rv.lifecycle)}</details>` : '');
+  const ts = rv.themes, block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
+  const blockLeft = block.filter(themeLeft), todo = ts.filter(t => t.status === 'todo');
+  const accept = blockLeft.filter(t => t.status === 'open' && !t.question);
+  const std = v?.suggested_standard && PROJ.catalog.standards?.[v.suggested_standard];
+  const fit = v && v.standard_fits === false ? `<div class="hint" style="color:var(--warn)">Документ — ${esc(v.document_kind || 'другого вида')}: стандарт «${esc(v.standard_title || '')}» для него не предназначен, разделы стандарта не считаются дефектами.
+      ${std && editable ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
+      стандарт проекта — в «Проект → Требования».</div>` : '';
+  const progress = editable && ts.length ? `<div class="card" style="margin-top:8px;padding:8px">
+      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: разобрано ${block.length - blockLeft.length} из ${block.length}</b>
+        ${quality.length ? `<span class="muted" style="font-size:12px" title="Оформление документа и незначительные замечания: модель приложения и тест-дизайн их не ждут">качество документа: не разобрано ${quality.filter(themeLeft).length} из ${quality.length} — не обязательно</span>` : ''}</div>
+      <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><span class="grow"></span>
+        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings(this)" ${busy ? 'disabled' : ''} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}
+        <button class="btn small" onclick="copyFindings(this)" title="Неразобранные замечания и вопросы показанного списка — одним текстом для аналитика или автора ТЗ">Скопировать для аналитика</button>
+        <button class="btn small" onclick="$('#ansBox').classList.toggle('hidden');$('#ansText').focus()" ${busy ? 'disabled' : ''} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям">Вставить ответы аналитика</button>
+        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${busy ? 'disabled' : ''} title="Исправить неразобранные блокирующие замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
+        <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
+      <div id="ansBox" class="hidden" style="margin-top:6px">
+        <textarea id="ansText" rows="6" style="width:100%" placeholder="Ответы аналитика — списком, письмом, в любом порядке. Номера и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным."></textarea>
+        <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small primary" onclick="pasteAnswers(this)">Разнести по замечаниям</button></div></div>
+      <div class="hint" style="margin:4px 0 0">${blockLeft.length
+        ? 'Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным. Похожие замечания обеих проверок собраны в темы: один ответ на тему. Модель приложения обновится по ТЗ, когда будут разобраны блокирующие замечания; качество документа её не держит.'
+        : AN?.learned ? 'Блокирующие замечания разобраны, модель приложения обновлена по согласованным требованиям. Проверьте исправленное ТЗ заново, если нужно.'
+        : 'Блокирующие замечания разобраны. Проверьте исправленное ТЗ заново, если нужно.'}</div>
+      ${FIX_MSG ? `<div class="hint" style="margin:4px 0 0">${esc(FIX_MSG)}</div>` : ''}</div>` : '';
+  const list = ts.length ? `<div class="row" style="gap:10px;margin-top:8px;align-items:center">
+      <select style="width:auto" onchange="FIND_SHOW=this.value;applyFindFilter()">
+        ${[['blocking', `Блокируют тест-дизайн (${block.length})`], ['quality', `Качество документа (${quality.length})`], ['all', `Все (${ts.length})`]]
+          .map(([k, t]) => `<option value="${k}" ${FIND_SHOW === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <label class="inline"><input type="checkbox" ${FIND_LEFT ? 'checked' : ''} onchange="FIND_LEFT=this.checked;applyFindFilter()"> только неразобранные</label></div>
+    <div id="findList">${ts.map(t => themeCard(rv, t, editable)).join('')}</div>
+    <div class="hint hidden" id="findEmpty">В этом списке ничего не осталось — смените фильтр, чтобы увидеть остальное.</div>` : '<div class="hint">Замечаний нет.</div>';
+  return head + `
+    ${rv.verdict === 'not_ready' && blockLeft.length ? `<div class="hint" style="color:var(--bad)">Есть критичные замечания: ${editable ? 'разберите их ниже' : 'исправьте ТЗ'} и проверьте заново — или генерируйте тест-кейсы, понимая риск.</div>` : ''}
+    ${fit}${progress}${list}
+    <details class="opt"><summary>Подробности проверки${v ? ` — ${v.score}/100` : ''}</summary>
+      ${v ? validationHtml(v, true) : ''}${rv.lifecycle ? lifecycleHtml(rv.lifecycle, true) : ''}</details>`;
+}
+function decideTheme(tid, status) {
+  const rv = AN.review, t = rv.themes.find(x => x.id === tid);
+  if (!t) return;
+  const left = new Set(rv.items.filter(x => x.status === 'open' || x.status === 'todo').map(x => x.id));
+  const ids = status === 'open' ? t.ids : t.ids.filter(i => left.has(i));
+  const answer = status === 'todo' ? ($(`#fd-${tid}`)?.value ?? '') : undefined;
+  const note = status === 'dismissed' ? ($(`#fdn-${tid}`)?.value ?? '') : undefined;
+  settleFindings(ids, status, answer, note);
+}
+function acceptSuggestions() {
+  const left = new Set(AN.review.items.filter(x => x.status === 'open').map(x => x.id));
+  const ids = AN.review.themes.filter(t => t.blocking && t.status === 'open' && !t.question).flatMap(t => t.ids.filter(i => left.has(i)));
+  if (ids.length) settleFindings(ids, 'todo', '');
+}
+async function settleFindings(ids, status, answer, note) {
   try {
-    const v = await api('POST', '/api/requirements/validate', {project_id: PID, requirements}, stop.signal);
-    box.innerHTML = `<div class="row"><h3 class="grow" style="margin:0">Проверка ТЗ</h3><button class="btn small" onclick="$('#reqValidation').classList.add('hidden')">✕</button></div>` + validationHtml(v);
-  } catch (e) {
-    if (e.name === 'AbortError') box.classList.add('hidden');
-    else box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    if (status === 'dismissed') FIX_MSG = 'Сохраняем…';
+    const r = await api('PUT', `/api/analyses/${AN.id}/review/findings`, {ids, status, answer, note});
+    FIX_MSG = r.model || '';
+    openAnalysis(r.analysis);
+  } catch (e) { FIX_MSG = ''; alert(e.message); }
+}
+// The unsettled findings of the list as shown, one text for an analyst: numbers and [codes] to answer by.
+function findingsText() {
+  const rv = AN.review, by = Object.fromEntries(rv.items.map(x => [x.id, x]));
+  const ts = rv.themes.filter(t => themeLeft(t) && (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === t.blocking));
+  const line = (it, pad) => `${it.problem}${it.location ? ` (${it.location})` : ''}${it.suggestion ? `\n${pad}Предложение ревьюера: ${it.suggestion}` : ''}`;
+  return [`Замечания ревьюера к требованиям «${AN.feature || AN.title || 'Требования'}»`,
+    'Ответьте, как должно быть, на каждый пункт (можно кратко) или напишите «не актуально» и почему.', '',
+    ...ts.map((t, n) => {
+      const ms = t.ids.map(i => by[i]).filter(Boolean);
+      return ms.length > 1 ? `${n + 1}. [${t.id}] ${t.title || 'Об одном и том же'}\n${ms.map(it => `   - ${line(it, '     ')}`).join('\n')}`
+        : `${n + 1}. [${t.id}] ${line(ms[0], '   ')}`;
+    })].join('\n');
+}
+async function copyFindings(btn) {
+  const text = findingsText(), n = (text.match(/^\d+\. \[/gm) || []).length, was = btn.textContent;
+  if (!n) return alert('В показанном списке нет неразобранных замечаний.');
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
   }
-  finally { btn.disabled = false; }
-};
-// A validation of an analysis in progress: the same button cancels it.
-let AN_VALIDATE = null;
-async function validateAnalysis(btn) {
-  if (AN_VALIDATE) return AN_VALIDATE.abort();
-  AN_VALIDATE = new AbortController();
-  btn.textContent = 'Отменить проверку';
-  try { AN.validation = await api('POST', '/api/requirements/validate', {project_id: PID, analysis_id: AN.id}, AN_VALIDATE.signal); AN_VALIDATE = null; renderAnalysis(); }
-  catch (e) { if (e.name !== 'AbortError') alert(e.message); btn.textContent = 'Проверить ТЗ'; }
-  finally { AN_VALIDATE = null; }
+  btn.textContent = `Скопировано: ${n}`;
+  setTimeout(() => btn.textContent = was, 2500);
+}
+async function groupFindings(btn) {
+  btn.disabled = true; btn.textContent = 'Сводим в темы…';
+  try {
+    const r = await api('POST', `/api/analyses/${AN.id}/review/group`);
+    FIX_MSG = r.groups ? `Замечания сведены в темы: ${r.analysis.review.themes.length} вместо ${r.analysis.review.items.length}.` : 'Похожих замечаний не нашлось.';
+    openAnalysis(r.analysis);
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Свести в темы'; }
+}
+async function pasteAnswers(btn) {
+  const text = $('#ansText').value.trim();
+  if (!text) return $('#ansText').focus();
+  btn.disabled = true; btn.textContent = 'Агент разносит ответы…';
+  try {
+    const r = await api('POST', `/api/analyses/${AN.id}/review/answers`, {text});
+    FIX_MSG = [`Ответы разнесены: к исправлению ${r.answered}, не актуально ${r.dismissed}.`,
+      r.answered ? 'Проверьте ответы и нажмите «Исправить ТЗ агентом».' : '', r.model].filter(Boolean).join(' ');
+    openAnalysis(r.analysis);
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Разнести по замечаниям'; }
+}
+async function fixFindings(btn) {
+  btn.disabled = true; btn.textContent = 'Агент исправляет ТЗ…';
+  try {
+    const r = await api('POST', `/api/analyses/${AN.id}/review/fix`);
+    const failed = Object.keys(r.failed || {}).length;
+    FIX_MSG = [`Исправлено в ТЗ: ${r.fixed.length}.`, failed ? `Не удалось: ${failed} — уточните ответ и исправьте снова.` : '',
+      r.summary, r.model].filter(Boolean).join(' ');
+    openAnalysis(r.analysis);
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Исправить ТЗ агентом'; }
 }
 async function showAnalysis(aid) {      // the analysis that keeps a run's scenarios, open in the Requirements tab
   showTab('req');
@@ -3322,7 +3518,7 @@ async function learnFromAnalysis(btn) {
 }
 
 function reuseRequirements() {
-  $('#reqText').value = AN.requirements; $('#reqUrl').value = AN.url || '';
+  $('#reqText').value = AN.requirements;
   $('#reqText').scrollIntoView({behavior: 'smooth'}); $('#reqText').focus();
 }
 async function deleteAnalysis() {
@@ -3340,22 +3536,20 @@ function testsHtml(s) {
      <span class="badge off">${esc(TEST_STATUS[t.status] || t.status)}</span>${t.last_run ? runBadge(t.last_run.status || (t.last_run.passed ? 'passed' : 'failed')) : ''}`).join(' ')}</div>`;
 }
 function scenRow(s, i) {
-  if (!isReady(s)) return `<tr class="sc-row pending" id="sc-row-${s.id}"><td class="chk"></td><td class="num">${i + 1}</td>
+  if (!isReady(s)) return `<tr class="sc-row pending" id="sc-row-${s.id}"><td class="num">${i + 1}</td>
     <td><span class="sc-title">${esc(s.title)}</span><div class="hint">${esc(s.covers || '')}</div></td>
     <td>${layerBadge(s)}${esc(scType(s.type))}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td class="muted" style="white-space:nowrap"><span class="dot run"></span>детализируется…</td></tr>`;
   const open = SCEN_OPEN.has(s.id);
-  const row = `<tr class="sc-row${open ? ' open' : ''}${s.fresh ? ' fresh' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
-    <td class="chk"><input type="checkbox" class="sc-sel" data-id="${s.id}" ${s.sel !== false ? 'checked' : ''}></td>
+  const row = `<tr class="sc-row${open ? ' open' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
     <td class="num">${i + 1}</td>
     <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions)}</div>`}${reuseHtml(s, `data-decision="${s.id}"`)}${testsHtml(s)}</td>
     <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">
-      <button class="btn small" data-act="studio" data-id="${s.id}" title="Создать тест по этому сценарию в Studio">Тест в Studio</button>
-      ${REQ_ABORT ? '' : `<button class="btn small" data-act="del" data-id="${s.id}" title="Удалить сценарий">✕</button>`}</div></td></tr>`;
+      ${AN.status === 'running' ? '' : `<button class="btn small" data-act="del" data-id="${s.id}" title="Удалить сценарий">✕</button>`}</div></td></tr>`;
   if (!open) return row;
   const opt = (map, v) => Object.entries(map).map(([k, t]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${t}</option>`).join('');
-  return row + `<tr class="sc-edit" id="sc-edit-${s.id}"><td colspan="6">
+  return row + `<tr class="sc-edit" id="sc-edit-${s.id}"><td colspan="5">
     <div class="grid3">
       <div><label>Название</label><input data-f="title" data-id="${s.id}" value="${esc(s.title)}"></div>
       <div><label>Вид проверки</label><select data-f="type" data-id="${s.id}">${opt(scTypes(), s.type)}</select></div>
@@ -3373,9 +3567,8 @@ function scenRow(s, i) {
 }
 function renderScenarios() {
   if (!$('#scenList')) return;
-  $('#scenList').innerHTML = SCEN.map(scenRow).join('') ||
-    `<tr><td colspan="6" class="muted">${AN?.status === 'running' ? 'Модель составляет план сценариев…' : 'Сценариев нет.'}</td></tr>`;
-  SCEN.forEach(x => delete x.fresh);
+  $('#scenBox')?.classList.toggle('hidden', !SCEN.length);
+  $('#scenList').innerHTML = SCEN.map(scenRow).join('');
   updateScenCounts();
 }
 // One scenario changed (a detailed batch arrived): the rows being edited keep their focus.
@@ -3384,21 +3577,10 @@ function updateScenRow(id) {
   if (i < 0 || !old) return renderScenarios();
   $('#sc-edit-' + id)?.remove();
   old.insertAdjacentHTML('afterend', scenRow(SCEN[i], i)); old.remove();
-  delete SCEN[i].fresh;
 }
 function updateScenCounts() {
-  const ready = SCEN.filter(isReady), chosen = ready.filter(x => x.sel !== false);
-  if ($('#scenGenAll')) {
-    $('#scenCount').textContent = SCEN.length ? `Сценариев: ${SCEN.length}${ready.length < SCEN.length ? `, готово ${ready.length}` : ''}` : '';
-    $('#scenGenAll').textContent = chosen.length === ready.length ? `Сгенерировать все (${ready.length})` : `Сгенерировать выбранные (${chosen.length})`;
-    $('#scenGenAll').disabled = !chosen.length || !!REQ_ABORT;
-    $('#scenAll').checked = !!ready.length && chosen.length === ready.length;
-    $('#scenAll').indeterminate = !!chosen.length && chosen.length < ready.length;
-  }
-  if (REQ_ABORT && AN) {
-    $('#reqBar').style.width = SCEN.length ? `${Math.round(10 + 90 * ready.length / SCEN.length)}%` : '5%';
-    if (SCEN.length) $('#reqStage').textContent = ready.length < SCEN.length ? `Детализация сценариев: ${ready.length} из ${SCEN.length}` : `Готово: сценариев ${SCEN.length}`;
-  }
+  const ready = SCEN.filter(isReady), tests = ready.reduce((k, s) => k + (s.tests || []).length, 0);
+  if ($('#scenCount')) $('#scenCount').textContent = SCEN.length ? `сценариев ${SCEN.length}${ready.length < SCEN.length ? ` (готово ${ready.length})` : ''}, тестов ${tests}` : '';
   refreshSummary();
 }
 const scenById = id => SCEN.find(x => x.id === id);
@@ -3421,7 +3603,6 @@ $('#anList').addEventListener('click', async e => {
   const btn = e.target.closest('[data-act]');
   if (btn) {
     const id = btn.dataset.id, sc = scenById(id);
-    if (btn.dataset.act === 'studio') toStudio(id);
     if (btn.dataset.act === 'close') { SCEN_OPEN.delete(id); updateScenRow(id); }
     if (btn.dataset.act === 'del' && sc && confirm(`Удалить сценарий «${sc.title}»? Тесты по нему останутся.`)) {
       try {
@@ -3446,95 +3627,70 @@ $('#anList').addEventListener('change', async e => {
     const sc = await api('PUT', `/api/analyses/${AN.id}/scenarios/${el.dataset.decision}`, {decision: el.value});
     const old = scenById(el.dataset.decision);
     Object.assign(old, {match: sc.match, test_ids: sc.test_ids});
-    if (el.value === 'reuse' && sc.match.kind === 'test') {       // the earlier test is now this scenario's test
+    if (el.value === 'reuse') {       // the earlier test is now this scenario's test; is the earlier scenario automated
       const a = await api('GET', `/api/analyses/${AN.id}`).catch(() => null);
       const fresh = a?.scenarios.find(x => x.id === old.id);
-      if (fresh) old.tests = fresh.tests;
+      if (fresh) Object.assign(old, {tests: fresh.tests, match: fresh.match});
     }
     updateScenRow(old.id);
   } catch (err) { alert(err.message); }
 });
 $('#anList').addEventListener('input', e => {
   const el = e.target, sc = el.dataset.id && scenById(el.dataset.id);
-  if (!sc) return;
-  if (el.classList.contains('sc-sel')) { sc.sel = el.checked; updateScenCounts(); return; }
-  if (!el.dataset.f) return;
+  if (!sc || !el.dataset.f) return;
   sc[el.dataset.f] = el.value;
   if (el.dataset.f === 'title') $(`#sc-row-${sc.id} .sc-title`).textContent = el.value || 'Без названия';
-  if (['type', 'layer', 'role'].includes(el.dataset.f)) $(`#sc-row-${sc.id} td:nth-child(4)`).innerHTML = layerBadge(sc) + esc(scType(sc.type)) + roleBadge(sc);
-  if (el.dataset.f === 'priority') $(`#sc-row-${sc.id} td:nth-child(5)`).textContent = SC_PRIOS[el.value];
+  if (['type', 'layer', 'role'].includes(el.dataset.f)) $(`#sc-row-${sc.id} td:nth-child(3)`).innerHTML = layerBadge(sc) + esc(scType(sc.type)) + roleBadge(sc);
+  if (el.dataset.f === 'priority') $(`#sc-row-${sc.id} td:nth-child(4)`).textContent = SC_PRIOS[el.value];
   const msg = $('#sc-msg-' + sc.id); if (msg) msg.textContent = 'Сохранение…';
   saveScenario(sc.id);
 });
-async function addScenario() {
-  try {
-    const sc = await api('POST', `/api/analyses/${AN.id}/scenarios`, {title: 'Новый сценарий', type: 'positive', priority: 'medium'});
-    SCEN.push({...sc, tests: [], sel: true}); SCEN_OPEN.add(sc.id); renderScenarios();
-    $(`#sc-edit-${sc.id} [data-f="title"]`).select();
-  } catch (e) { alert(e.message); }
+// ---- to the pipeline: test cases are generated there, from the reviewed requirements
+async function toPipeline() {
+  const rv = AN.review;
+  if (!rv) return alert('Сначала проверьте требования.');
+  if (rv.verdict === 'not_ready' && !confirm('Ревьюер нашёл критичные замечания: тест-кейсы по таким требованиям могут проверять не то. Всё равно генерировать?')) return;
+  showTab('pipe');
+  await loadPipeReviews();
+  $('#pipeReview').value = AN.id; pipeReviewChanged();
+  $('#pipeForm').scrollIntoView({behavior: 'smooth'});
 }
-async function generateAll() {
-  const chosen = SCEN.filter(x => isReady(x) && x.sel !== false);
-  const empty = chosen.filter(x => !x.title.trim() || !x.instructions.trim());
-  if (empty.length) return alert(`Заполните название и шаги у сценариев: ${empty.map(x => '«' + (x.title || 'без названия') + '»').join(', ')}`);
-  if (!confirm(`Сгенерировать тесты по ${chosen.length} сценариям? Агент пройдёт их в браузере по очереди — это запуск конвейера с расходом модели. Тесты появятся под сценариями.`)) return;
-  $('#scenGenAll').disabled = true;
-  try {
-    await Promise.all(Object.keys(SAVE_TIMERS).map(id => { clearTimeout(SAVE_TIMERS[id]); delete SAVE_TIMERS[id];
-      const sc = scenById(id); return sc && api('PUT', `/api/analyses/${AN.id}/scenarios/${id}`, Object.fromEntries(SC_FIELDS.map(k => [k, sc[k] ?? '']))); }));
-    const r = await api('POST', `/api/projects/${PID}/jobs`, {url: AN.url || $('#reqUrl').value, analysis_id: AN.id,
-      scenario_ids: chosen.length === SCEN.filter(isReady).length ? [] : chosen.map(x => x.id)});
-    showTab('pipe'); openJob(r.id);
-  } catch (e) { alert(e.message); }
-  finally { updateScenCounts(); }
+function pickInPipeline() {     // the scenarios of this analysis, checked in the pipeline's common list
+  PIPE_SEL = new Set(SCEN.filter(isReady).map(s => AN.id + ':' + s.id)); PIPE_SCEN_PID = PID;
+  showTab('pipe');
+  $('#pipeScenBox').open = true;
+  loadPipeScen();
 }
 
-// ---- generation: a new analysis at the top of the history, filled in live
+// ---- the review: an analysis at the top of the history, its report filled in live
 function reqEvent(ev) {
-  if (ev.type === 'log') reqLog(ev.text);
+  if (ev.type === 'log') { reqLog(ev.text); $('#reqStage').textContent = ev.text.slice(0, 160); }
   else if (ev.type === 'analysis') {
     const a = ev.analysis;
-    ANALYSES = [{id: a.id, created: a.created, user: a.user, title: a.title, feature: '', status: 'running', scenarios: 0, tests: 0},
-                ...ANALYSES.filter(x => x.id !== a.id)];
-    AN = a; SCEN = []; SCEN_OPEN = new Set();
-    renderAnalyses();
-  } else if (ev.type === 'plan') {
-    if (!AN) return;
-    AN.feature = ev.feature; AN.assumptions = ev.assumptions;
-    SCEN = ev.scenarios.map(x => ({...x, tests: [], sel: true}));
-    renderAnalysis();
-  } else if (ev.type === 'batch') {
-    ev.scenarios.forEach(x => {
-      const i = SCEN.findIndex(y => y.id === x.id);
-      if (i >= 0) { SCEN[i] = {...x, tests: SCEN[i].tests || [], sel: true, fresh: true}; updateScenRow(x.id); }
-    });
-    updateScenCounts();
+    ANALYSES = [{id: a.id, created: a.created, user: a.user, title: a.title, feature: a.feature || '', status: 'running',
+                 scenarios: a.scenarios.length, tests: 0, review: a.review || null}, ...ANALYSES.filter(x => x.id !== a.id)];
+    openAnalysis(a); renderAnalyses();
+  } else if (ev.type === 'review') {
+    if (AN) { AN.review = ev.review; renderAnalysis(); refreshSummary(); }
+    $('#reqBar').style.width = '80%';
   } else if (ev.type === 'done') {
-    // What the person changed meanwhile stays: only the scenarios still being detailed are taken.
-    const a = ev.analysis, mine = new Map(SCEN.filter(isReady).map(x => [x.id, x]));
-    AN = {...a, scenarios: []};
-    SCEN = a.scenarios.map(x => mine.get(x.id) || {...x, sel: true});
-    REQ_ABORT = null; renderAnalysis(); refreshSummary();
-    reqLog(`Готово: сценариев ${SCEN.length}`);
-  } else if (ev.type === 'validation') {
-    if (AN) { AN.validation = ev.validation; renderAnalysis(); }
+    openAnalysis(ev.analysis); REQ_ABORT = null; renderAnalysis(); refreshSummary();
   } else if (ev.type === 'error') throw new Error(ev.text);
 }
-$('#reqBtn').onclick = async () => {
-  const requirements = $('#reqText').value.trim(); if (!requirements) return;
+// One review at a time: of the text above (a new analysis) or again of an analysis of the history.
+async function runReview(body) {
   $('#reqBtn').disabled = true; $('#reqStatus').textContent = '';
   $('#reqLog').innerHTML = '';
   $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
-  $('#reqStage').textContent = 'Анализ требований и план покрытия…'; $('#reqBar').style.width = '5%';
+  $('#reqStage').textContent = 'Ревьюер требований: дефекты ТЗ и соответствие жизненному циклу системы…'; $('#reqBar').style.width = '10%'; $('#reqBar').style.background = '';
   const started = Date.now();
   const timer = setInterval(() => $('#reqTimer').textContent = `${Math.round((Date.now() - started) / 1000)} с`, 1000);
   $('#reqTimer').textContent = '0 с';
   REQ_ABORT = new AbortController();
   let finished = false;
   try {
-    const r = await fetch('/api/scenarios', {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: REQ_ABORT.signal,
-      body: JSON.stringify({project_id: PID, requirements, url: $('#reqUrl').value, stream: true, ...readDesign('req'),
-                            validate_spec: $('#reqCheck').checked})});
+    const r = await fetch('/api/requirements/review', {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: REQ_ABORT.signal,
+      body: JSON.stringify({project_id: PID, ...body})});
     if (r.status === 401) { showLogin(); throw new Error('Требуется вход'); }
     if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
     const reader = r.body.getReader(), dec = new TextDecoder();
@@ -3552,40 +3708,52 @@ $('#reqBtn').onclick = async () => {
         if (ev.type === 'done') finished = true;
       }
     }
-    if (!finished) throw new Error('Соединение прервано до окончания генерации');
-    $('#reqDot').className = 'dot'; $('#reqDot').style.background = 'var(--ok)'; $('#reqBar').style.width = '100%';
+    if (!finished) throw new Error('Соединение прервано до окончания проверки');
+    const [vt, vcls] = REVIEW_VERDICT[AN?.review?.verdict] || [];
+    // The stage line states the verdict, and the dot and bar take its colour: a green «done» next to «not ready» reads as both.
+    const colour = {ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)'}[vcls] || 'var(--muted)';
+    $('#reqStage').textContent = vt ? `Проверка завершена: ${vt}` : 'Проверка завершена, отчёт сохранён';
+    $('#reqDot').className = 'dot'; $('#reqDot').style.background = colour;
+    $('#reqBar').style.width = '100%'; $('#reqBar').style.background = colour;
   } catch (e) {
-    const msg = e.name === 'AbortError' ? 'Остановлено' : e.message;
-    $('#reqStatus').textContent = msg; reqLog(msg);
-    $('#reqStage').textContent = SCEN.some(isReady) ? `${msg}: готовые сценарии сохранены в истории` : msg;
+    const msg = e.name === 'AbortError' ? 'Проверка остановлена' : e.message;
+    $('#reqStatus').textContent = msg; reqLog(msg); $('#reqStage').textContent = msg;
     $('#reqDot').className = 'dot'; $('#reqDot').style.background = e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)';
     REQ_ABORT = null;
-    if (AN) { AN.status = e.name === 'AbortError' ? 'cancelled' : 'error'; SCEN = SCEN.filter(isReady); renderAnalysis(); }
+    if (AN) { AN.status = e.name === 'AbortError' ? 'cancelled' : 'error'; renderAnalysis(); }
   } finally {
     clearInterval(timer); REQ_ABORT = null;
     $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
-    updateScenCounts(); setTimeout(loadAnalyses, 500);
+    if (AN) renderAnalysis();
+    setTimeout(loadAnalyses, 500);
   }
+}
+$('#reqBtn').onclick = () => {
+  const requirements = $('#reqText').value.trim();
+  if (!requirements) { $('#reqStatus').textContent = 'Вставьте текст требований'; return; }
+  if (!REQ_ABORT) runReview({requirements});
 };
+function reviewAnalysis(standard = '') { if (AN && !REQ_ABORT) runReview({analysis_id: AN.id, standard}); }
 $('#reqStop').onclick = () => REQ_ABORT?.abort();
 function setStudioScen(v) {
   STUDIO_SCEN = v;
   $('#fScen').classList.toggle('hidden', !v);
   $('#fScen').innerHTML = v ? `Тест будет показан под сценарием «${esc(v.title)}» в истории анализа <button class="linkbtn" onclick="setStudioScen(null)">отвязать</button>` : '';
 }
-function toStudio(id) {
-  const sc = scenById(id);
+// A scenario of the pipeline's common list (with its analysis_id) -> a test written in the Studio.
+function toStudio(sc, url = '') {
   if (!sc) return;
   const m = sc.match;
-  if (m && !m.decision) return alert(`Сценарий похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${m.title}». Сначала решите в строке сценария: создать новый тест, переиспользовать или доработать прежний.`);
-  if (m?.decision === 'reuse') return alert(m.kind === 'test' ? `Используется прежний тест «${m.title}» — новый не создаётся.` : `Сценарий уже есть: «${m.title}» — новый тест не создаётся.`);
+  if (m && !m.decision) return alert(`Сценарий похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${m.title}». Сначала решите в строке сценария (вкладка «Требования», под его требованиями): создать новый тест, переиспользовать или доработать прежний.`);
+  if (m?.decision === 'reuse' && m.kind === 'test') return alert(`Используется прежний тест «${m.title}» — новый не создаётся.`);
+  if (m?.decision === 'reuse' && m.automated !== false) return alert(`Сценарий уже есть и автоматизирован: «${m.title}» — новый тест не создаётся.`);
+  // "Не дублировать" a scenario without a test: it is automated once, the test shows under both scenarios
   if (m?.decision === 'refine' && m.kind === 'test') {
     if (!confirm(`Открыть тест «${m.title}» в Studio для доработки под этот сценарий? Тест воспроизведётся, дальше — вы и агент.`)) return;
     showTab('studio');
     return editInStudio(m.id, {disabled: false});
   }
   if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
-  const url = AN.url || $('#reqUrl').value;
   if (url) { $('#fUrl').value = url; delete $('#fUrl').dataset.auto; }
   $('#fName').value = sc.title;
   const data = scDataText(sc, true).replace(/\n/g, '; ');
@@ -3600,13 +3768,13 @@ function toStudio(id) {
       || k.roles.find(r => r.account && r.name && text.includes(r.name.toLowerCase()));
     if (role && [...$('#fAccount').options].some(o => o.value === role.account)) $('#fAccount').value = role.account;
   }).catch(() => {});
-  setStudioScen({analysis_id: AN.id, scenario_id: sc.id, title: sc.title});
+  setStudioScen({analysis_id: sc.analysis_id, scenario_id: sc.id, title: sc.title});
   showTab('studio');
 }
 
 // ---- pipeline
-const STAGES = [['requirements', 'Требования'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
-const JOB_STATUS = {running: 'Выполняется', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
+const STAGES = [['requirements', 'Требования и ревью'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
+const JOB_STATUS = {running: 'Выполняется', awaiting_review: 'Ждёт решения по замечаниям ревьюера', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
 const ITEM_STATUS = {queued: ['в очереди', 'off'], preflight: ['проверка перед тестом', 'warn'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
   done: ['готово', 'ok'], needs_attention: ['нужно подтверждение', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
 let JOB = null, jobTimer = null;
@@ -3627,7 +3795,7 @@ async function loadPipe() {
   const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
   $('#pipeCasesBox').classList.toggle('hidden', !tms.length);
   $('#pipeCaseConn').innerHTML = tms.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  loadPipeScen();
+  loadPipeScen(); loadPipeReviews();
   const jobs = await api('GET', `/api/projects/${PID}/jobs`);
   $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
     <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
@@ -3639,7 +3807,7 @@ async function loadPipe() {
   if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id);
 }
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
-const LIVE_JOB = ['running', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
+const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
 let PIPE_BUSY = null;
 function pipeBusy(job) {
   PIPE_BUSY = job || null;
@@ -3648,6 +3816,25 @@ function pipeBusy(job) {
   if (job) $('#pipeBusy').innerHTML = `<div class="row"><span class="dot run"></span><b class="grow">Конвейер выполняется — запуск от ${fmtTime(job.created)}</b>
     <span class="muted" style="font-size:12px">Новый запуск станет доступен, когда этот завершится или будет остановлен</span></div>`;
 }
+// Requirements reviewed in the Requirements tab: a run designs their scenarios (no new review).
+let PIPE_REVIEWS = [];
+async function loadPipeReviews() {
+  try { PIPE_REVIEWS = (await api('GET', `/api/projects/${PID}/analyses`)).filter(a => a.review); } catch { PIPE_REVIEWS = []; }
+  const cur = $('#pipeReview').value;
+  $('#pipeReview').innerHTML = `<option value="">— новые требования: ссылки или текст ниже —</option>` + PIPE_REVIEWS.map(a =>
+    `<option value="${a.id}">${esc(fmtTime(a.created))} · ${esc(a.feature || a.title || 'Требования')} — ${esc((REVIEW_VERDICT[a.review.verdict] || [a.review.verdict])[0])}${a.scenarios ? `, сценариев ${a.scenarios}` : ''}</option>`).join('');
+  if (PIPE_REVIEWS.some(a => a.id === cur)) $('#pipeReview').value = cur;
+  pipeReviewChanged();
+}
+function pipeReviewChanged() {
+  const a = PIPE_REVIEWS.find(x => x.id === $('#pipeReview').value);
+  $('#pipeNewReq').classList.toggle('hidden', !!a);
+  $('#pipeReviewNote').innerHTML = !a ? (PIPE_REVIEWS.length ? '' : 'Проверенных требований пока нет: проверьте ТЗ во вкладке <a href="#" onclick="showTab(\'req\');return false">«Требования»</a> — или укажите новые требования ниже.')
+    : `Конвейер спроектирует сценарии по этим требованиям (повторной проверки не будет) и сгенерирует тесты. <a href="#" onclick="showAnalysis('${a.id}');return false">Отчёт ревьюера</a>` +
+      (a.review.verdict === 'not_ready' ? ' · <span class="err">есть критичные замечания</span>' : '') +
+      (a.scenarios ? ` · <span class="warn">по ним уже есть сценарии (${a.scenarios}) — новые добавятся к ним; уже спроектированные можно отметить в списке ниже</span>` : '');
+}
+$('#pipeReview').onchange = pipeReviewChanged;
 // The common list of the scenarios of every requirements analysis: a run can start on a choice of them.
 let PIPE_SCEN = [], PIPE_SEL = new Set(), PIPE_SCEN_PID = null;
 const scenKey = s => s.analysis_id + ':' + s.id;
@@ -3673,19 +3860,24 @@ function renderPipeScen() {
       last = s.analysis_id;
       const group = shown.filter(x => x.analysis_id === last);
       html += `<tr><td class="chk"><input type="checkbox" data-pick-an="${last}" ${group.every(x => PIPE_SEL.has(scenKey(x))) ? 'checked' : ''}></td>
-        <td colspan="4"><b>${esc(s.analysis || 'Анализ без названия')}</b> <span class="muted">— ${fmtTime(s.created)}, сценариев: ${group.length}</span></td></tr>`;
+        <td colspan="5"><b>${esc(s.analysis || 'Анализ без названия')}</b> <span class="muted">— ${fmtTime(s.created)}, сценариев: ${group.length}</span></td></tr>`;
     }
     html += `<tr><td class="chk"><input type="checkbox" data-pick="${scenKey(s)}" ${PIPE_SEL.has(scenKey(s)) ? 'checked' : ''}></td>
       <td><span class="sc-title">${esc(s.title || 'Без названия')}</span><div class="hint sc-preview">${esc(s.instructions || '')}</div></td>
       <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority || '')}</td>
-      <td>${s.tests ? `<span class="badge ok">${s.tests}</span>` : '<span class="muted">—</span>'}</td></tr>`;
+      <td>${s.tests ? `<span class="badge ok">${s.tests}</span>` : '<span class="muted">—</span>'}</td>
+      <td><button class="btn small" style="white-space:nowrap" data-studio="${scenKey(s)}" title="Записать тест по этому сценарию в Studio">Тест в Studio</button></td></tr>`;
   }
-  $('#pipeScenBody').innerHTML = html || `<tr><td colspan="5" class="muted">${PIPE_SCEN.length ? 'Ничего не найдено.' : 'Сценариев пока нет: сгенерируйте их во вкладке «Требования».'}</td></tr>`;
+  $('#pipeScenBody').innerHTML = html || `<tr><td colspan="6" class="muted">${PIPE_SCEN.length ? 'Ничего не найдено.' : 'Сценариев пока нет: их проектирует конвейер по проверенным требованиям.'}</td></tr>`;
   $('#pipeStart').textContent = PIPE_SEL.size ? `Сгенерировать тесты (${PIPE_SEL.size})` : 'Запустить';
 }
 $('#pipeScenFind').oninput = renderPipeScen;
 $('#pipeScenShow').onchange = renderPipeScen;
 $('#pipeScenAll').onchange = e => { pipeScenShown().forEach(s => e.target.checked ? PIPE_SEL.add(scenKey(s)) : PIPE_SEL.delete(scenKey(s))); renderPipeScen(); };
+$('#pipeScenBody').addEventListener('click', e => {
+  const btn = e.target.closest('[data-studio]');
+  if (btn) toStudio(PIPE_SCEN.find(s => scenKey(s) === btn.dataset.studio), $('#pipeUrl').value.trim());
+});
 $('#pipeScenBody').addEventListener('change', e => {
   const el = e.target;
   if (el.dataset.pick) el.checked ? PIPE_SEL.add(el.dataset.pick) : PIPE_SEL.delete(el.dataset.pick);
@@ -3705,12 +3897,18 @@ $('#pipeStart').onclick = async () => {
   const text = $('#pipeText').value.trim(), explore = $('#pipeExplore').checked;
   const caseConn = $('#pipeCasesBox').open ? $('#pipeCaseConn').value : '';
   if (PIPE_SEL.size) return startPicked();
-  if (!links.length && !text && !explore && !caseConn) { $('#pipeErr').textContent = 'Укажите ссылки на требования, текст, ручные кейсы или включите исследование сайта'; return; }
+  const reviewed = PIPE_REVIEWS.find(a => a.id === $('#pipeReview').value);
+  if (!reviewed && !links.length && !text && !explore && !caseConn) { $('#pipeErr').textContent = 'Выберите проверенные требования, укажите ссылки, текст, ручные кейсы или включите исследование сайта'; return; }
+  if (reviewed && (explore || caseConn)) { $('#pipeErr').textContent = 'Проверенные требования запускаются отдельно: снимите «Исследовать сайт» и ручные кейсы'; return; }
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
+  if (reviewed?.review.verdict === 'not_ready' && !confirm('По этим требованиям ревьюер нашёл критичные замечания. Генерировать тест-кейсы всё равно?')) return;
   $('#pipeStart').disabled = true;
   try {
-    const r = await api('POST', `/api/projects/${PID}/jobs`, {links, text, explore, url: $('#pipeUrl').value.trim(),
-      case_connection: caseConn, case_ids: caseConn ? $('#pipeCaseIds').value : '', ...readDesign('pipe')});
+    const r = await api('POST', `/api/projects/${PID}/jobs`, reviewed
+      ? {review_id: reviewed.id, url: $('#pipeUrl').value.trim(), ...readDesign('pipe')}
+      : {links, text, explore, url: $('#pipeUrl').value.trim(),
+         case_connection: caseConn, case_ids: caseConn ? $('#pipeCaseIds').value : '', ...readDesign('pipe')});
+    $('#pipeReview').value = ''; pipeReviewChanged();
     $('#pipeExplore').checked = false;
     $('#pipeLinks').value = $('#pipeText').value = '';
     openJob(r.id); loadPipe();
@@ -3754,7 +3952,7 @@ function itemKind(it, live) {
   return 'waiting';     // queued, cancelled, interrupted by a stop or a restart
 }
 function jobStepper(j, live) {
-  const cur = live ? (['awaiting_selection', 'awaiting_model', 'awaiting_reuse'].includes(j.status) ? 'scenarios' : j.stage) : '';
+  const cur = live ? (j.status === 'awaiting_review' ? 'requirements' : ['awaiting_selection', 'awaiting_model', 'awaiting_reuse'].includes(j.status) ? 'scenarios' : j.stage) : '';
   const at = STAGES.findIndex(([k]) => k === cur);
   const now = {};
   j.items.forEach(it => { if (live && ACTIVE_ITEM.includes(it.status)) now[it.status] = (now[it.status] || 0) + 1; });
@@ -3791,7 +3989,8 @@ function jobItemRow([it, i]) {
       ${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
       ${!it.test_id && it.status === 'needs_attention' && it.preflight?.length && it.preflight.every(p => p.kind === 'lifecycle')
         ? `<button class="btn small" onclick="runAnyway(${i})" title="Проверка по жизненному циклу ошиблась или сценарий так и задуман: сгенерировать тест без неё (учётная запись роли проверяется)">Запустить всё равно</button>` : ''}
-      ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
+      ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}
+      ${it.test_id && canRole('editor') ? `<button class="btn small" onclick="editInStudio('${it.test_id}', this, true)" title="Наглядный прогон теста в Studio: шаг за шагом в Live View">Прогон в Studio</button>` : ''}</td></tr>`;
 }
 function jobItemsTable(rows, key) {
   return `<table class="scen-list" data-key="${key}"><thead><tr><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +
@@ -3807,6 +4006,7 @@ function renderJob() {
     ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}
     ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}
+    ${!live && unautomatedItems(j).length ? `<button class="btn small" onclick="automateDuplicates()" title="Сценарии с решением «Не дублировать», которые завершились без теста: если прежний сценарий уже автоматизирован — берётся его тест, иначе тест генерируется и показывается под обоими сценариями">Автоматизировать без теста (${unautomatedItems(j).length})</button>` : ''}
     ${!live && failedItems(j).length ? `<button class="btn small" onclick="retryJob()" title="Сгенерировать заново все сценарии, где генерация упала с ошибкой агента, агент остановился или не смог пройти сценарий: каждый начинается с новой сессии">Перезапустить сбойные (${failedItems(j).length})</button>` : ''}</div>
     ${jobStepper(j, live)}`;
   const groups = {bug: [], attention: [], active: [], done: [], waiting: []};
@@ -3819,6 +4019,12 @@ function renderJob() {
         ${k(groups.active.length, 'в работе')}${k(groups.done.length, 'готово', 'ok')}${k(groups.waiting.length, live ? 'в очереди' : 'не начато или прервано')}</div>`;
   }
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
+  if (j.status === 'awaiting_review' && j.review) {
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: ревьюер нашёл в требованиях критичное — тест-кейсы по ним могут проверять не то. Исправьте ТЗ и проверьте заново во вкладке «Требования» — или продолжите генерацию по этим требованиям.</span>
+      <button class="btn" onclick="cancelJob()">Отменить запуск</button>
+      <button class="btn primary" onclick="acceptJobReview()">Продолжить генерацию</button></div>
+      <div style="padding:0 10px 8px">${reviewHtml(j.review)}</div></div>`;
+  }
   if (j.status === 'awaiting_model') {
     html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите жизненный цикл системы — сущности, статусы и переходы, роли и их возможности. Тесты генерируются только по подтверждённой модели.</span>
       <button class="btn" onclick="openSettings('data', 'overview')">Открыть модель</button>
@@ -3862,6 +4068,7 @@ function renderJob() {
     (j.feature ? `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>` : '') +
     (j.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>` : '');
   if (about) html += `<details class="opt" data-g="about" ${opened.has('about') ? 'open' : ''}><summary>Требования и допущения</summary>${about}</details>`;
+  if (j.review && j.status !== 'awaiting_review') html += `<details class="opt" data-g="review" ${opened.has('review') ? 'open' : ''}><summary>Отчёт ревьюера требований — ${esc((REVIEW_VERDICT[j.review.verdict] || [j.review.verdict])[0])}${j.review_accepted && j.review.verdict === 'not_ready' ? ` <span class="muted">(генерация продолжена: ${esc(j.review_accepted)})</span>` : ''}</summary>${reviewHtml(j.review)}</details>`;
   html += `<details class="opt" data-g="log" ${opened.has('log') ? 'open' : ''}><summary>Журнал (${j.log.length})</summary><div class="log">` +
     j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString('ru-RU')} — ${esc(l.text)}</div>`).join('') + '</div></details>';
   box.innerHTML = html;
@@ -3886,6 +4093,13 @@ function pickAllJob(on) { JOB_PICK.sel = new Set(on ? JOB.scenarios.map((_, i) =
 // Items whose authoring failed (pipeline.retryable): an error of the agent, it stopped or gave up.
 let JOB_REUSE = {};      // decisions chosen in the run awaiting them: they survive the polling
 const failedItems = j => j.items.filter(it => !it.test_id && ['error', 'needs_attention', 'cancelled'].includes(it.status) && !it.bug);
+// "Не дублировать" items done without a test (reuse.unautomated): the earlier scenario was not automated.
+const unautomatedItems = j => j.items.map((it, i) => [it, i]).filter(([it]) => it.status === 'done' && !it.test_id && it.match?.kind === 'scenario' && it.match.decision === 'reuse').map(([, i]) => i);
+async function automateDuplicates() {
+  const indices = unautomatedItems(JOB);
+  if (!confirm(`Автоматизировать ${indices.length} сценариев «Не дублировать» без теста? Если прежний сценарий уже автоматизирован, используется его тест, иначе агент сгенерирует тест (расход модели).`)) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices}); openJob(JOB.id); } catch (e) { alert(e.message); }
+}
 async function retryJob() {
   const n = failedItems(JOB).length;
   if (!confirm(`Перезапустить генерацию ${n} сценариев с ошибкой? Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.`)) return;
@@ -3899,6 +4113,10 @@ async function runAnyway(i) {    // the lifecycle check stopped the item: a pers
 async function applyReuse() {
   const decisions = Object.fromEntries($$('#jobBox select[data-reuse]').map(el => [el.dataset.reuse, el.value]).filter(([, v]) => v));
   try { await api('POST', `/api/jobs/${JOB.id}/reuse`, {decisions}); JOB_REUSE = {}; setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
+}
+async function acceptJobReview() {
+  if (!confirm('Продолжить генерацию тест-кейсов по требованиям с критичными замечаниями ревьюера?')) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/review`); setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
 }
 async function confirmModelFromJob() {
   try { await api('POST', `/api/projects/${PID}/knowledge/confirm`); openJob(JOB.id); }
@@ -4127,6 +4345,7 @@ function showSub(sub, sec) {
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
   if (sub === 'api') loadApi();
+  if (sub === 'blocks') loadBlocks();
   if (sub === 'data') { store.set('tg_kn_sec', sec); showKnSec(sec); loadKnowledge(); }
 }
 

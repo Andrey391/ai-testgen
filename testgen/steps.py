@@ -93,6 +93,7 @@ async def perform(bs: BrowserSession, step: dict, loc=None) -> dict | None:
     Returns details for the run report (accessibility, visual checks, requests) or None."""
     page = bs.page
     a = step["action"]
+    bs.settled_quietly(False)       # the settle of the previous step says nothing about this one
     raw = a in ("mock_route", "handle_dialog", "assert_download", "api_request", "read_email", "use_module")
     v = step.get("value", "") if raw else bs.expand(step.get("value", ""))
     details = None
