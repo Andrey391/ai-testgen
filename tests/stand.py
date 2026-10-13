@@ -29,6 +29,7 @@ import random
 import re
 import sys
 import threading
+import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -92,6 +93,8 @@ class Stand:
             def do_GET(self):
                 path = self.path.split("?")[0]
                 stand.requests.append(("GET", path))
+                if path in stand.slow:                  # a slow server: the response comes late
+                    time.sleep(stand.slow[path])
                 if path == "/api/items":
                     return self._json(self._visitor())
                 if path == "/api/flaky":
@@ -191,6 +194,7 @@ class Stand:
         self.default_items = [{"name": "Хлеб"}, {"name": "Сыр"}]
         self.visitors: dict[str, list] = {}
         self.flaky_calls = 0
+        self.slow: dict[str, float] = {}    # path -> seconds the GET response is held back
         self.requests: list[tuple[str, str]] = []
         self.dangerous: list[str] = []
         self.tokens: set[str] = set()       # valid "auth" cookies (expire_sessions() logs everyone out)

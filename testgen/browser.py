@@ -579,6 +579,16 @@ class BrowserSession:
     def _xhr_done(self, request) -> None:
         self._in_flight.discard(request)
 
+    def _navigating(self) -> bool:
+        """The top page is being replaced: its new document is requested but not yet committed."""
+        for r in list(self._in_flight):
+            try:
+                if r.resource_type == "document" and r.frame == self.page.main_frame:
+                    return True
+            except Exception:
+                continue
+        return False
+
     async def calm(self, rounds: int = 3) -> None:
         """Until the page stops changing: loaded, its requests answered, the same address as before
         (a script that redirects after a request starts the navigation only when the request ends)."""
@@ -725,9 +735,10 @@ class BrowserSession:
         except Exception:
             pass
 
-    def settled_quietly(self) -> None:
-        """The step just finished was a quiet one: the page it settled is the page a snapshot sees."""
-        self._settled = (time.monotonic(), self.page.url if self.page else "")
+    def settled_quietly(self, quiet: bool = True) -> None:
+        """The step just finished was a quiet one: the page it settled is the page a snapshot sees.
+        `quiet=False` - a step starts: what it does (a click that starts a redirect) is not settled yet."""
+        self._settled = (time.monotonic(), self.page.url if self.page else "") if quiet else (0.0, "")
 
     def just_settled(self) -> bool:
         """The page settled a moment ago (the end of a step): waiting again only costs time - on a page
@@ -775,8 +786,10 @@ class BrowserSession:
             url = self.page.url
             try:
                 snap = await self._snapshot_frames(max_items, point, content_items, point2)
-                if snap["url"] != url and attempt < 3:
-                    continue        # the page navigated while it was being read: read the new one
+                if (snap["url"] != url or self._navigating()) and attempt < 3:
+                    # The page navigated while it was being read, or a script started a navigation
+                    # once its request ended (login → redirect): the snapshot is of the page it leaves.
+                    continue
                 break
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Страница не ответила на снимок за {EVAL_TIMEOUT} с (скрипт страницы "

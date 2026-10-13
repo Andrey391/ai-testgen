@@ -1587,7 +1587,18 @@ class StudioSession:
         n = 0
         while self.autopilot and n < self.max_steps:
             if self.status == "awaiting_approval" and self.pending:
-                await self.approve()
+                try:
+                    await self.approve()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # An unexpected failure must not leave the session "thinking" forever: whoever
+                    # waits for it (Studio, the pipeline) sees an error.
+                    logging.getLogger("testgen.agent").exception("Auto-Pilot сессии %s упал", self.id)
+                    self.status, self.autopilot = "error", False
+                    mask = getattr(self.bs, "mask", None) or str
+                    self._say("system", f"Auto-Pilot остановлен из-за ошибки: {mask(str(e)).splitlines()[0][:300]}")
+                    raise
                 n = len(self.steps) - start      # a batch of actions counts every step
             elif self.status in ("done", "error", "idle"):
                 break
