@@ -257,19 +257,48 @@ def _paths_of(test: dict) -> set[str]:
     return paths
 
 
+def _short(items: list[str], n: int) -> str:
+    items = [x for x in dict.fromkeys(items) if x]
+    return ", ".join(items[:n]) + (f" и ещё {len(items) - n}" if len(items) > n else "")
+
+
+def summary(p: dict, common_title: str = "") -> str:
+    """A one-line description of a mapped page: what it shows and what can be done on it."""
+    parts = []
+    title = (p.get("title") or "").strip()
+    heads = [h for h in p.get("headings") or [] if h != title and h != common_title]
+    if title and title != common_title:
+        parts.append(title)
+    if heads:
+        parts.append(_short(heads, 2))
+    for f in p.get("forms") or []:
+        fields = _short([x["label"] or x["name"] or x["type"] for x in f["fields"]], 4)
+        name = f["name"] or (f["submit"][0] if f["submit"] else "")
+        if fields or name:
+            parts.append(f"форма{f' «{name}»' if name else ''}" + (f": {fields}" if fields else ""))
+    if p.get("buttons"):
+        parts.append("кнопки: " + _short(p["buttons"], 3))
+    if not parts and p.get("text"):
+        parts.append(p["text"][:120] + ("…" if len(p["text"]) > 120 else ""))
+    return " · ".join(parts)
+
+
 def coverage(pid: str) -> dict | None:
     """Pages of the latest map and the tests that visit them."""
     m = latest(pid)
     if not m:
         return None
     tests = [(t["name"], _paths_of(t)) for t in storage.all_tests(pid)]
+    live = [p for p in m["pages"] if not p.get("error")]
+    titles = [p.get("title") or "" for p in live]
+    # the site name repeated on every page says nothing about the page itself
+    common = max(set(titles), key=titles.count) if titles else ""
+    common = common if len(live) > 1 and titles.count(common) > len(live) / 2 else ""
     pages = []
-    for p in m["pages"]:
-        if p.get("error"):
-            continue
+    for p in live:
         path = urlparse(p["url"]).path.rstrip("/") or "/"
         by = [name for name, paths in tests if path in paths]
         pages.append({"url": p["url"], "path": path, "title": p.get("title", ""), "tests": by,
-                      "forms": len(p.get("forms") or [])})
+                      "forms": len(p.get("forms") or []), "summary": summary(p, common)})
     return {"at": m["at"], "start": m["start"], "pages": pages, "total": len(pages),
-            "covered": sum(bool(p["tests"]) for p in pages)}
+            "covered": sum(bool(p["tests"]) for p in pages), "site_title": common}

@@ -2978,9 +2978,9 @@ async function loadCoverage() {
   }
   const missing = c.pages.filter(p => !p.tests.length);
   box.innerHTML = `<h3>Покрытие экранов: ${c.covered} из ${c.total}</h3>
-    <div class="hint">По карте сайта от ${fmtTime(c.at)} (${esc(c.start)}). Страница покрыта, если её открывает хотя бы один тест.</div>
+    <div class="hint">По карте сайта от ${fmtTime(c.at)} (${esc(c.start)}${c.site_title ? `, «${esc(c.site_title)}»` : ''}). Страница покрыта, если её открывает хотя бы один тест.</div>
     <div class="bar"><span style="width:${c.covered / c.total * 100}%;background:var(--ok)"></span></div>
-    ${missing.length ? '<b style="font-size:13px">Без тестов:</b>' + missing.map(p => `<div class="hint" style="margin:2px 0">• <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.path)}</a> ${esc(p.title)}${p.forms ? ` <span class="badge">форм: ${p.forms}</span>` : ''}</div>`).join('') : '<div class="ok">Все страницы карты открываются тестами.</div>'}`;
+    ${missing.length ? '<b style="font-size:13px">Без тестов:</b>' + missing.map(p => `<div class="hint" style="margin:2px 0">• <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.path)}</a>${p.forms ? ` <span class="badge">форм: ${p.forms}</span>` : ''} — ${esc(p.summary || p.title || 'нет текста на странице')}</div>`).join('') : '<div class="ok">Все страницы карты открываются тестами.</div>'}`;
 }
 
 // ---- requirements sources: Jira / Confluence (MCP) and .md files
