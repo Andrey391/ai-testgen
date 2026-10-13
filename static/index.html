@@ -414,6 +414,17 @@ details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 .seg button:last-of-type{border-radius:0 8px 8px 0}
 .seg button[aria-checked="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);position:relative}
 .seg button[aria-checked="true"] .muted{color:inherit;opacity:.85}
+.seg button[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);position:relative}
+/* «Тесты»: the list and the open test, run or suite side by side; narrower than 1100px - the detail over the list */
+.split.has-detail{display:grid;grid-template-columns:minmax(340px,2fr) 3fr;gap:0 14px;align-items:start}
+.split.has-detail .wide{display:none}
+.split.has-detail .detail-pane{position:sticky;top:10px;max-height:calc(100vh - 20px);overflow:auto}
+.split.has-detail .detail-pane > .card:first-child{margin-top:0}
+.list-pane tr.cur td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.filters select,.filters input{margin:0}
+main a.tile:not(.btn){display:block;color:inherit;text-decoration:none}
+a.tile .l::after{content:" →";color:var(--accent)}
+a.tile:hover,a.tile:focus-visible{border-color:var(--accent)}
 .start-choice{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px}
 .start-choice button{display:flex;flex-direction:column;gap:4px;text-align:left;font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer}
 .start-choice button:hover,.start-choice button:focus-visible{border-color:var(--accent)}
@@ -465,7 +476,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
   .subnav-group{width:100%}.subtree.open{flex-direction:row;flex-wrap:wrap;width:100%;margin-left:0}
   .skills-layout > .card{position:static}#skList{max-height:50vh}#skEditor{max-height:none}
-  .grid2,.grid3{grid-template-columns:1fr}}
+  .grid2,.grid3{grid-template-columns:1fr}
+  .split.has-detail{display:block}.split.has-detail .list-pane{display:none}.split.has-detail .detail-pane{position:static;max-height:none}}
 </style>
 </head>
 <body>
@@ -808,8 +820,12 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 <section id="tab-tests" class="hidden">
   <div class="card">
     <div class="row">
-      <b class="grow">Тесты проекта</b>
-      <select id="tagFilter" style="width:auto" title="Фильтр по тегу"><option value="">Все тесты</option></select>
+      <div class="seg" id="testsSecs" role="tablist" aria-label="Раздел" style="margin-top:0">
+        <button type="button" role="tab" aria-selected="true" data-sec="list">Тесты</button>
+        <button type="button" role="tab" aria-selected="false" tabindex="-1" data-sec="suites">Запуски наборов</button>
+        <button type="button" role="tab" aria-selected="false" tabindex="-1" data-sec="coverage">Покрытие экранов</button>
+      </div>
+      <span class="grow"></span>
       <select id="runScreen" style="width:auto" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
         <option value="">Экран: как в проекте</option>
         <option value="1920x1080">1920×1080</option>
@@ -831,18 +847,38 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <a class="btn hidden" id="zipTestit" title="С декораторами testit-adapter-pytest: результаты прогонов в CI уходят в Test IT">.zip для Test IT</a>
     </div>
     <div class="hint">Набор — все тесты или тесты выбранного тега: параллельно, в одном браузере, как в CI (<code>python -m testgen.run --project … --tag … --junit report.xml</code>). Упавший тест перезапускается один раз: прошёл со второй попытки — «нестабилен». Тесты в карантине запускаются, но не валят набор.</div>
-    <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Последние запуски</th><th>Качество проверок</th><th id="tmsHead">Система тестов</th><th></th></tr></thead>
-    <tbody id="testsBody"></tbody></table>
   </div>
-  <div class="card hidden" id="suiteBox"></div>
-  <div class="card runlog hidden" id="runBox"></div>
-  <div class="card hidden" id="testBox"></div>
-  <div class="card">
-    <h3>Запуски наборов</h3>
-    <table><thead><tr><th>Запуск</th><th>Итог</th><th>Теги</th><th>Кто</th><th></th></tr></thead>
-    <tbody id="suitesBody"></tbody></table>
+  <!-- the list of the section on the left, the open test, run or suite on the right (over the list when narrow) -->
+  <div class="split" id="testsSplit">
+    <div class="list-pane">
+      <div class="card" data-tests-sec="list">
+        <div class="row filters" role="search">
+          <input type="search" id="testQ" class="grow" placeholder="Поиск: название, адрес, id" aria-label="Поиск тестов" style="min-width:180px">
+          <select id="statusFilter" aria-label="Статус" style="width:auto"><option value="">Любой статус</option>
+            <option value="draft">Черновики</option><option value="review">На ревью</option><option value="ready">В наборе</option></select>
+          <select id="healthFilter" aria-label="Состояние" style="width:auto"><option value="">Любое состояние</option>
+            <option value="failing">Падают</option><option value="flaky">Нестабильные</option><option value="quarantined">В карантине</option>
+            <option value="weak">Слабые проверки</option><option value="heal">Самолечение на ревью</option></select>
+          <select id="layerFilter" aria-label="Слой" style="width:auto"><option value="">UI и API</option><option value="ui">UI</option><option value="api">API</option></select>
+          <select id="tagFilter" aria-label="Тег" style="width:auto"><option value="">Все теги</option></select>
+        </div>
+        <div class="chips hidden" id="taskFilter" style="margin-top:6px"></div>
+        <table style="margin-top:8px"><thead><tr><th>Тест</th><th class="wide">Шагов</th><th>Последние запуски</th><th class="wide">Качество проверок</th><th class="wide" id="tmsHead">Система тестов</th><th></th></tr></thead>
+        <tbody id="testsBody"></tbody></table>
+      </div>
+      <div class="card hidden" data-tests-sec="suites">
+        <h3>Запуски наборов</h3>
+        <table><thead><tr><th>Запуск</th><th>Итог</th><th>Теги</th><th class="wide">Кто</th><th></th></tr></thead>
+        <tbody id="suitesBody"></tbody></table>
+      </div>
+      <div class="card hidden" data-tests-sec="coverage" id="covBox"></div>
+    </div>
+    <div class="detail-pane">
+      <div class="card hidden" id="suiteBox"></div>
+      <div class="card runlog hidden" id="runBox"></div>
+      <div class="card hidden" id="testBox"></div>
+    </div>
   </div>
-  <div class="card" id="covBox"></div>
 </section>
 
 <!-- ============ DASHBOARD ============ -->
@@ -1962,6 +1998,9 @@ async function switchProject(pid) {
   $('#pipeUrl').placeholder = PROJ.base_url || 'https://…';
   renderDesignChoices();
   AN = null; SCEN = [];
+  // tests of another project: its filters (tag, task) and the open test do not apply
+  setFilters(new URLSearchParams()); $('#tagFilter').value = '';
+  ['#testBox', '#runBox', '#suiteBox'].forEach(s => $(s).classList.add('hidden')); OPEN_TEST = null;
   const tab = curTab();
   if (tab === 'req') loadAnalyses();
   if (tab === 'home' && WIZ && WIZ.pid !== pid) showHomeList();
@@ -2019,7 +2058,7 @@ function showTab(t, own) {
 // names, nothing writes the address (ROUTING).
 let ROUTING = false;
 const VIEW_TAB = {req: 'req', pipe: 'pipe', studio: 'studio', tests: 'tests', runs: 'tests', suites: 'tests',
-                  tasks: 'tasks', dash: 'dash', settings: 'proj', setup: 'home'};
+                  coverage: 'tests', tasks: 'tasks', dash: 'dash', settings: 'proj', setup: 'home'};
 function parseRoute(hash) {
   const h = (hash || '').replace(/^#/, '');
   const old = h.match(/^(suite|test|run)=([\w-]+)$/);      // links of notifications before the addresses
@@ -2030,8 +2069,8 @@ function parseRoute(hash) {
   if (parts[0] === 'projects' && parts.length <= 2) return {tab: 'home', wizard: parts[1] === 'new'};
   if (parts[0] !== 'p' || !parts[1]) return {unknown: true};
   // ?back=pipe/<jid> | studio - the screen was opened from a run or a test stopped by it: the way back
-  const back = new URLSearchParams(h.split('?')[1] || '').get('back') || '';
-  return {pid: parts[1], view: parts[2] || 'req', id: parts[3] || '', sec: parts[4] || '',
+  const query = new URLSearchParams(h.split('?')[1] || ''), back = query.get('back') || '';
+  return {pid: parts[1], view: parts[2] || 'req', id: parts[3] || '', sec: parts[4] || '', query,
           back: /^(pipe\/[\w-]+|studio)$/.test(back) ? back : ''};
 }
 const routeTab = r => r.tab || (r.pid ? VIEW_TAB[r.view] : '');
@@ -2041,6 +2080,7 @@ function tabPath(t) {
   if (t === 'home' || !PID) return '/projects';
   if (t === 'studio' && SID) return projPath('studio', SID);
   if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general', store.get('tg_kn_sec') || 'overview');
+  if (t === 'tests') return testsPath();
   return projPath(t);
 }
 function setRoute(path, replace) {
@@ -2097,13 +2137,20 @@ async function openRoute(r) {
   }
   if (r.view === 'req' && id) { await api('GET', `/api/analyses/${id}`); return showAnalysis(id); }
   if (r.view === 'studio' && id) return routeSession(id);
+  if (tab === 'tests') {        // the list of the section the address names, with its filters
+    if (!id || r.view !== 'runs') showTestsSec(r.view === 'tests' ? 'list' : r.view);
+    if (r.view === 'tests' && !id) setFilters(r.query);
+  }
   showTab(tab);
   if (r.view === 'tests' && id) return openTest(id);
   if (r.view === 'runs' && id) return openRun(id);
   if (r.view === 'suites' && id) return openSuite(id);
   if (r.view === 'tasks') return id ? openTask(id) : closeTask();
   if (r.view === 'pipe' && id) return openJob(id);
-  if (r.view === 'tests') ['#testBox', '#runBox', '#suiteBox'].forEach(s => $(s).classList.add('hidden'));
+  if (tab === 'tests') {
+    ['#testBox', '#runBox', '#suiteBox'].forEach(s => $(s).classList.add('hidden'));
+    OPEN_TEST = null; clearTimeout(runTimer); clearTimeout(suiteTimer);
+  }
   // «Назад» from a session to Studio does not close it: the address names the open session again
   if (r.view === 'studio' && SID && STATE?.project_id === PID) history.replaceState(null, '', '#' + projPath('studio', SID));
 }
@@ -2795,13 +2842,72 @@ const VERDICT = {product_bug: 'Дефект продукта', test_issue: 'Пр
 const RUN_STATUS = {passed: ['passed', 'ok'], flaky: ['нестабилен', 'warn'], failed: ['failed', 'bad'], error: ['ошибка', 'bad'], running: ['идёт…', 'warn']};
 const VISUAL_VERDICT = {bug: 'похоже на дефект', expected_change: 'ожидаемое изменение — обновите эталон', noise: 'шум рендеринга'};
 let TESTS = [], OPEN_TEST = null, runTimer = null, suiteTimer = null;
+// Filters of the list (GET /api/tests: q, status, health, layer, tag, task) - in the address of the list:
+// #/p/{pid}/tests?health=flaky. The section: the tests, suite runs (#/p/{pid}/suites), screen coverage (…/coverage).
+const TEST_FILTERS = ['q', 'status', 'health', 'layer', 'tag', 'task'];
+let FILTERS = {}, TESTS_SEC = 'list', TASK_NAME = {};
+const SEC_VIEW = {list: 'tests', suites: 'suites', coverage: 'coverage'};
+const shownFilters = f => Object.fromEntries(Object.entries(f).filter(([, v]) => v));
+function testsPath() {
+  if (TESTS_SEC !== 'list') return projPath(SEC_VIEW[TESTS_SEC]);
+  const q = new URLSearchParams(shownFilters(FILTERS)).toString();
+  return projPath('tests') + (q ? '?' + q : '');
+}
+// The filters an address names (the rest are cleared); the controls show them.
+function setFilters(params) {
+  FILTERS = Object.fromEntries(TEST_FILTERS.map(k => [k, (params.get(k) || '').trim()]));
+  $('#testQ').value = FILTERS.q;
+  [['status', '#statusFilter'], ['health', '#healthFilter'], ['layer', '#layerFilter']].forEach(([k, sel]) => {
+    $(sel).value = FILTERS[k];
+    if ($(sel).value !== FILTERS[k]) FILTERS[k] = '';       // not a value of the list: ignored
+  });
+}
+let filterTimer = null;
+function filtersChanged() {
+  clearTimeout(filterTimer);
+  FILTERS = {...FILTERS, q: $('#testQ').value.trim(), status: $('#statusFilter').value, health: $('#healthFilter').value,
+             layer: $('#layerFilter').value, tag: $('#tagFilter').value};
+  if (!hasDetail()) setRoute(testsPath(), true);
+  loadTests();
+}
+$('#testQ').oninput = () => { clearTimeout(filterTimer); filterTimer = setTimeout(filtersChanged, 250); };
+['#statusFilter', '#healthFilter', '#layerFilter', '#tagFilter'].forEach(sel => $(sel).onchange = filtersChanged);
+function resetFilters() { setFilters(new URLSearchParams()); $('#tagFilter').value = ''; filtersChanged(); }
+function dropTaskFilter() { FILTERS.task = ''; filtersChanged(); }
+function showTestsSec(sec, own) {
+  TESTS_SEC = SEC_VIEW[sec] ? sec : 'list';
+  $$('#testsSecs [data-sec]').forEach(b => { const on = b.dataset.sec === TESTS_SEC; b.setAttribute('aria-selected', on); b.tabIndex = on ? 0 : -1; });
+  $$('[data-tests-sec]').forEach(x => x.classList.toggle('hidden', x.dataset.testsSec !== TESTS_SEC));
+  if (own) {        // the person chose the section: its list, nothing open over it
+    ['#testBox', '#runBox', '#suiteBox'].forEach(b => $(b).classList.add('hidden'));
+    OPEN_TEST = null; clearTimeout(runTimer); clearTimeout(suiteTimer);
+    setRoute(testsPath());
+  }
+  if (TESTS_SEC === 'suites') loadSuites();
+  if (TESTS_SEC === 'coverage') loadCoverage();
+}
+$('#testsSecs').addEventListener('click', e => { const b = e.target.closest('[data-sec]'); if (b) showTestsSec(b.dataset.sec, true); });
+$('#testsSecs').addEventListener('keydown', e => {       // tabs: arrows move between them
+  if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  const all = $$('#testsSecs [data-sec]'), i = all.findIndex(b => b.dataset.sec === TESTS_SEC);
+  const next = all[(i + (e.key === 'ArrowRight' ? 1 : all.length - 1)) % all.length];
+  showTestsSec(next.dataset.sec, true); next.focus();
+});
+// A test, run or suite is open: the list narrows to its left (or is under it on a narrow screen).
+const hasDetail = () => ['#testBox', '#runBox', '#suiteBox'].some(b => !$(b).classList.contains('hidden'));
+function syncSplit() {
+  const on = hasDetail();
+  $('#testsSplit').classList.toggle('has-detail', on);
+  $$('#testsBody tr[data-id]').forEach(tr => tr.classList.toggle('cur', on && tr.dataset.id === OPEN_TEST));
+}
+new MutationObserver(syncSplit).observe($('.detail-pane'), {subtree: true, attributes: true, attributeFilter: ['class']});
 // ✕ of a test, run or suite: its address goes back to what stays open (the test under a run) or the list
 function closeDetail(box) {
   $(box).classList.add('hidden');
   if (box === '#testBox') OPEN_TEST = null;
   if (box === '#runBox') clearTimeout(runTimer);
   if (box === '#suiteBox') clearTimeout(suiteTimer);
-  setRoute(OPEN_TEST && !$('#testBox').classList.contains('hidden') ? projPath('tests', OPEN_TEST) : projPath('tests'));
+  setRoute(OPEN_TEST && !$('#testBox').classList.contains('hidden') ? projPath('tests', OPEN_TEST) : testsPath());
 }
 const runBadge = st => { const [t, c] = RUN_STATUS[st] || [st, 'off']; return `<span class="badge ${c}">${esc(t)}</span>`; };
 function hasPublish() { return !!publishConn(); }
@@ -2818,11 +2924,16 @@ function verifyCell(t) {
 }
 async function loadTests() {
   if (!PID) return;
-  const cur = $('#tagFilter').value;
-  const tags = await api('GET', `/api/projects/${PID}/tags`);
-  $('#tagFilter').innerHTML = '<option value="">Все тесты</option>' + tags.map(t => `<option value="${esc(t)}" ${t === cur ? 'selected' : ''}>#${esc(t)}</option>`).join('');
-  const tag = $('#tagFilter').value;
-  TESTS = await api('GET', `/api/tests?project_id=${PID}&tag=${encodeURIComponent(tag)}`);
+  const pid = PID, f = {...FILTERS}, tag = f.tag || '';
+  const [tags, list] = await Promise.all([api('GET', `/api/projects/${PID}/tags`),
+    api('GET', '/api/tests?' + new URLSearchParams({project_id: PID, ...shownFilters(f)}))]);
+  if (pid !== PID || JSON.stringify(f) !== JSON.stringify(FILTERS)) return;     // the filters changed meanwhile
+  TESTS = list;
+  $('#tagFilter').innerHTML = '<option value="">Все теги</option>' + [...new Set([...tags, ...(tag ? [tag] : [])])].map(t => `<option value="${esc(t)}" ${t === tag ? 'selected' : ''}>#${esc(t)}</option>`).join('');
+  if (f.task && !TASK_NAME[f.task]) TASK_NAME[f.task] = (await api('GET', `/api/tasks/${f.task}`).catch(() => ({}))).title || 'не найдена';
+  $('#taskFilter').classList.toggle('hidden', !f.task);
+  $('#taskFilter').innerHTML = f.task ? `<span class="badge">Тесты задачи «${esc(TASK_NAME[f.task])}» <button class="linkbtn" onclick="dropTaskFilter()" aria-label="Показать тесты всех задач">✕</button></span>` : '';
+  const filtered = Object.entries(f).some(([k, v]) => v && k !== 'tag');
   $('#zipBtn').href = `/api/projects/${PID}/export${tag ? '?tag=' + encodeURIComponent(tag) : ''}`;
   $('#suiteBtn').textContent = tag ? `Запустить #${tag}` : 'Запустить все';
   const pub = hasPublish(), pc = publishConn(), pubTitle = pc ? pc.title : '';
@@ -2832,7 +2943,7 @@ async function loadTests() {
   $('#zipTestit').href = `/api/projects/${PID}/export?testit=1${tag ? '&tag=' + encodeURIComponent(tag) : ''}`;
   $('#testsBody').innerHTML = TESTS.map(t => {
     const lr = t.last_run, z = t.external?.[tmsKey(pc)], q = t.quarantine?.on;
-    return `<tr><td><a href="#" onclick="openTest('${t.id}');return false"><b>${esc(t.name)}</b></a>${t.engine === 'playwright-mcp' ? ' <span class="badge off">MCP</span>' : ''}${t.layer === 'api' ? ' <span class="badge" title="API-тест: запросы к API без браузера">API</span>' : ''}
+    return `<tr data-id="${t.id}" class="${t.id === OPEN_TEST && hasDetail() ? 'cur' : ''}"><td><a href="#" onclick="openTest('${t.id}');return false"><b>${esc(t.name)}</b></a>${t.engine === 'playwright-mcp' ? ' <span class="badge off">MCP</span>' : ''}${t.layer === 'api' ? ' <span class="badge" title="API-тест: запросы к API без браузера">API</span>' : ''}
         ${t.role === 'login' ? '<span class="badge ok" title="Выполняется один раз перед остальными тестами, они начинаются с сохранённым входом">тест входа</span>' : t.role === 'module' ? '<span class="badge" title="Используется другими тестами как один шаг">модуль</span>' : ''}
         ${t.data_steps ? `<span class="badge off" title="Запросы подготовки и очистки данных">данные: ${t.data_steps}</span>` : ''}
         ${t.status === 'draft' ? '<span class="badge warn" title="Записан агентом, ещё не проверен человеком: в регрессионный набор не входит">черновик</span>' : t.status === 'review' ? '<span class="badge warn" title="Ждёт ревью: в регрессионный набор не входит">на ревью</span>' : ''}
@@ -2841,15 +2952,15 @@ async function loadTests() {
         ${t.proposals ? `<span class="badge warn" title="Самолечение ждёт ревью">ревью локаторов: ${t.proposals}</span>` : ''}
         <div class="muted" style="font-size:12px">${esc(t.url)}</div>
         <div class="chips" style="margin-top:3px">${t.tags.map(x => `<span class="badge">#${esc(x)}</span>`).join('')}<button class="linkbtn" onclick="editTags('${t.id}')">${t.tags.length ? 'теги' : '+ тег'}</button></div></td>
-      <td>${t.steps}</td>
+      <td class="wide">${t.steps}</td>
       <td>${t.recent.length ? strip(t.recent) : '—'}
         ${t.flip_rate != null && t.flip_rate > 0 ? `<div class="hint">смена результата: ${Math.round(t.flip_rate * 100)}%</div>` : ''}
         ${lr?.analysis ? `<div><span class="badge warn" title="${esc(lr.analysis.summary)}">${esc(VERDICT[lr.analysis.verdict] || lr.analysis.verdict)}</span></div>` : ''}
         ${lr ? `<div class="muted" style="font-size:12px">${fmtTime(lr.at)}</div>` : ''}</td>
-      <td>${verifyCell(t)}</td>
-      <td>${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
+      <td class="wide">${verifyCell(t)}</td>
+      <td class="wide">${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
-        ${canRole('editor') ? `<button class="btn small" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
+        ${canRole('editor') ? `<button class="btn small wide" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
         <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
           <button onclick="openTest('${t.id}').then(() => editSteps('${t.id}'))">Редактировать шаги</button>
@@ -2870,11 +2981,12 @@ async function loadTests() {
           <button onclick="editCreds('${t.id}')">Учётная запись теста${t.account ? ': ' + esc(accountName(t.account)) : ''}</button>
           <button onclick="delTest('${t.id}')" style="color:var(--bad)">Удалить</button>
         </div></details></td></tr>`;
-  }).join('') || `<tr><td colspan="6" class="muted">${tag ? 'Нет тестов с этим тегом.' : 'В проекте пока нет тестов. Создайте тест в Studio или запустите конвейер.'}</td></tr>`;
-  loadSuites(); loadCoverage();
+  }).join('') || `<tr><td colspan="6" class="muted">${filtered ? 'Нет тестов по этим условиям. <button class="linkbtn" onclick="resetFilters()">Сбросить фильтры</button>'
+    : tag ? 'Нет тестов с этим тегом.' : 'В проекте пока нет тестов. Создайте тест в Studio или запустите конвейер.'}</td></tr>`;
+  if (TESTS_SEC === 'suites') loadSuites();
+  if (TESTS_SEC === 'coverage') loadCoverage();
   if (OPEN_TEST && !$('#testBox').classList.contains('hidden')) openTest(OPEN_TEST, true);
 }
-$('#tagFilter').onchange = loadTests;
 // Repeated actions -> modules: a chain of actions found in several stable tests is offered as a module (blocks.py);
 // the tests then call the module instead of keeping copies. Assertions never go into a module.
 async function loadBlocks() {
@@ -3489,7 +3601,7 @@ async function loadSuites() {
   $('#suitesBody').innerHTML = list.map(s => `<tr class="click" onclick="openSuite('${s.id}')"><td>${fmtTime(s.started)}</td>
     <td>${s.status === 'running' ? runBadge('running') : `<span class="badge ${s.passed ? 'ok' : 'bad'}">${s.passed ? 'успешно' : 'есть падения'}</span>`}
       <span class="muted" style="font-size:12px">${s.summary?.total ? `${s.summary.passed + s.summary.flaky}/${s.summary.total}` : ''}</span></td>
-    <td>${(s.tags || []).map(t => '#' + esc(t)).join(' ') || 'все'}</td><td>${esc(s.user || s.trigger || '')}</td>
+    <td>${(s.tags || []).map(t => '#' + esc(t)).join(' ') || 'все'}</td><td class="wide">${esc(s.user || s.trigger || '')}</td>
     <td class="row">${s.status !== 'running' && !s.passed ? `<button class="btn small" onclick="event.stopPropagation();retrySuite('${s.id}', this)" title="Прогнать заново только упавшие тесты этого набора">Повторить упавшие</button>` : ''}${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit" onclick="event.stopPropagation()">JUnit</a>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="5" class="muted">Наборы ещё не запускались.</td></tr>';
 }
@@ -3518,7 +3630,11 @@ async function openSuite(sid, quiet) {
 
 // the QA lead's dashboard
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
-function tile(value, label, sub) { return `<div class="tile"><div class="l">${label}</div><div class="v">${value}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`; }
+// A tile with `path` is a link to the tests (suite run) behind its number; `hint` - what opens.
+function tile(value, label, sub, path, hint) {
+  const body = `<div class="l">${label}</div><div class="v">${value}</div>${sub ? `<div class="s">${sub}</div>` : ''}`;
+  return path ? `<a class="tile" href="#${esc(path)}" title="${esc(hint || '')}">${body}</a>` : `<div class="tile">${body}</div>`;
+}
 function bars(points, label, title) {
   if (!points.length) return '<div class="hint">Данных пока нет.</div>';
   const max = Math.max(...points.map(label)) || 1;
@@ -3531,12 +3647,13 @@ async function loadDash() {
   try { m = await api('GET', `/api/projects/${PID}/metrics?days=${$('#dashDays').value}`); } catch (e) { $('#dashTiles').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const a = m.automation, st = m.stability, q = m.quality, r = m.regression, sv = m.saved, sp = m.spending;
   $('#dashTiles').innerHTML =
-    tile(m.tests, 'Автотестов', Object.entries(m.by_status).map(([k, v]) => `${({draft: 'черновиков', review: 'на ревью', ready: 'в наборе'})[k] || k}: ${v}`).join(' · ')) +
+    tile(m.tests, 'Автотестов', Object.entries(m.by_status).map(([k, v]) => `${({draft: 'черновиков', review: 'на ревью', ready: 'в наборе'})[k] || k}: ${v}`).join(' · '), projPath('tests'), 'Все тесты проекта') +
     tile(a.share == null ? a.linked_cases : pct(a.share), 'Автоматизировано ручных кейсов', a.imported_cases ? `${a.linked_cases} из ${a.imported_cases} импортированных` : `привязано к кейсам: ${a.linked_cases}`) +
-    tile(pct(st.flaky_share), 'Нестабильных тестов', `${st.flaky} шт. · в карантине: ${st.quarantined}`) +
-    tile(pct(st.pass_rate), 'Успешных прогонов', `за ${m.days} дн.`) +
-    tile(pct(q.mutation_score), 'Доля убитых мутантов', `проверено тестов: ${q.verified}`) +
-    tile(r.last_minutes == null ? '—' : r.last_minutes + ' мин', 'Время регрессии', 'последний запуск набора') +
+    tile(pct(st.flaky_share), 'Нестабильных тестов', `${st.flaky} шт. · в карантине: ${st.quarantined}`, projPath('tests') + '?health=flaky', 'Нестабильные тесты') +
+    tile(pct(st.pass_rate), 'Успешных прогонов', `за ${m.days} дн.`, projPath('tests') + '?health=failing', 'Тесты, у которых упал последний прогон') +
+    tile(pct(q.mutation_score), 'Доля убитых мутантов', `проверено тестов: ${q.verified}`, projPath('tests') + '?health=weak', 'Тесты со слабыми проверками: прошли на «испорченной» странице') +
+    tile(r.last_minutes == null ? '—' : r.last_minutes + ' мин', 'Время регрессии', 'последний запуск набора',
+         r.last_id ? projPath('suites', r.last_id) : projPath('suites'), r.last_id ? 'Последний запуск набора' : 'Запуски наборов') +
     tile(sv.hours + ' ч', 'Сэкономлено ручного труда', `${sv.runs} автопрогонов × ${sv.manual_minutes} мин (настройка «Ручной прогон кейса»)`) +
     tile(`$${sp.usd.toFixed(2)}`, `Расход на модели за ${sp.month}`, `≈ ${sp.rub.toFixed(0)} ₽` + (sp.test_generation_usd != null ? ` · генерация теста ≈ $${sp.test_generation_usd}` : ''));
   $('#dashSuites').innerHTML = bars(r.suites, p => p.minutes, p => `${fmtTime(p.at)}: ${p.minutes} мин, ${p.passed ? 'успешно' : 'есть падения'}`);
@@ -3581,7 +3698,8 @@ async function loadTasks() {
     return `<tr class="${t.status === 'done' ? 'done' : ''}">
       <td><a href="#" onclick="openTask('${t.id}');return false"><b>${esc(t.title)}</b></a>
         ${desc ? `<div class="muted" style="font-size:12px;white-space:pre-wrap">${esc(desc)}</div>` : ''}
-        ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}</div>` : ''}</td>
+        ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}
+          ${t.tests.length > 1 ? `<a class="linkbtn" href="#${projPath('tests')}?task=${t.id}" title="Тесты задачи во вкладке «Тесты»: прогоны, качество проверок">все в «Тестах» →</a>` : ''}</div>` : ''}</td>
       <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select>
         ${t.suggest ? `<div><button class="linkbtn" onclick="setTaskStatus('${t.id}', '${t.suggest}')" title="${t.suggest === 'done' ? 'Все тесты задачи проверены и в наборе' : 'Последние прогоны всех тестов задачи прошли'}">→ ${esc(TASK_STATUS[t.suggest])}?</button></div>` : ''}</td>
       <td><span class="badge ${cls}">${esc(pr)}</span></td>

@@ -123,6 +123,13 @@ def flip_rate(index: list[dict]) -> float | None:
     return round(sum(a != b for a, b in zip(seq, seq[1:])) / (len(seq) - 1), 3)
 
 
+def is_flaky(test: dict, index: list[dict], threshold: float) -> bool:
+    """A flaky test (the dashboard and the «Нестабильные» filter): its result flips at least `threshold` (0..1,
+    run.flaky_threshold) over the last runs, or the last run passed only on a re-run."""
+    rate = flip_rate(index[-FLAKY_WINDOW:])
+    return (rate is not None and rate >= threshold) or bool((test.get("last_run") or {}).get("flaky"))
+
+
 def get(rid: str) -> dict | None:
     if rid in LIVE:
         return LIVE[rid]

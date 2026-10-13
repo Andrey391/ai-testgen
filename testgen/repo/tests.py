@@ -91,6 +91,43 @@ class Sql:
             return [dict(r.body) for r in c.execute(q)]
 
     @classmethod
+    def listing(cls, pid: str, *, ids=None, tag: str = "", q: str = "", status: str = "", layer: str = "",
+                health: str = "") -> list[dict]:
+        """The test list with its filters in SQL: text in the name, address or id, status, layer (`ui`/`api`),
+        tag, ids (the tests of a task) and health that the columns know (`failing`, `quarantined`, `weak`,
+        `heal`; `flaky` needs the run history - storage.list_tests)."""
+        t = cls.t
+        w = [t.c.project_id == pid]
+        if ids is not None:
+            w.append(t.c.id.in_(list(ids)))
+        if tag:
+            w.append(t.c.tags.overlap([tag]))
+        if q:
+            like = "%" + "".join("\\" + ch if ch in "\\%_" else ch for ch in q.strip()) + "%"
+            w.append(t.c.name.ilike(like) | t.c.body["url"].astext.ilike(like) | t.c.id.ilike(like))
+        if status:
+            w.append(t.c.status == status)
+        if layer:
+            lay = func.coalesce(t.c.body["layer"].astext, "ui")
+            w.append(lay == layer if layer == "api" else lay != "api")
+        if health == "failing":
+            w.append(t.c.last_status.in_(["failed", "error"]))
+        elif health == "quarantined":
+            w.append(t.c.quarantined.is_(True))
+        elif health == "weak":
+            w.append(t.c.body["verify"]["weak"].as_boolean().is_(True))
+        elif health == "heal":
+            w.append(cls._proposals() > 0)
+        with db.engine().connect() as c:
+            return [dict(r.body) for r in c.execute(select(t.c.body).where(*w).order_by(t.c.updated.desc()))]
+
+    @classmethod
+    def _proposals(cls):
+        props = cls.t.c.body["heal_proposals"]
+        # SQL does not promise to check the type first: the length only of an array
+        return case((func.jsonb_typeof(props) == "array", func.jsonb_array_length(props)), else_=0)
+
+    @classmethod
     def names(cls, pid: str) -> dict[str, str]:
         with db.engine().connect() as c:
             return {r.id: r.name or r.id for r in c.execute(select(cls.t.c.id, cls.t.c.name)
@@ -118,9 +155,7 @@ class Sql:
     def healing(cls, pid: str) -> list[dict]:
         """Tests of the project with self-healing proposals waiting for a person: {id, name, count, updated}."""
         t = cls.t
-        props = t.c.body["heal_proposals"]
-        # SQL does not promise to check the type first: the length only of an array
-        n = case((func.jsonb_typeof(props) == "array", func.jsonb_array_length(props)), else_=0)
+        n = cls._proposals()
         with db.engine().connect() as c:
             return [{"id": r.id, "name": r.name or r.id, "count": r.n, "updated": r.updated} for r in c.execute(
                 select(t.c.id, t.c.name, t.c.updated, n.label("n")).where(t.c.project_id == pid, n > 0))]

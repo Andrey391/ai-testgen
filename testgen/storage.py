@@ -278,9 +278,24 @@ def select(project_id: str, tags: list[str] | None = None, test_ids: list[str] |
                                 ready=not include_drafts, modules=False)
 
 
-def list_tests(project_id: str, tag: str = "") -> list[dict]:
-    tests = repo.Sql.query(project_id, tags=[tag]) if tag else all_tests(project_id)
+HEALTH = ("failing", "flaky", "quarantined", "weak", "heal")   # the «Тесты» filters and the dashboard tiles
+LAYERS = ("ui", "api")
+
+
+def list_tests(project_id: str, tag: str = "", q: str = "", status: str = "", health: str = "", layer: str = "",
+               task: str = "") -> list[dict]:
+    """The test list: filters by text (name, address, id), status, health, layer, tag and the task the tests are
+    linked to - in SQL; only `flaky` is decided by the run history, read for the list anyway."""
+    ids = None
+    if task:
+        t = tasks.load(task)
+        ids = (t or {}).get("test_ids") or [] if (t or {}).get("project_id") == project_id else []
+    tests = repo.Sql.listing(project_id, ids=ids, tag=tag, q=q, status=status, layer=layer, health=health)
     histories = runs.histories(project_id, [t["id"] for t in tests])
+    if health == "flaky":
+        threshold = projects.get(project_id)["pipeline"]["run"]["flaky_threshold"] / 100
+        tests = [t for t in tests if runs.is_flaky(t, histories.get(t["id"]) or [], threshold)]
+    recorded = traffic.recorded_tests(project_id)
     out = []
     for t in tests:
         hist = histories.get(t["id"]) or []
@@ -288,11 +303,11 @@ def list_tests(project_id: str, tag: str = "") -> list[dict]:
                                           "last_run", "external", "engine", "quarantine", "verify",
                                           "authoring_usage", "account", "layer")}
                    | {"steps": len(t.get("steps", [])), "tags": t.get("tags") or [], "role": t.get("role") or "",
-                      "status": status(t), "comments": len(t.get("comments") or []),
+                      "status": repo.status(t), "comments": len(t.get("comments") or []),
                       "data_steps": len(t.get("before") or []) + len(t.get("after") or []),
                       "proposals": len(t.get("heal_proposals") or []),
                       "recent": hist[-10:], "flip_rate": runs.flip_rate(hist),
-                      "has_traffic": traffic.exists(project_id, t["id"])})
+                      "has_traffic": _safe(t["id"]) in recorded})
     return out
 
 
