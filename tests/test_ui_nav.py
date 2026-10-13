@@ -210,7 +210,7 @@ def test_bell_counts_decisions_and_opens_them(page, studio_url, project, save_te
     storage.update(t["id"], lambda x: x.update(heal_proposals=[]))
     page.click("#bellBtn")
     expect(menu).to_contain_text("Вашего решения ничего не ждёт")
-    expect(page.locator("#bellCount")).to_be_hidden()
+    expect(page.locator("#bellCount")).to_have_text("0")
     expect(page.locator("nav button[data-tab=pipe] .badge")).to_be_hidden()
     page.keyboard.press("Escape")
     expect(menu).to_be_hidden()

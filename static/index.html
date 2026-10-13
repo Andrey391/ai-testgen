@@ -22,10 +22,10 @@ header h1{font-size:16px;margin:0}
 #projBox{display:flex;gap:6px;align-items:center}
 #projSel{width:auto;max-width:240px;font-weight:600}
 #bellBox{position:relative}
-#bellBtn{position:relative}
-#bellBtn.has{border-color:var(--warn)}
+/* «Ждёт вас»: the button is the count itself - it grows with the digits and caps at 99+, never spills out */
+#bellBtn{min-width:30px;padding:3px 7px;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600;color:var(--muted);text-align:center}
+#bellBtn.has{background:var(--warn);border-color:var(--warn);color:#1c2230}
 .badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--warn);color:#1c2230;font-size:11px;font-weight:700;line-height:18px;text-align:center}
-#bellBtn .badge{position:absolute;top:-8px;right:-9px}
 nav button .badge{margin-left:5px}
 #bellMenu{position:absolute;top:calc(100% + 6px);left:0;z-index:50;width:min(420px,calc(100vw - 32px));max-height:70vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:8px}
 #bellMenu h4{margin:10px 6px 4px;font-size:12px;color:var(--muted);font-weight:600}
@@ -476,7 +476,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <button class="btn small" id="newProjBtn" title="Новый проект" aria-label="Новый проект">+</button>
     <a href="#/projects" id="allProj">Все проекты</a>
     <div id="bellBox" data-needs-project>
-      <button class="btn small" id="bellBtn" title="Ждёт вас: решения в проекте" aria-label="Ждёт вас" aria-haspopup="true" aria-expanded="false">🔔<span class="badge hidden" id="bellCount" aria-live="polite"></span></button>
+      <button class="btn small" id="bellBtn" title="Ждёт вас: решения в проекте" aria-label="Ждёт вас" aria-haspopup="true" aria-expanded="false"><span id="bellCount" aria-live="polite">0</span></button>
       <div id="bellMenu" class="hidden" role="menu" aria-label="Ждёт вас"></div>
     </div>
   </div>
@@ -2159,7 +2159,7 @@ async function pollInbox(others = true) {
 }
 function renderBell() {
   const n = INBOX?.total || 0, count = $('#bellCount');
-  count.textContent = n > 99 ? '99+' : n; count.classList.toggle('hidden', !n);
+  count.textContent = n > 99 ? '99+' : n;
   $('#bellBtn').classList.toggle('has', !!n);
   if (BELL_PULSE && INBOX) {       // just entered the project: once, when the inbox of this project is known
     BELL_PULSE = false;
