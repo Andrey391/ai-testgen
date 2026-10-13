@@ -11,7 +11,7 @@ context (API requests, mocks, mail, dialogs, modules themselves) never go into a
   run into a module and puts a use_module step in its place in the source test: the steps live in one
   place, a fix (or a heal) of the module serves every test.
 - candidates(pid): chains of actions repeated in several stable tests (values may differ: they become
-  parameters), offered to a person in «Тесты → Повторяющиеся шаги», grouped by section; accept() makes
+  parameters), offered to a person in «Проект → Повторяющиеся шаги», grouped by section; accept() makes
   the module and replaces every occurrence, dismiss() stops offering the chain
   (data/projects/<id>/blocks.json).
 

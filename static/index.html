@@ -736,7 +736,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Последние запуски</th><th>Качество проверок</th><th id="tmsHead">Система тестов</th><th></th></tr></thead>
     <tbody id="testsBody"></tbody></table>
   </div>
-  <div class="card" id="blocksBox"></div>
   <div class="card hidden" id="suiteBox"></div>
   <div class="card runlog hidden" id="runBox"></div>
   <div class="card hidden" id="testBox"></div>
@@ -922,6 +921,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <button data-sub="data" data-sec="data">Данные стенда <span class="nb" data-kn-count="data"></span></button>
         <button data-sub="data" data-sec="memory">Память <span class="nb" data-kn-count="memory"></span></button>
       </div>
+      <button data-sub="blocks">Повторяющиеся шаги</button>
       <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
     </div>
@@ -1308,6 +1308,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
 
       <!-- Process -->
+      <div data-subpanel="blocks" class="hidden">
+        <div class="card" id="blocksBox"></div>
+      </div>
       <div data-subpanel="process" class="hidden">
         <div class="card">
           <h3>Процесс генерации тест-кейсов</h3>
@@ -2316,7 +2319,7 @@ async function loadTests() {
           <button onclick="delTest('${t.id}')" style="color:var(--bad)">Удалить</button>
         </div></details></td></tr>`;
   }).join('') || `<tr><td colspan="6" class="muted">${tag ? 'Нет тестов с этим тегом.' : 'В проекте пока нет тестов. Создайте тест в Studio или запустите конвейер.'}</td></tr>`;
-  loadSuites(); loadCoverage(); loadBlocks();
+  loadSuites(); loadCoverage();
   if (OPEN_TEST && !$('#testBox').classList.contains('hidden')) openTest(OPEN_TEST, true);
 }
 $('#tagFilter').onchange = loadTests;
@@ -2351,7 +2354,7 @@ async function acceptBlock(key, btn) {
     const r = await api('POST', `/api/projects/${PID}/blocks/${key}/accept`, {name: $('#blk-' + key).value, replace: $('#blkr-' + key).checked});
     alert(`Модуль «${r.module.name}» создан${r.replaced ? `, заменено вхождений: ${r.replaced}` : ''}`);
   } catch (e) { alert(e.message); }
-  loadTests();
+  loadBlocks();
 }
 async function dismissBlock(key) {
   try { await api('POST', `/api/projects/${PID}/blocks/${key}/dismiss`); } catch (e) { alert(e.message); }
@@ -4321,6 +4324,7 @@ function showSub(sub, sec) {
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
   if (sub === 'api') loadApi();
+  if (sub === 'blocks') loadBlocks();
   if (sub === 'data') { store.set('tg_kn_sec', sec); showKnSec(sec); loadKnowledge(); }
 }
 
