@@ -307,7 +307,8 @@ def test_stopping_interrupts_the_design_at_once_and_keeps_what_is_ready(monkeypa
     p = _project("Стоп", requirements={"learn_model": False})
     started = []
 
-    async def generate(requirements, url="", project=None, log=None, progress=None, cfg=None, record=True):
+    async def generate(requirements, url="", project=None, log=None, progress=None, cfg=None, record=True,
+                       resume=None):
         progress({"type": "plan", "feature": "Заказы", "assumptions": [], "scenarios": [_planned(1), _planned(2)]})
         progress({"type": "batch", "start": 0, "scenarios": [_full(1)]})
         started.append(True)

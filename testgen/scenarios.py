@@ -248,14 +248,41 @@ async def _plan(cfg: dict, system: str, context: str, pid: str, say, extra: str 
     return plan
 
 
+def _resumed_plan(resume: dict) -> ScenarioPlan | None:
+    """The plan of a design that was cut off (analyses.resume_plan); None - it does not fit any more."""
+    keys = ("title", "type", "priority", "role", "covers")
+    try:
+        planned = [PlannedScenario.model_validate({k: s.get(k) or "" for k in keys} | {"layer": s.get("layer") or "ui"})
+                   for s in resume["scenarios"]]
+        return ScenarioPlan(feature=resume["feature"], assumptions=resume["assumptions"],
+                            groups=resume.get("groups") or [], scenarios=planned)
+    except (KeyError, ValidationError):
+        return None
+
+
+def _resumed_done(resume: dict) -> dict[int, DesignedScenario]:
+    """The scenarios a design that was cut off detailed, by their place in the plan; one that does not fit any
+    more (a person edited it into something else) is detailed again."""
+    out = {}
+    for i, s in (resume.get("done") or {}).items():
+        try:
+            out[int(i)] = DesignedScenario.model_validate(s)
+        except ValidationError:
+            continue
+    return out
+
+
 async def generate(requirements: str, url: str = "", project: dict | None = None,
-                   log=None, progress=None, cfg: dict | None = None, record: bool = True) -> ScenarioSet:
+                   log=None, progress=None, cfg: dict | None = None, record: bool = True,
+                   resume: dict | None = None) -> ScenarioSet:
     """`project` (optional) supplies the "scenarios" stage settings: skills, scenario
     types to cover, model and effort; `cfg` - those settings with the choice of one generation
     (settings()). `log(text)` (optional) reports progress;
     `progress(event)` (optional) gets the intermediate results for a live view:
-    {"type": "log", "text"}, {"type": "plan", "feature", "assumptions", "scenarios"} (the planned
-    titles), {"type": "batch", "start", "scenarios"} (detailed scenarios from position `start`)."""
+    {"type": "log", "text"}, {"type": "plan", "feature", "assumptions", "groups", "scenarios"} (the planned
+    titles), {"type": "batch", "start", "scenarios"} (detailed scenarios from position `start`).
+    `resume` - the plan of a design of the same requirements that was cut off (analyses.resume_plan): the plan
+    is not asked again and only the scenarios not detailed by then are."""
     def say(text: str) -> None:
         if log:
             log(text)
@@ -274,17 +301,26 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
     large = bool(model) and not knowledge.fits(pid)
     context = _context(requirements, url, cfg, model, reuse.listing(earlier), api)
 
-    if progress:
-        say(f"Анализ требований ({len(requirements)} символов) и план покрытия…")
-    plan = await _plan(cfg, system, context, pid, say, PLAN_GROUPS if large else "")
-    matches = [reuse.resolve(earlier, s.existing, s.relation) for s in plan.scenarios]
-    if any(matches):
-        say(f"Похожи на созданные ранее: {sum(1 for m in matches if m)} — решите, переиспользовать, доработать "
-            "или создать новые")
-    if progress:
-        progress({"type": "plan", "feature": plan.feature, "assumptions": plan.assumptions,
-                  "scenarios": [s.model_dump() | {"match": m} for s, m in zip(plan.scenarios, matches)]})
-    say(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
+    plan = _resumed_plan(resume) if resume else None
+    done: dict[int, DesignedScenario] = {}
+    if plan:
+        # A design cut off goes on: the plan is not asked again, the scenarios detailed by then are kept.
+        matches = [s.get("match") for s in resume["scenarios"]]
+        done = _resumed_done(resume)
+        say(f"Проектирование продолжено с места остановки: сценариев в плане {len(plan.scenarios)}, "
+            f"готово {len(done)}, детализация остальных…")
+    else:
+        if progress:
+            say(f"Анализ требований ({len(requirements)} символов) и план покрытия…")
+        plan = await _plan(cfg, system, context, pid, say, PLAN_GROUPS if large else "")
+        matches = [reuse.resolve(earlier, s.existing, s.relation) for s in plan.scenarios]
+        if any(matches):
+            say(f"Похожи на созданные ранее: {sum(1 for m in matches if m)} — решите, переиспользовать, доработать "
+                "или создать новые")
+        if progress:
+            progress({"type": "plan", "feature": plan.feature, "assumptions": plan.assumptions, "groups": plan.groups,
+                      "scenarios": [s.model_dump() | {"match": m} for s, m in zip(plan.scenarios, matches)]})
+        say(f"Сценариев в плане: {len(plan.scenarios)}, детализация…")
     if not plan.scenarios:
         return ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[])
 
@@ -324,8 +360,20 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
             say(f"Не удалось детализировать сценариев: {len(part) - len(out)}")
         return out
 
-    batches = await asyncio.gather(*(detail(i, BATCH) for i in range(0, len(plan.scenarios), BATCH)))
-    res = ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[s for b in batches for s in b])
+    # Batches of BATCH scenarios in a row that are not detailed yet (all of them unless the design goes on).
+    runs: list[list[int]] = []
+    for i in range(len(plan.scenarios)):
+        if i in done:
+            continue
+        if runs and runs[-1][0] + runs[-1][1] == i and runs[-1][1] < BATCH:
+            runs[-1][1] += 1
+        else:
+            runs.append([i, 1])
+    batches = await asyncio.gather(*(detail(start, count) for start, count in runs))
+    got = dict(done)
+    for (start, _), batch in zip(runs, batches):
+        got.update({start + k: s for k, s in enumerate(batch)})
+    res = ScenarioSet(feature=plan.feature, assumptions=plan.assumptions, scenarios=[got[i] for i in sorted(got)])
     if record and project and project["pipeline"]["requirements"].get("learn_model"):
         doc = knowledge.need(pid, [sc.model_dump() for sc in res.scenarios])
         say(f"Тестовые данные сценариев записаны в модель приложения: записей {len(doc['data'])}, "

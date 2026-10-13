@@ -454,6 +454,13 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   (требования, сценарии с `id`, `test_ids` каждого). Генерация (`/api/scenarios`) заполняет его по событиям
   `progress`; сценарии правят `/api/analyses/{aid}/scenarios`; тест привязывается к сценарию при сохранении
   сессии Studio (`analysis_id`/`scenario_id`) и в конвейере (`/jobs` с `analysis_id` — сразу этап генерации).
+  **Прерванный анализ:** работа над ним (ревью, проектирование) бьётся — `analyses.working` (`beat` каждые `BEAT`
+  секунд); `running` без пульса `BEAT_STALE` секунд — прерван сразу (`_stale`, сообщение по `work`), на любом
+  экземпляре. Готовое не теряется: законченные проверки ревью — `review_parts` (`review.review` `done`/`keep`, ключ
+  `review.parts_key`: текст, стандарт, решения авторов, настройки этапа; «Проверить заново» спрашивает только
+  оставшуюся), план проектирования — `plan` (до успешного `finish`); продолжение запуска конвейера (`Job.resuming`)
+  берёт требования из анализа (`spec_chars` — где кончается ТЗ), не повторяет готовую проверку (`Job.review_parts`)
+  и детализирует только недоделанные сценарии плана (`resume_plan`, `scenarios.generate(resume=...)`).
 - `testgen/exporters.py` — экспорт: pytest-playwright (до `MAX_ALTERNATIVES` локаторов шага через
   `.or_()`, фикстуры `app_url`/`credentials`/`testdata`/…), Gherkin, проект целиком (`bundle()`:
   `conftest.py`, `tests/`, `features/`) и API-тесты pytest + httpx по записанному трафику
