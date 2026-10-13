@@ -141,6 +141,12 @@ tr.click:hover td{background:var(--bg)}
 .genbox .goal{color:var(--muted);margin-top:4px}
 /* studio, left column: the name in one line, the controls under it; goal and readiness fold away */
 .ws-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:10px}
+.sess-chip{font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;max-width:320px;padding:4px 10px;border-radius:14px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.sess-chip .dot{margin:0}
+.sess-chip span.n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-chip.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.sess-chip .unsaved{color:var(--warn)}
 .ws-ctl{margin-top:6px}
 details.fold{margin-top:6px;padding:4px 10px;font-size:13px}
 details.fold .goal{margin:4px 0 2px}
@@ -591,6 +597,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
 <!-- ============ STUDIO ============ -->
 <section id="tab-studio" class="hidden">
+  <div id="sessBar" class="sess-bar hidden" aria-label="Открытые сессии Studio"></div>
   <div id="startForm" class="card start">
     <h2>Новый тест-кейс</h2>
     <div class="muted">Опишите сценарий обычным языком — AI-агент пройдёт его в браузере и запишет шаги. Тест сохранится в проект <b class="projName"></b>.</div>
@@ -638,6 +645,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div id="workspace" class="studio hidden">
     <div class="card col">
       <b id="wsTitle" class="ws-title"></b>
+      <div id="wsSource" class="hint hidden"></div>
       <div class="row ws-ctl">
         <label class="inline"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
         <button class="btn small danger hidden" id="stopBtn" title="Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
@@ -745,6 +753,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
       <div class="steps" id="steps"></div>
       <div id="savedBar" class="row hidden" style="margin-top:8px">
+        <a class="btn primary hidden" id="backBtn"></a>
         <span class="muted grow" id="savedText">Сохранено</span>
         <button class="btn" id="readyBtn" title="Вы проверили тест: он войдёт в регрессионный набор">В набор</button>
         <button class="btn" id="runSavedBtn">Запустить</button>
@@ -1651,7 +1660,8 @@ const api = async (method, url, body, signal) => {
   if (r.status === 401 && !url.startsWith('/api/auth/')) { showLogin(); throw new Error('Требуется вход'); }
   if (!r.ok) {
     let m = r.statusText; try { m = (await r.json()).detail || m } catch {}
-    const e = new Error(m); e.status = r.status; e.preflight = r.headers.get('X-Preflight') || ''; throw e;
+    const e = new Error(m); e.status = r.status; e.preflight = r.headers.get('X-Preflight') || '';
+    e.limit = +(r.headers.get('X-Session-Limit') || 0); throw e;
   }
   return r.status === 204 ? null : r.json();
 };
@@ -1860,6 +1870,7 @@ async function loggedIn(me) {
   $('#whoami').classList.toggle('hidden', !me.auth_enabled);
   $('#logoutBtn').classList.toggle('hidden', !me.auth_enabled);
   try { PRESETS = await api('GET', '/api/mcp/presets'); } catch {}
+  await loadMine();
   $$('.adminOnly').forEach(x => x.classList.toggle('hidden', !me.is_admin));
   $('#connPreset').innerHTML = PRESETS.filter(p => !p.admin_only || ME.is_admin)
     .map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
@@ -1926,6 +1937,7 @@ async function switchProject(pid) {
   if (tab === 'proj') loadSettings();
   if (tab === 'studio') loadInterrupted();
   setStudioTask(null);
+  studioForProject();
   pollInbox();
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
@@ -1979,6 +1991,7 @@ const projPath = (...parts) => `/p/${PID}/` + parts.filter(Boolean).join('/');
 function settingsPath(sub, sec) { return projPath('settings', sub, sub === 'data' ? sec : ''); }
 function tabPath(t) {
   if (t === 'home' || !PID) return '/projects';
+  if (t === 'studio' && SID) return projPath('studio', SID);
   if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general', store.get('tg_kn_sec') || 'overview');
   return projPath(t);
 }
@@ -2065,7 +2078,7 @@ async function route() {
 window.addEventListener('hashchange', () => { if (ME && location.hash.length > 1) route(); });
 // Studio steps not saved as a test: leaving the page asks first (the session itself lives on the server).
 window.addEventListener('beforeunload', e => {
-  if (SID && STATE?.steps?.length && !TEST_ID && !STATE.test_id && STATE.status !== 'closed') e.preventDefault();
+  if (SID && STATE?.dirty && STATE.status !== 'closed') e.preventDefault();
 });
 
 // ---- «Ждёт вас»: what in the project waits for a person's decision (GET …/inbox) - the bell in the header.
@@ -2168,33 +2181,115 @@ $('#startBtn').onclick = async () => {
     task_id: STUDIO_TASK?.id || '', fresh_login: $('#fFresh').checked,
     analysis_id: STUDIO_SCEN?.analysis_id || '', scenario_id: STUDIO_SCEN?.scenario_id || ''};
   try {
+    const post = extra => startSession(() => api('POST', '/api/sessions', {...body, ...extra}));
     let r;
-    try { r = await api('POST', '/api/sessions', body); }
+    try { r = await post({}); }
     catch (e) {      // only the lifecycle check stopped it: the person decides
       if (e.preflight !== 'lifecycle' || !confirm(e.message + '\n\n' + LIFECYCLE_ANYWAY)) throw e;
-      r = await api('POST', '/api/sessions', {...body, accept_lifecycle: true});
+      r = await post({accept_lifecycle: true});
     }
+    if (!r) return;
     setStudioTask(null); setStudioScen(null);
     openSession(r.id);
   } catch (e) { if (e.preflight !== 'lifecycle') alert(e.message) } finally { $('#startBtn').disabled = false; }
 };
 
-function openSession(sid) {
-  setRoute(projPath('studio', sid));
+// `quiet` - the project was switched: its session is shown in Studio without going there.
+function openSession(sid, quiet) {
+  if (!quiet) setRoute(projPath('studio', sid));
   SID = sid; TEST_ID = null; STATE = null;
+  CUR_SESS[PID] = sid; store.set('tg_sessions', JSON.stringify(CUR_SESS));
   $('#startForm').classList.add('hidden'); $('#resumeBox').classList.add('hidden'); $('#workspace').classList.remove('hidden');
-  $('#savedBar').classList.add('hidden');
+  $('#savedBar').classList.add('hidden'); $('#backBtn').classList.add('hidden'); $('#wsSource').classList.add('hidden');
   $('#chat').innerHTML = $('#steps').innerHTML = ''; $('#shot').removeAttribute('src'); $('#shotSize').classList.add('hidden');
-  showTab('studio');
+  if (!quiet) showTab('studio');
   poll();
+  loadMine();
 }
 
+// only the session shown in Studio is polled; the others are in «Открытые сессии» (loadMine)
 async function poll() {
   clearTimeout(pollTimer);
   if (!SID) return;
-  try { STATE = await api('GET', `/api/sessions/${SID}`); render(); if (STATE.engine !== 'api') refreshShot(); }
-  catch (e) { if (/not found/i.test(e.message)) { sessionLost(SID); return; } }
+  const sid = SID;
+  try {
+    const s = await api('GET', `/api/sessions/${sid}`);
+    if (sid !== SID) return;      // another session was opened meanwhile
+    STATE = s; render(); if (STATE.engine !== 'api') refreshShot();
+    const m = MINE.find(x => x.id === sid);
+    if (m && (m.status !== s.status || m.dirty !== s.dirty || m.name !== s.name)) { Object.assign(m, {status: s.status, dirty: s.dirty, name: s.name}); renderMine(); }
+  }
+  catch (e) { if (/not found/i.test(e.message)) { if (sid === SID) sessionLost(sid); return; } }
   pollTimer = setTimeout(poll, 900);
+}
+
+// ---- open sessions of the person: several at once, in different projects (TESTGEN_SESSIONS_PER_USER).
+// Each project shows its own session in Studio (CUR_SESS); «Открытые сессии» over Studio switches between them.
+let MINE = [], MINE_LIMIT = 3, mineTimer = null;
+const CUR_SESS = (() => { try { return JSON.parse(store.get('tg_sessions') || '{}') || {}; } catch { return {}; } })();
+async function loadMine() {
+  try { const r = await api('GET', '/api/sessions?mine=1'); MINE = r.items; MINE_LIMIT = r.limit; } catch { return; }
+  renderMine();
+  clearTimeout(mineTimer);
+  mineTimer = setTimeout(() => { if (!document.hidden) loadMine(); else mineTimer = null; }, 15000);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ME && !mineTimer) loadMine(); });
+const BUSY = ['starting', 'thinking', 'executing'];
+function renderMine() {
+  const bar = $('#sessBar');
+  bar.classList.toggle('hidden', !MINE.length);
+  bar.innerHTML = !MINE.length ? '' : `<span class="muted">Открытые сессии (${MINE.length} из ${MINE_LIMIT}):</span>` +
+    MINE.map(x => `<button class="sess-chip${x.id === SID ? ' on' : ''}" onclick="goSession('${x.id}')" ${x.id === SID ? 'aria-current="true"' : ''}
+        title="${esc(STATUS[x.status] || x.status)} · шагов: ${x.steps}${x.dirty ? ' · есть несохранённые шаги' : ''}${x.project_id !== PID ? ' · проект «' + esc(x.project) + '»' : ''}">
+        <span class="dot${BUSY.includes(x.status) ? ' run' : ''}"></span><span class="n">${esc(x.name)}</span>
+        ${x.project_id !== PID ? `<span class="muted">· ${esc(x.project)}</span>` : ''}
+        ${x.dirty ? '<span class="unsaved" aria-label="не сохранено">●</span>' : ''}</button>`).join('') +
+    (SID && MINE.length < MINE_LIMIT ? '<button class="btn small" onclick="leaveSession(true)" title="Открыть форму нового теста: эта сессия останется открытой">+ Ещё сессия</button>' : '');
+}
+// A session of another project: the project is switched, its session shown.
+async function goSession(sid) {
+  const x = MINE.find(m => m.id === sid);
+  if (x && x.project_id !== PID) { CUR_SESS[x.project_id] = sid; await switchProject(x.project_id); }
+  openSession(sid);
+}
+// The project's session (the one it showed last, else its newest) or the form of a new test.
+function studioForProject() {
+  const own = MINE.filter(x => x.project_id === PID);
+  const sid = own.some(x => x.id === CUR_SESS[PID]) ? CUR_SESS[PID] : own.at(-1)?.id;
+  if (sid) { if (sid !== SID) openSession(sid, true); }
+  else if (SID) leaveSession();
+  renderMine();
+}
+// Studio shows the form of a new test; the session stays open on the server (in «Открытые сессии»).
+function leaveSession(newForm) {
+  SID = null; STATE = null; TEST_ID = null; clearTimeout(pollTimer);
+  if (newForm) { delete CUR_SESS[PID]; store.set('tg_sessions', JSON.stringify(CUR_SESS)); }
+  if (curTab() === 'studio') setRoute(projPath('studio'), !newForm);
+  $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
+  renderMine();
+  loadInterrupted();
+}
+// Opens a session next to the open ones; at the limit the person chooses which one to close first.
+async function startSession(make) {
+  for (;;) {
+    try { return await make(); }
+    catch (e) {
+      if (e.status !== 409 || !e.limit) throw e;
+      await loadMine();
+      const sid = await ask({title: 'Открыто слишком много сессий', text: e.message,
+        actions: MINE.map(x => ({label: `Закрыть «${x.name}»` + (x.project_id !== PID ? ` (${x.project})` : '') +
+          (x.dirty ? ' — шаги не сохранены' : ''), value: x.id, kind: x.dirty ? 'danger' : ''}))});
+      if (!sid) return null;
+      await dropSession(sid);
+    }
+  }
+}
+async function dropSession(sid) {
+  await api('DELETE', `/api/sessions/${sid}`);
+  MINE = MINE.filter(x => x.id !== sid);
+  for (const k of Object.keys(CUR_SESS)) if (CUR_SESS[k] === sid) delete CUR_SESS[k];
+  store.set('tg_sessions', JSON.stringify(CUR_SESS));
+  if (sid === SID) closeWorkspace(); else renderMine();
 }
 
 // The studio restarted under an open session: its checkpoint can be continued or saved.
@@ -2218,7 +2313,7 @@ async function loadInterrupted() {
       <button class="btn small danger" onclick="discardInterrupted('${c.id}')">Удалить</button></td></tr>`).join('');
 }
 async function restoreSession(sid) {
-  try { await api('POST', `/api/projects/${PID}/sessions/${sid}/restore`, {}); openSession(sid); }
+  try { if (await startSession(() => api('POST', `/api/projects/${PID}/sessions/${sid}/restore`, {}))) openSession(sid); }
   catch (e) { alert(e.message); }
 }
 async function saveInterrupted(sid, btn) {
@@ -2265,6 +2360,7 @@ window.addEventListener('resize', shotSize);
 function render() {
   const s = STATE;
   $('#wsTitle').textContent = s.name; $('#wsTitle').title = s.name;
+  renderSource(s);
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
   $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
@@ -2303,6 +2399,20 @@ function render() {
   $('#resumeBtn').classList.toggle('hidden', !(['idle', 'error'].includes(s.status)) || s.autopilot);
 
   if (!editing) renderSteps(s.steps);
+}
+
+// Where the session came from: «Из задачи …» over it, «Вернуться к …» first after saving.
+const SOURCE_TEXT = {task: ['Из задачи', 'Вернуться к задаче'], job: ['Из запуска конвейера', 'Вернуться к запуску'],
+                     scenario: ['По сценарию', 'Вернуться к сценарию']};
+function renderSource(s) {
+  const src = s.source, box = $('#wsSource'), back = $('#backBtn');
+  box.classList.toggle('hidden', !src); back.classList.toggle('hidden', !src || !TEST_ID);
+  if (!src) return;
+  const [from, to] = SOURCE_TEXT[src.kind] || ['Из', 'Вернуться'];
+  const what = src.kind === 'job' ? `от ${fmtTime(src.created)}` : `«${src.title}»`;
+  const html = `${from} <a href="#${esc(src.route)}">${esc(what)}</a>`;
+  if (box.innerHTML !== html) box.innerHTML = html;
+  back.textContent = to; back.href = '#' + src.route;
 }
 
 // What the agent is doing now and when the test counts as finished: the scenario is walked through,
@@ -2576,6 +2686,7 @@ $('#saveBtn').onclick = async () => {
   try {
     const t = await api('POST', `/api/sessions/${SID}/save`, {});
     showSaved(t.id);
+    if (STATE) renderSource(STATE);
     $('#savedText').textContent = t.status === 'ready' ? 'Сохранено, в наборе' : 'Сохранено как черновик';
     $('#readyBtn').classList.toggle('hidden', t.status === 'ready');
     if (t.warnings?.length) toast('Тест сохранён.\n\n' + t.warnings.join('\n'), 'warn');
@@ -2588,16 +2699,28 @@ $('#readyBtn').onclick = async () => {
   try { await api('PATCH', `/api/tests/${TEST_ID}/meta`, {status: 'ready'}); $('#savedText').textContent = 'Сохранено, в наборе'; $('#readyBtn').classList.add('hidden'); }
   catch (e) { alert(e.message); }
 };
+// The session is gone (closed, lost): Studio shows the form; «Назад» does not lead to it.
 function closeWorkspace() {
-  SID = null; clearTimeout(pollTimer);
-  if (curTab() === 'studio') setRoute(projPath('studio'), true);     // the session is gone: «Назад» does not lead to it
-  $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
-  loadInterrupted();
+  const sid = SID;
+  MINE = MINE.filter(x => x.id !== sid);
+  if (CUR_SESS[PID] === sid) { delete CUR_SESS[PID]; store.set('tg_sessions', JSON.stringify(CUR_SESS)); }
+  leaveSession();
+  loadMine();
 }
+// «Новый тест»: the session closes at once when its steps are saved; otherwise the person decides.
 $('#newBtn').onclick = async () => {
-  if (!confirm('Закрыть текущую сессию? Несохранённые шаги пропадут.')) return;
-  await api('DELETE', `/api/sessions/${SID}`);
-  closeWorkspace();
+  const btn = $('#newBtn');
+  notice(btn, '');
+  if (STATE?.dirty) {
+    const v = await ask({title: 'Начать новый тест?', text: 'В сессии есть шаги, которые не сохранены в тест.', subject: STATE.name,
+      actions: [{label: 'Сохранить и начать новый', value: 'save', kind: 'primary'}, {label: 'Закрыть без сохранения', value: 'drop', kind: 'danger'}]});
+    if (!v) return;
+    if (v === 'save') {
+      try { const t = await api('POST', `/api/sessions/${SID}/save`, {}); toast(`Тест «${t.name || 'без названия'}» сохранён`); }
+      catch (e) { notice(btn, e.message); return; }
+    }
+  }
+  try { await dropSession(SID); } catch (e) { notice(btn, e.message); }
 };
 
 // ---- saved tests
@@ -2806,11 +2929,9 @@ async function verifyTest(id, btn) {
   setTimeout(tick, 2000);
 }
 async function strengthen(id) {
-  if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
   try {
-    if (SID) await api('DELETE', `/api/sessions/${SID}`);
-    const r = await api('POST', `/api/tests/${id}/strengthen`);
-    openSession(r.id);
+    const r = await startSession(() => api('POST', `/api/tests/${id}/strengthen`));
+    if (r) openSession(r.id);
   } catch (e) { alert(e.message); }
 }
 
@@ -2943,13 +3064,12 @@ async function saveRunStep(sid, rerun, btn) {
   } catch (e) { box.querySelector('[data-fmsg]').textContent = e.message; btn.disabled = false; }
 }
 async function fixWithAgent(rid, stepId, btn) {
-  if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
   btn.disabled = true;
   try {
-    if (SID) await api('DELETE', `/api/sessions/${SID}`);
-    const {id} = await api('POST', `/api/runs/${rid}/fix`, {step_id: stepId, headless: true});
-    openSession(id);
-  } catch (e) { alert(e.message); btn.disabled = false; }
+    const r = await startSession(() => api('POST', `/api/runs/${rid}/fix`, {step_id: stepId, headless: true}));
+    if (r) openSession(r.id);
+  } catch (e) { alert(e.message); }
+  btn.disabled = false;
 }
 function renderRun(r, t) {
   RUN_VIEW = {r, t};
@@ -3035,7 +3155,8 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
       <button class="btn small" onclick="closeDetail('#testBox')" aria-label="Закрыть">✕</button></div>
     <div class="muted" style="font-size:12px">${esc(t.url)} · шагов: ${t.steps.length}${t.authoring_usage?.requests ? ' · генерация' + usageText(t.authoring_usage) : ''}</div>
     ${t.scenario ? `<div class="hint">${esc(t.scenario)}</div>` : ''}
-    ${t.quarantine?.on ? `<div class="hint"><span class="badge warn">карантин</span> ${esc(t.quarantine.reason || '')} ${t.quarantine.by ? '· ' + esc(t.quarantine.by) : ''} ${fmtTime(t.quarantine.at)}</div>` : ''}`;
+    ${t.quarantine?.on ? `<div class="hint"><span class="badge warn">карантин</span> ${esc(t.quarantine.reason || '')} ${t.quarantine.by ? '· ' + esc(t.quarantine.by) : ''} ${fmtTime(t.quarantine.at)}</div>` : ''}
+    <div class="hint" id="testLinks"></div>`;
 
   html += `<div class="sub" id="stepsBox">${stepsViewHtml(t)}</div>`;
 
@@ -3112,6 +3233,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   if (STEP_EDIT?.tid === t.id) renderStepEditor(); else STEP_EDIT = null;
   if (!quiet) box.scrollIntoView({behavior: 'smooth', block: 'start'});
   loadVersions(t.id);
+  loadTestLinks(t.id);
 }
 // the steps of a saved test: viewed, edited in place (a new version) or re-recorded in the Studio
 const STEP_ACTIONS = {click: 'клик', double_click: 'двойной клик', fill: 'ввод текста', select_option: 'выбор в списке',
@@ -3191,13 +3313,24 @@ async function saveSteps(btn) {
 }
 // watch - «Прогон в Studio»: the steps run one by one, Live View follows them; then the test can be edited
 async function editInStudio(tid, btn, watch = false) {
-  if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
   btn.disabled = true;
   try {
-    if (SID) await api('DELETE', `/api/sessions/${SID}`);
-    const {id} = await api('POST', `/api/tests/${tid}/edit`, {headless: true, watch});
-    openSession(id);
-  } catch (e) { alert(e.message); btn.disabled = false; }
+    const r = await startSession(() => api('POST', `/api/tests/${tid}/edit`, {headless: true, watch}));
+    if (r) openSession(r.id);
+  } catch (e) { alert(e.message); }
+  btn.disabled = false;
+}
+// What the test is linked to: its tasks, the scenarios it checks, the pipeline runs that made it.
+async function loadTestLinks(tid) {
+  const l = await api('GET', `/api/tests/${tid}/links`).catch(() => null);
+  const box = $('#testLinks');
+  if (!l || !box || OPEN_TEST !== tid) return;
+  const a = (route, text, title) => `<a href="#${projPath(...route)}"${title ? ` title="${esc(title)}"` : ''}>${esc(text)}</a>`;
+  const parts = [
+    ...l.tasks.map(x => 'задача ' + a(['tasks', x.id], `«${x.title}»`, TASK_STATUS[x.status])),
+    ...l.scenarios.map(x => 'сценарий ' + a(['req', x.analysis_id], `«${x.title}»`, x.analysis)),
+    ...l.jobs.map(x => 'запуск конвейера ' + a(['pipe', x.id], `от ${fmtTime(x.created)}`))];
+  box.innerHTML = parts.length ? 'Связано: ' + parts.join(' · ') : '';
 }
 async function loadVersions(tid) {
   const list = await api('GET', `/api/tests/${tid}/versions`).catch(() => []);
@@ -3382,7 +3515,8 @@ async function loadTasks() {
       <td><a href="#" onclick="openTask('${t.id}');return false"><b>${esc(t.title)}</b></a>
         ${desc ? `<div class="muted" style="font-size:12px;white-space:pre-wrap">${esc(desc)}</div>` : ''}
         ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}</div>` : ''}</td>
-      <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select></td>
+      <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select>
+        ${t.suggest ? `<div><button class="linkbtn" onclick="setTaskStatus('${t.id}', '${t.suggest}')" title="${t.suggest === 'done' ? 'Все тесты задачи проверены и в наборе' : 'Последние прогоны всех тестов задачи прошли'}">→ ${esc(TASK_STATUS[t.suggest])}?</button></div>` : ''}</td>
       <td><span class="badge ${cls}">${esc(pr)}</span></td>
       <td>${esc(t.assignee) || '<span class="muted">—</span>'}</td>
       <td class="${t.overdue ? 'overdue' : ''}" title="${t.overdue ? 'Срок прошёл' : ''}">${t.due ? new Date(t.due + 'T00:00').toLocaleDateString('ru-RU') : '—'}</td>
@@ -3456,11 +3590,11 @@ function setStudioTask(t) {
   $('#fTask').innerHTML = t ? `Тест будет привязан к задаче «${esc(t.title)}» <button class="linkbtn" onclick="setStudioTask(null)">отвязать</button>` : '';
 }
 async function taskToStudio(id) {
-  if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
   let t;
   try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { alert(e.message); return; }
   $('#fName').value = t.title;
   $('#fScenario').value = t.description || t.title;
+  if (SID) leaveSession(true);      // the open session stays in «Открытые сессии»
   showTab('studio');
   setStudioTask(t);
   $('#fScenario').focus();
@@ -4271,7 +4405,7 @@ function toStudio(sc, url = '') {
     showTab('studio');
     return editInStudio(m.id, {disabled: false});
   }
-  if (SID) return alert('Сначала закройте текущую сессию в Studio (кнопка «Новый тест»).');
+  if (SID) leaveSession(true);      // the open session stays in «Открытые сессии»
   if (url) { $('#fUrl').value = url; delete $('#fUrl').dataset.auto; }
   $('#fName').value = sc.title;
   const data = scDataText(sc, true).replace(/\n/g, '; ');

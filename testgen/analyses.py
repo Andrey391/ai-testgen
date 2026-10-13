@@ -575,6 +575,22 @@ def link_test(pid: str, aid: str, scid: str, test_id: str, _seen: frozenset = fr
         link_test(pid, e_aid, e_scid, test_id, _seen | {(aid, scid)})
 
 
+def with_test(pid: str, test_id: str) -> list[dict]:
+    """The scenarios the test checks: {analysis_id, analysis, scenario_id, title}, newest analysis first."""
+    out = []
+    for _, text, _ in fs.documents(_dir(pid)):
+        if test_id not in text:
+            continue
+        try:
+            a = json.loads(text)
+        except ValueError:
+            continue
+        out += [{"analysis_id": a["id"], "analysis": a.get("feature") or a.get("title") or "", "created": a["created"],
+                 "scenario_id": s["id"], "title": s.get("title") or ""}
+                for s in a.get("scenarios") or [] if test_id in (s.get("test_ids") or [])]
+    return sorted(out, key=lambda x: x["created"], reverse=True)
+
+
 def unlink_test(pid: str, test_id: str) -> None:
     for f, text, _ in fs.documents(_dir(pid)):
         if test_id in text:

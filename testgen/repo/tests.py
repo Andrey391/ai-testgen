@@ -97,6 +97,15 @@ class Sql:
                                                             .where(cls.t.c.project_id == pid))}
 
     @classmethod
+    def brief(cls, pid: str) -> dict[str, dict]:
+        """{test id: {name, status, last_status}} of a project, from the columns (no steps)."""
+        t = cls.t
+        with db.engine().connect() as c:
+            return {r.id: {"name": r.name or r.id, "status": r.status, "last_status": r.last_status}
+                    for r in c.execute(select(t.c.id, t.c.name, t.c.status, t.c.last_status)
+                                       .where(t.c.project_id == pid))}
+
+    @classmethod
     def data_refs(cls, pid: str) -> list[dict]:
         """Tests of the project that use or create records of the application model: {id, name, data_refs}."""
         t = cls.t

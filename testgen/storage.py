@@ -233,6 +233,11 @@ def names(project_id: str) -> dict[str, str]:
     return repo.Sql.names(project_id)
 
 
+def brief(project_id: str) -> dict[str, dict]:
+    """{test id: {name, status, last_status}} of a project (without reading the steps)."""
+    return repo.Sql.brief(project_id)
+
+
 def data_refs(project_id: str) -> list[dict]:
     """Tests that use or create records of the application model (knowledge.py): {id, name, data_refs}."""
     return repo.Sql.data_refs(project_id)
