@@ -93,6 +93,23 @@ def test_shadow_dom_record_replay_and_export(stand, tmp_path):
         assert r.returncode == 0, r.stdout[-3000:]
 
 
+def test_snapshot_after_a_scripted_redirect_shows_the_new_page(stand):
+    """Login → the page's script navigates once its request ends; on a slow server the old page is still
+    in place for a while: the agent must see the list, not the form it has left."""
+    stand.slow["/list.html"] = 1.5
+    seen = {}
+
+    async def script(r):
+        await r.do("fill", "Логин", "{{username}}")
+        await r.do("fill", "Пароль", "{{password}}")
+        await r.do("click", "Войти")
+        snap = await r.bs.snapshot()
+        seen["url"], seen["names"] = snap["url"], [e["name"] for e in r.bs.elements.values()]
+    arun(record(f"{stand.url}/login.html", script, credentials={"username": USERNAME, "password": PASSWORD}))
+    assert seen["url"].endswith("/list.html"), seen
+    assert "Всего: 2" in seen["names"], seen
+
+
 def test_long_pages_are_listed_near_the_viewport_and_searchable(stand, project, fake_llm):
     """400 buttons: the listing stops at MAX_LISTED, find_elements finds the rest, and it is no step."""
     def script(kind, kw):
