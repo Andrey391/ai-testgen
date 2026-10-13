@@ -2328,14 +2328,17 @@ async def gen_scenarios(body: ReqBody, request: Request):
     the pipeline."""
     p = project(body.project_id, "editor")
     _require_model(p)
-    a = analyses.create(p["id"], body.requirements, body.url, request.state.user)
+    a = analyses.create(p["id"], body.requirements, body.url, request.state.user, work="generate")
     cfg = scenarios.settings(p, body.types, body.layers, body.techniques)
     check = body.validate_spec
     user = request.state.user
     if not body.stream:
+        async def generate():
+            async with analyses.working(p["id"], a["id"]):
+                return await scenarios.generate(body.requirements, body.url, project=p, cfg=cfg, record=False)
         try:
             learn = submit(_learn(p, body.requirements, user))
-            res = await call(scenarios.generate(body.requirements, body.url, project=p, cfg=cfg, record=False))
+            res = await call(generate())
             await asyncio.wrap_future(learn)
         except Exception as e:
             analyses.finish(p["id"], a["id"], error=llm.api_error_text(e))
@@ -2364,6 +2367,10 @@ async def gen_scenarios(body: ReqBody, request: Request):
         send({"type": "log", "text": text})
 
     async def work():
+        async with analyses.working(p["id"], a["id"]):
+            await generating()
+
+    async def generating():
         learn = asyncio.create_task(_learn(p, body.requirements, user, log))
         try:
             if check:
@@ -2517,8 +2524,12 @@ async def review_requirements(body: ReviewBody, request: Request):
         except analyses.Conflict as e:
             raise HTTPException(409, str(e))
     else:
-        a = analyses.create(p["id"], text, "", user)
+        a = analyses.create(p["id"], text, "", user, work="review")
     pid, aid = p["id"], a["id"]
+    notes = review.notes(a.get("review"))
+    # A review cut off (a restart of the studio, «Остановить») kept the checks it finished: only the rest is asked.
+    key = review.parts_key(p, text, body.standard, notes)
+    done = analyses.review_parts(a, key)
     loop, queue = asyncio.get_running_loop(), asyncio.Queue()
 
     def send(event: dict) -> None:
@@ -2527,9 +2538,16 @@ async def review_requirements(body: ReviewBody, request: Request):
     def log(line: str) -> None:
         send({"type": "log", "text": line})
 
+    def keep(name: str, value: dict) -> None:
+        analyses.keep_review_part(pid, aid, key, name, value)
+
     async def work():
+        async with analyses.working(pid, aid):
+            await reviewing()
+
+    async def reviewing():
         try:
-            report = await review.review(p, text, body.standard, log=log, notes=review.notes((a or {}).get("review")))
+            report = await review.review(p, text, body.standard, log=log, notes=notes, done=done, keep=keep)
             analyses.set_review(pid, aid, report)
             send({"type": "review", "review": review.public(report)})
             await _learn_reviewed(p, aid, user, log)

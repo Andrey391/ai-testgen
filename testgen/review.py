@@ -14,7 +14,8 @@ the Studio sessions, the scenarios or the other stages. Two checks run side by s
   (knowledge.prompt); a bigger model is looked up by the subagent with `model_lookup`.
 
 The report (review()) is kept with the analysis; a person reads it, and the scenarios and tests are designed
-in the pipeline from the reviewed requirements. It never changes the application model itself.
+in the pipeline from the reviewed requirements. It never changes the application model itself. A check is
+kept as soon as it is finished (`keep`): a review cut off by a restart of the studio asks only the other one again.
 
 A person works through the findings (items()): answers how it should be (or takes the reviewer's suggestion)
 or marks a finding as not relevant; revise() - an editor on a clean context applies the answered findings to
@@ -29,6 +30,7 @@ what the authors decided (notes()).
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from typing import Literal
@@ -180,14 +182,44 @@ def summary(report: dict) -> str:
     return "; ".join(parts)
 
 
-async def review(project: dict, document: str, standard: str = "", log=None, notes: str = "") -> dict:
+CHECKS = ("validation", "lifecycle")
+
+
+def parts_key(project: dict, document: str, standard: str = "", notes: str = "") -> str:
+    """What both checks depend on: a check finished by a cut-off review is reused only for the same document,
+    standard, notes and settings of the stage (analyses.review_parts)."""
+    from . import analyses
+    cfg = json.dumps(project["pipeline"]["requirements"], sort_keys=True, ensure_ascii=False, default=str)
+    return analyses.parts_key(document, standard, notes, cfg)
+
+
+async def review(project: dict, document: str, standard: str = "", log=None, notes: str = "",
+                 done: dict | None = None, keep=None) -> dict:
     """Both checks of the subagent at once. {validation, lifecycle, errors, verdict, at}: a check that failed
     is in `errors` (by name) and the other one is kept; both failed - the error is raised. notes - what the
-    authors decided on the findings of the previous review of the document (notes())."""
+    authors decided on the findings of the previous review of the document (notes()). done - the checks a
+    cut-off review of the same finished ({name: result}, CHECKS): they are not asked again; keep(name, result) -
+    a check is finished (kept to go on from if this review is cut off)."""
     say = log or (lambda text: None)
-    say("Ревьюер требований: проверка документа по стандарту и сверка с жизненным циклом системы…")
-    v, lc = await asyncio.gather(validation.validate(project, document, standard, notes),
-                                 lifecycle(project, document, log=log, notes=notes), return_exceptions=True)
+    done = {k: v for k, v in (done or {}).items() if k in CHECKS and v}
+
+    async def check(name: str, work):
+        if name in done:
+            return done[name]
+        out = await work()
+        if keep:
+            keep(name, out)
+        return out
+
+    if done:
+        say("Ревьюер требований: продолжаю прерванную проверку, уже готово и не повторяется: "
+            + ", ".join({"validation": "проверка документа по стандарту", "lifecycle": "сверка с жизненным циклом"}[k]
+                        for k in CHECKS if k in done))
+    else:
+        say("Ревьюер требований: проверка документа по стандарту и сверка с жизненным циклом системы…")
+    v, lc = await asyncio.gather(
+        check("validation", lambda: validation.validate(project, document, standard, notes)),
+        check("lifecycle", lambda: lifecycle(project, document, log=log, notes=notes)), return_exceptions=True)
     for e in (v, lc):
         if isinstance(e, asyncio.CancelledError):
             raise e

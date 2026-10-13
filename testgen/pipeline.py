@@ -319,6 +319,12 @@ class Job:
         # The analysis of requirements that keeps the scenarios this run designed: the ones not chosen for
         # automation stay in the common list of scenarios for a later run or the Studio.
         self.analysis_id = ""
+        # Its requirements begin with the specification the reviewer checks (the rest is the site map of Planner):
+        # a run that goes on takes them from the analysis instead of loading them (and exploring the site) again.
+        self.spec_chars: int | None = None
+        # The checks of the review finished by now ({key, validation, lifecycle}): cut off, the review goes on.
+        self.review_parts: dict = {}
+        self.resuming = False                   # goes on after a restart of the studio (resumed())
         self.preselect: list[int] = []          # scenarios checked when a person chooses ("scenarios.select")
         self.sessions = sessions
         # running | awaiting_review | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
@@ -416,7 +422,8 @@ class Job:
         return {k: getattr(self, k) for k in (
             "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
             "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage",
-            "design", "validation", "analysis_id", "preselect", "review", "review_id", "review_accepted")}
+            "design", "validation", "analysis_id", "preselect", "review", "review_id", "review_accepted",
+            "spec_chars", "review_parts")}
 
     @classmethod
     def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
@@ -428,9 +435,11 @@ class Job:
                   design=j.get("design"), review_id=j.get("review_id") or "")
         job.id, job.created = j["id"], j["created"]
         for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation", "analysis_id",
-                  "preselect", "review", "review_accepted"):
+                  "preselect", "review", "review_accepted", "review_parts"):
             setattr(job, k, j.get(k) or getattr(job, k))
-        job.requirements = j.get("requirements") or [] if job.scenarios else []
+        job.spec_chars = j.get("spec_chars")     # None - cut off by a version that did not keep it
+        job.requirements = j.get("requirements") or []
+        job.resuming = True
         for item in job.items:
             if item["status"] not in DONE_ITEMS and not item.get("skipped"):
                 item["status"], item["error"] = "queued", ""
@@ -538,10 +547,21 @@ class Job:
 
     async def _design(self, project: dict, cfg: dict) -> None:
         """Requirements -> review -> scenarios (or one scenario of the whole text when the stage is off)."""
-        self.requirements = []
         if self.review_id:
+            self.requirements = []
             await self._design_reviewed(project, cfg)
             return
+        a = analyses.get(self.analysis_id) if self.resuming and self.analysis_id and self.spec_chars is not None \
+            else None
+        if a and a["project_id"] == self.project_id and cfg["scenarios"]["enabled"]:
+            # Cut off while designing: the requirements loaded then (and the site map) are in the analysis - not
+            # loaded again; the review finished then is not repeated, the plan goes on from where it stopped.
+            self._log("Требования загружены в прошлый раз: продолжаю с анализа требований")
+            analyses.restart(self.project_id, a["id"], force=True, work="design")
+            spec = a["requirements"][:self.spec_chars]
+            await self._designing(project, cfg, a["requirements"], spec, "" if a.get("learned") else spec)
+            return
+        self.requirements = []
         # 1. Requirements
         parts = []
         for link in self.links:
@@ -567,10 +587,12 @@ class Job:
         if not parts:
             raise ValueError("Нет требований: укажите ссылки, текст или включите исследование сайта")
         requirements = "\n\n---\n\n".join(parts)
+        self.spec_chars = len(spec)
         # The designed scenarios are kept in the history of analyses (the Requirements tab): the ones not
         # chosen for this run stay there, in the common list of scenarios, to be automated later.
         if cfg["scenarios"]["enabled"]:
             self.analysis_id = analyses.create(self.project_id, requirements, self.url, self.user)["id"]
+            self.save()
         await self._designing(project, cfg, requirements, spec, spec if self.links or self.text else "")
 
     async def _design_reviewed(self, project: dict, cfg: dict) -> None:
@@ -588,14 +610,19 @@ class Job:
         self._log(f"Требования проверены ревьюером: {review.summary(self.review)}",
                   "info" if self.review.get("verdict") == "ready" else "warn")
         if cfg["scenarios"]["enabled"]:
-            analyses.restart(self.project_id, a["id"], force=True)
+            analyses.restart(self.project_id, a["id"], force=True, work="design")
             self.analysis_id = a["id"]
         await self._designing(project, cfg, a["requirements"], "", "" if a.get("learned") else a["requirements"])
 
     async def _designing(self, project: dict, cfg: dict, requirements: str, spec: str, learn_from: str) -> None:
-        """_design_from; stopped or failed, the analysis says so (the scenarios detailed by then stay)."""
+        """_design_from; stopped or failed, the analysis says so (the scenarios detailed by then stay). While it
+        goes, the analysis beats (analyses.working): cut off by a restart, it reads as interrupted at once."""
         try:
-            await self._design_from(project, cfg, requirements, spec, learn_from)
+            if self.analysis_id:
+                async with analyses.working(self.project_id, self.analysis_id):
+                    await self._design_from(project, cfg, requirements, spec, learn_from)
+            else:
+                await self._design_from(project, cfg, requirements, spec, learn_from)
         except BaseException as e:
             if self.analysis_id:
                 cancelled = isinstance(e, asyncio.CancelledError)
@@ -644,17 +671,21 @@ class Job:
         if cfg["scenarios"]["enabled"]:
             self._log("Проектирование сценариев…")
             aid, pid = self.analysis_id, self.project_id
-            planned: list[str] = []     # ids of this design's scenarios (the analysis may have earlier ones)
+            # Cut off by a restart: the plan of this run and the scenarios detailed by then are kept in the analysis.
+            resume = analyses.resume_plan(pid, aid, self.id) if self.resuming else None
+            # ids of this design's scenarios (the analysis may have earlier ones)
+            planned: list[str] = [s["id"] for s in resume["scenarios"]] if resume else []
 
             def progress(event: dict) -> None:
                 # The analysis fills in as the scenarios come: stopped midway, the detailed ones stay.
                 if event["type"] == "plan":
                     planned[:] = [s["id"] for s in analyses.set_plan(pid, aid, event["feature"], event["assumptions"],
-                                                                     event["scenarios"])][:len(event["scenarios"])]
+                                                                     event["scenarios"], event.get("groups"),
+                                                                     self.id)][:len(event["scenarios"])]
                 elif event["type"] == "batch":
                     analyses.set_batch(pid, aid, event["start"], event["scenarios"])
             res = await scenarios.generate(requirements, self.url, project=project, log=self._log, progress=progress,
-                                           cfg=scenarios.settings(project, **self.design), record=False)
+                                           cfg=scenarios.settings(project, **self.design), record=False, resume=resume)
             self.feature, self.assumptions = res.feature, res.assumptions
             analyses.finish(pid, aid, res.model_dump())
             # The test data they need joins the model; each scenario keeps the ids of its records (record_id).
@@ -756,8 +787,17 @@ class Job:
         """Stage 1: the reviewer subagent checks the specification on a clean context of its own - defects of
         the document and conflicts with the lifecycle of the system. A failed review does not stop the run."""
         self.stage = "requirements"
+        # A review cut off by a restart kept the checks it finished: only the rest is asked again.
+        key = review.parts_key(project, spec)
+        if self.review_parts.get("key") != key:
+            self.review_parts = {"key": key}
+
+        def keep(name: str, value: dict) -> None:
+            self.review_parts[name] = value
+            self.save()
         try:
-            self.review = await review.review(project, spec, log=self._log)
+            self.review = await review.review(project, spec, log=self._log, done=self.review_parts, keep=keep)
+            self.review_parts = {}
         except Exception as e:
             self._log(f"Проверка требований не удалась: {_err(e)}", "warn")
             return

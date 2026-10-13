@@ -9,9 +9,17 @@ One document per analysis: data/projects/<id>/analyses/<analysis>.json.
 The test data of a scenario is recorded in the application model (knowledge.need, record_needs()) with
 the scenario's ref "<analysis>:<scenario>", and each item gets the id of its record (`record_id`): an edit
 of the scenario updates the model, a deleted scenario or analysis lets its records go (knowledge.release).
+
+Work on an analysis (a review, a design of scenarios) beats while it goes (working()): an analysis "running" with
+no beat for BEAT_STALE seconds was cut off - the studio restarted - and says so at once, not an hour later. What
+was done by then is kept to go on from: the finished checks of a review (review_parts(), keep_review_part()) and
+the plan of a design with the scenarios detailed by then (`plan`, resume_plan()).
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import hashlib
 import json
 import re
 import time
@@ -24,7 +32,15 @@ FIELDS = ("title", "type", "layer", "priority", "role", "preconditions", "instru
 # Test data a scenario needs (scenarios.DataNeed) and the record of the application model that holds it.
 DATA_FIELDS = ("entity", "name", "details", "state", "role", "record_id")
 PRIORITIES = ("high", "medium", "low")
-STALE = 3600     # a "running" analysis older than this was cut off (the studio restarted)
+STALE = 3600     # a "running" analysis of an earlier version (no beats) older than this was cut off
+BEAT = 15        # seconds between the beats of the work on an analysis
+BEAT_STALE = 60  # a "running" analysis without a beat this long was cut off (the studio restarted)
+PARTS_TTL = 86400    # the finished checks of an interrupted review are reused this long
+INTERRUPTED = {
+    "review": "Проверка прервана перезапуском студии — «Проверить заново» продолжит с готовой части",
+    "design": "Проектирование сценариев прервано перезапуском студии — «Продолжить» запуск конвейера продолжит "
+              "с места остановки",
+}
 
 
 class Conflict(ValueError):
@@ -43,11 +59,11 @@ def _id() -> str:
     return uuid.uuid4().hex[:10]
 
 
-def create(pid: str, requirements: str, url: str = "", user: str = "") -> dict:
+def create(pid: str, requirements: str, url: str = "", user: str = "", work: str = "design") -> dict:
     first = next((line.strip(" #\t") for line in requirements.splitlines() if line.strip(" #\t")), "")
     a = {"id": _id(), "project_id": pid, "created": time.time(), "finished": None, "user": user,
          "title": first[:120], "requirements": requirements[:200_000], "url": url, "status": "running",
-         "feature": "", "assumptions": [], "scenarios": [], "error": ""}
+         "feature": "", "assumptions": [], "scenarios": [], "error": "", "beat": time.time(), "work": work}
     fs.write_json(_path(pid, a["id"]), a, indent=1)
     return a
 
@@ -78,9 +94,39 @@ def get(aid: str) -> dict | None:
 
 
 def _stale(a: dict) -> dict:
-    if a["status"] == "running" and time.time() - (a.get("started") or a["created"]) > STALE:
-        a["status"], a["error"] = "error", a["error"] or "Генерация была прервана"
+    """An analysis "running" with no work beating on it (working()) was cut off: it is an error at once."""
+    if a["status"] == "running":
+        if "beat" in a:
+            gone = time.time() - (a["beat"] or 0) > BEAT_STALE
+        else:       # written by a version without beats
+            gone = time.time() - (a.get("started") or a["created"]) > STALE
+        if gone:
+            a["status"] = "error"
+            a["error"] = a["error"] or INTERRUPTED.get(a.get("work") or "", "Генерация была прервана")
     return a
+
+
+@contextlib.asynccontextmanager
+async def working(pid: str, aid: str):
+    """The work on the analysis is alive while this is open: it beats every BEAT seconds. A studio that stops
+    stops beating, and the analysis reads as interrupted (_stale) - on this instance and on the others."""
+    def touch(a):
+        if a["status"] == "running":
+            a["beat"] = time.time()
+
+    async def beat():
+        while True:
+            await asyncio.sleep(BEAT)
+            try:
+                if fs.exists(_path(pid, aid)):
+                    _change(pid, aid, touch)
+            except Exception as e:      # a missed beat: the next one comes
+                print(f"analysis {aid}: {e}")
+    task = asyncio.create_task(beat())
+    try:
+        yield
+    finally:
+        task.cancel()
 
 
 def _change(pid: str, aid: str, fn) -> dict:
@@ -158,15 +204,39 @@ def _new_scenario(data: dict) -> dict:
     return _fields(data) | {"id": _id(), "test_ids": []}
 
 
-def set_plan(pid: str, aid: str, feature: str, assumptions: list[str], planned: list[dict]) -> list[dict]:
+def set_plan(pid: str, aid: str, feature: str, assumptions: list[str], planned: list[dict],
+             groups: list[str] | None = None, job: str = "") -> list[dict]:
     """The planned scenarios (to be detailed) go first; the ready ones of an earlier design of the same
-    requirements, with their tests, stay after them."""
+    requirements, with their tests, stay after them. The plan itself is kept (`plan`) until the design is done:
+    interrupted, the run of the pipeline `job` goes on from it (resume_plan())."""
     def fn(a):
         a["feature"], a["assumptions"] = feature, list(assumptions)
-        a["scenarios"] = [_new_scenario(s) | {"covers": s.get("covers", ""), "pending": True} for s in planned] + \
-            [s for s in a["scenarios"] if not s.get("pending")]
+        new = [_new_scenario(s) | {"covers": s.get("covers", "")} for s in planned]
+        a["plan"] = {"feature": feature, "assumptions": list(assumptions), "groups": list(groups or []), "job": job,
+                     "at": time.time(), "scenarios": new}
+        a["scenarios"] = [s | {"pending": True} for s in new] + [s for s in a["scenarios"] if not s.get("pending")]
         return a["scenarios"]
     return _change(pid, aid, fn)
+
+
+def resume_plan(pid: str, aid: str, job: str) -> dict | None:
+    """The plan of a design by the run `job` that was cut off: {feature, assumptions, groups, scenarios (planned),
+    done: {position: detailed scenario}} - only the rest is detailed again. The analysis gets the plan back in
+    its order: the detailed scenarios where they were planned, the rest pending. None - no such plan."""
+    def fn(a):
+        p = a.get("plan")
+        if not p or not job or p.get("job") != job:
+            return {}
+        ids = {s["id"] for s in p["scenarios"]}
+        ready = {s["id"]: s for s in a["scenarios"] if not s.get("pending")}
+        a["scenarios"] = [ready.get(s["id"]) or s | {"pending": True} for s in p["scenarios"]] + \
+            [s for s in a["scenarios"] if not s.get("pending") and s["id"] not in ids]
+        a["feature"], a["assumptions"] = p["feature"], p["assumptions"]
+        return {k: p[k] for k in ("feature", "assumptions", "groups", "scenarios")} | {
+            "done": {i: ready[s["id"]] for i, s in enumerate(p["scenarios"]) if s["id"] in ready}}
+    if not fs.exists(_path(pid, aid)):
+        return None
+    return _change(pid, aid, fn) or None
 
 
 def set_batch(pid: str, aid: str, start: int, detailed: list[dict]) -> list[dict]:
@@ -185,9 +255,11 @@ def set_batch(pid: str, aid: str, start: int, detailed: list[dict]) -> list[dict
 
 
 def finish(pid: str, aid: str, result: dict | None = None, error: str = "", status: str = "") -> dict:
-    """Done (`result`: the final set fills what no batch filled) or stopped; plan entries never detailed go."""
+    """Done (`result`: the final set fills what no batch filled) or stopped; plan entries never detailed go
+    (stopped or failed, the plan stays for the run that goes on: resume_plan())."""
     def fn(a):
         if result:
+            a.pop("plan", None)
             a["feature"], a["assumptions"] = result["feature"], result["assumptions"]
             for i, s in enumerate(a["scenarios"]):
                 if s.get("pending") and i < len(result["scenarios"]):
@@ -279,14 +351,44 @@ def set_validation(pid: str, aid: str, result: dict) -> None:
 
 def set_review(pid: str, aid: str, report: dict) -> None:
     """The reviewer's finished report (review.review); its check of the document is the analysis's
-    validation as well. A review stopped midway writes nothing: the previous report stays."""
+    validation as well. A review stopped midway writes only its finished checks (keep_review_part()): the
+    previous report stays."""
     if not fs.exists(_path(pid, aid)):
         return
 
     def fn(a):
+        a.pop("review_parts", None)
         a["review"] = report
         if report.get("validation"):
             a["validation"] = report["validation"]
+    _change(pid, aid, fn)
+
+
+def parts_key(*texts: str) -> str:
+    """What the checks of a review depend on (the document, the standard, the notes, the settings): a finished
+    check is reused only for the same."""
+    return hashlib.sha256("\x00".join(texts).encode("utf-8")).hexdigest()[:32]
+
+
+def review_parts(a: dict | None, key: str) -> dict:
+    """The checks a cut-off review of the same (`key`) finished: {name: result} (review.review `done`)."""
+    parts = (a or {}).get("review_parts") or {}
+    if parts.get("key") != key or time.time() - (parts.get("at") or 0) > PARTS_TTL:
+        return {}
+    return {k: v for k, v in parts.items() if k not in ("key", "at")}
+
+
+def keep_review_part(pid: str, aid: str, key: str, name: str, value: dict) -> None:
+    """A check of the review is finished: kept until the report is (set_review()), to go on from if cut off."""
+    if not fs.exists(_path(pid, aid)):
+        return
+
+    def fn(a):
+        parts = a.get("review_parts") or {}
+        if parts.get("key") != key:
+            parts = {"key": key}
+        parts[name], parts["at"] = value, time.time()
+        a["review_parts"] = parts
     _change(pid, aid, fn)
 
 
@@ -344,13 +446,13 @@ def reviewed(a: dict) -> bool:
     return bool(a.get("review"))
 
 
-def restart(pid: str, aid: str, force: bool = False) -> dict:
-    """The analysis is in work again: its requirements are reviewed again, or the pipeline designs scenarios
-    from them. force - a run of the pipeline that goes on after a restart of the studio."""
+def restart(pid: str, aid: str, force: bool = False, work: str = "review") -> dict:
+    """The analysis is in work again (`work`: review | design): its requirements are reviewed again, or the
+    pipeline designs scenarios from them. force - a run of the pipeline that goes on after a restart of the studio."""
     def fn(a):
         if _stale(a)["status"] == "running" and not force:
             raise Conflict("Анализ уже в работе: дождитесь окончания проверки или генерации")
-        a.update(status="running", started=time.time(), error="", finished=None)
+        a.update(status="running", started=time.time(), beat=time.time(), work=work, error="", finished=None)
     return _change(pid, aid, fn)
 
 
