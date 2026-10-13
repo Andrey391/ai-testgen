@@ -118,7 +118,7 @@ def test_tests_tasks_and_spending_in_tables(database):
     assert tasks.link_test(task["id"], smoke["id"])["status"] == "in_progress"
     assert tasks.counts(pid) == {"todo": 0, "in_progress": 1, "review": 0, "done": 1, "open": 1}
     (only,) = tasks.list_tasks(pid, "open", "alice")
-    assert only["tests"] == [{"id": smoke["id"], "name": "Smoke 2"}]
+    assert [(x["id"], x["name"]) for x in only["tests"]] == [(smoke["id"], "Smoke 2")]
     storage.delete(smoke["id"])
     assert tasks.load(task["id"])["test_ids"] == [] and storage.load(smoke["id"]) is None
 

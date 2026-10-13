@@ -437,7 +437,7 @@ def list_checkpoints(pid: str) -> list[dict]:
         except ValueError:
             continue
         out.append({k: cp.get(k) for k in ("id", "name", "url", "scenario", "status", "test_id", "task_id", "origin",
-                                           "summary", "created")}
+                                           "summary", "created", "user")}
                    | {"updated": cp.get("updated") or updated, "steps": len(recorded_steps(cp.get("steps") or []))})
     return out
 
@@ -459,8 +459,9 @@ def restored(project: dict, cp: dict) -> "StudioSession":
                       credentials=creds or projects.account_credentials(project["id"], account),
                       base_steps=recorded_steps(cp.get("steps") or []), task=RESUME_TASK, account=account,
                       session_id=cp["id"], engine=cp.get("engine") or "")
-    s.restored, s.origin = True, cp.get("origin")
+    s.restored, s.origin, s.user = True, cp.get("origin"), cp.get("user") or ""
     s.test_id, s.task_id = cp.get("test_id"), cp.get("task_id") or ""
+    s.analysis_id, s.scenario_id = cp.get("analysis_id") or "", cp.get("scenario_id") or ""
     s.chat = list(cp.get("chat") or []) + [{"role": "system", "text": "Сессия восстановлена после перезапуска студии: "
                                             "записанные шаги воспроизводятся в новом браузере, затем агент продолжит."}]
     s.summary, s.finish_status = cp.get("summary", ""), cp.get("finish_status", "")
@@ -494,6 +495,11 @@ def recorded_steps(steps: list[dict]) -> list[dict]:
     agent retries them another way and replay stops at the first failing step."""
     return [{k: v for k, v in st.items() if k not in ("ref", "replay_error")} for st in steps
             if st.get("status") != "failed"]
+
+
+def _signature(steps: list[dict]) -> list:
+    """What a saved test keeps of the steps: a change of it is a change to save."""
+    return [[st.get("id"), st.get("action"), st.get("value"), st.get("description")] for st in recorded_steps(steps)]
 
 
 def _api_check(step: dict) -> bool:
@@ -546,6 +552,9 @@ class StudioSession:
         self.watch = False                  # «Прогон в Studio»: the saved test is replayed step by step for a person
         self.origin: dict | None = None     # {"job": id} for a session of a pipeline run
         self.task_id = ""                   # project task the test is made for (server.py)
+        self.analysis_id = self.scenario_id = ""    # the scenario of a requirements analysis it is made from
+        self.user = ""                      # who opened it in Studio (a pipeline session has none): «Открытые сессии»
+        self.source: dict | None = None     # where it came from, for «Вернуться к …» (server._source, once)
         self._creds_kept = False
         self.project_id, self.project_name = project["id"], project["name"]
         self.cfg = project["pipeline"]["authoring"]
@@ -556,6 +565,8 @@ class StudioSession:
         self.engine = "api" if engine == "api" else "builtin" if base_steps else (engine or self.cfg["engine"])
         self.name, self.url, self.scenario = name, url, scenario
         self.base_steps, self.task = copy.deepcopy(base_steps or []), task
+        # The steps as last saved: a session over a saved test starts with them (a restored one may not have saved)
+        self.saved_steps = _signature(self.base_steps) if base_steps and task != RESUME_TASK else None
         self.headless = headless
         # A weaker model gets a compact prompt with examples and screenshots on request (the stage settings).
         compact = self.cfg.get("prompt") == "compact"
@@ -646,12 +657,18 @@ class StudioSession:
             "finish_status": self.finish_status, "finish": self.finish, "max_steps": self.max_steps,
             "expected": expected_result(self.scenario),
             "pending": self.pending and {k: self.pending[k] for k in ("name", "input", "step")},
-            "page_url": self.page_url, "has_credentials": bool(self.credentials),
+            "page_url": self.page_url, "has_credentials": bool(self.credentials), "dirty": self.dirty,
             "usage": self.usage.as_dict(), "traffic": len(getattr(self.bs, "traffic", None) or []),
             "api_log": getattr(self.bs, "responses", None) if self.engine == "api" else None,
             "model": {"name": self.model, "screenshots": self.screenshots},
             "timing": {k: round(v, 1) for k, v in self.timing.items()},
         }
+
+    @property
+    def dirty(self) -> bool:
+        """Steps recorded or changed since the last save (closing the session loses them)."""
+        steps = _signature(self.steps)
+        return bool(steps) and steps != self.saved_steps
 
     def to_test(self) -> dict:
         """The recorded test, ready for storage.save (keeps its id across re-saves)."""
@@ -693,7 +710,7 @@ class StudioSession:
         if self.account:
             t["account"] = self.account
         storage.save(t)
-        self.test_id = t["id"]
+        self.test_id, self.saved_steps = t["id"], _signature(self.steps)
         self.checkpoint()
         # A login typed for this session (not a project account) stays with the test.
         if self.credentials and not self.account and self.credentials != projects.app_credentials(self.project_id):
@@ -1042,6 +1059,7 @@ class StudioSession:
                 "id": self.id, "project_id": self.project_id, "name": self.name, "url": self.url,
                 "scenario": self.scenario, "engine": self.engine, "headless": self.headless,
                 "test_id": self.test_id, "task_id": self.task_id, "origin": self.origin, "account": self.account,
+                "user": self.user, "analysis_id": self.analysis_id, "scenario_id": self.scenario_id,
                 "data_refs": self.data_refs,
                 "steps": self.steps, "chat": chat[-300:], "summary": self.summary,
                 "finish_status": self.finish_status, "status": self.status, "own_credentials": own,

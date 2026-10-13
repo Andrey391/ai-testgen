@@ -36,7 +36,7 @@ def test_task_crud_and_filters(client, open_studio, project, save_test):
 
     listed = client.get(url).json()
     assert [x["id"] for x in listed["tasks"]] == [a["id"], b["id"]]   # high priority first
-    assert listed["tasks"][0]["tests"] == [{"id": t["id"], "name": "Корзина"}] and listed["tasks"][0]["overdue"]
+    assert [x["name"] for x in listed["tasks"][0]["tests"]] == ["Корзина"] and listed["tasks"][0]["overdue"]
     assert listed["counts"] == {"todo": 2, "in_progress": 0, "review": 0, "done": 0, "open": 2}
     assert [x["id"] for x in client.get(f"{url}?assignee=ivan").json()["tasks"]] == [a["id"]]
 

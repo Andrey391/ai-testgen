@@ -134,17 +134,37 @@ def _order(t: dict) -> tuple:
             -t.get("created", 0))
 
 
+def suggest(status: str, tests: list[dict]) -> str:
+    """The status the task's tests point to, when it is further than the task's own: «Готово» - every test is in
+    the regression suite (ready), «На проверке» - the last runs of all of them passed. Only a hint: a person moves it."""
+    if not tests:
+        return ""
+    if all(x["status"] == "ready" for x in tests):
+        best = "done"
+    elif all(x["last_status"] == "passed" for x in tests):
+        best = "review"
+    else:
+        return ""
+    return best if STATUSES.index(best) > STATUSES.index(status) else ""
+
+
 def list_tasks(pid: str, status: str = "", assignee: str = "") -> list[dict]:
-    """Tasks for the list: with the names of linked tests (deleted ones are dropped)."""
+    """Tasks for the list: with the linked tests (deleted ones are dropped) and the status they suggest."""
     from . import storage
-    names = storage.names(pid)
+    brief = storage.brief(pid)
     today = datetime.date.today().isoformat()
     only = sorted(OPEN) if status == "open" else [status] if status in STATUSES else None
     out = []
     for t in sorted(repo.Sql.all(pid, only, assignee), key=_order):
-        tests = [{"id": x, "name": names[x]} for x in t.get("test_ids") or [] if x in names]
-        out.append(t | {"tests": tests, "overdue": bool(t.get("due")) and t["status"] != "done" and t["due"] < today})
+        tests = [{"id": x} | brief[x] for x in t.get("test_ids") or [] if x in brief]
+        out.append(t | {"tests": tests, "suggest": suggest(t["status"], tests),
+                        "overdue": bool(t.get("due")) and t["status"] != "done" and t["due"] < today})
     return out
+
+
+def with_test(pid: str, test_id: str) -> list[dict]:
+    """The tasks the test is made for: {id, title, status}."""
+    return [{k: t[k] for k in ("id", "title", "status")} for t in map(load, repo.Sql.with_test(pid, test_id)) if t]
 
 
 def counts(pid: str) -> dict:

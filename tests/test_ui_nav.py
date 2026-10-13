@@ -11,12 +11,13 @@ import socket
 import threading
 import time
 import types
+import uuid
 
 import pytest
 import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
-from testgen import auth, pipeline, storage
+from testgen import agent, auth, pipeline, projects, storage, tasks
 from testgen.steps import new_step
 
 TABS = ["studio", "tests", "dash", "tasks", "req", "pipe", "proj", "home"]
@@ -210,4 +211,38 @@ def test_bell_counts_decisions_and_opens_them(page, studio_url, project, save_te
     expect(page.locator("nav button[data-tab=pipe] .badge")).to_be_hidden()
     page.keyboard.press("Escape")
     expect(menu).to_be_hidden()
+    assert page.errors == []
+
+
+# ---- several Studio sessions, where a session came from (stage 3)
+
+def test_sessions_of_two_projects_switch_with_the_project(page, studio_url, project, monkeypatch):
+    import server
+    other = projects.get(projects.create("Второй " + uuid.uuid4().hex[:6], base_url=project["base_url"])["id"])
+    task = tasks.create(project["id"], {"title": "Покрыть корзину"})
+    made = []
+    for p, name in ((project, "Сессия один"), (other, "Сессия два")):
+        s = agent.StudioSession(p, name, p["base_url"], "Сценарий")
+        s.user, s.status = auth.ANONYMOUS, "idle"
+        monkeypatch.setitem(server.SESSIONS, s.id, s)
+        made.append(s)
+    made[0].task_id = task["id"]
+    _open(page, studio_url, project)
+    page.click("nav button[data-tab=studio]")
+    expect(page.locator("#wsTitle")).to_have_text("Сессия один")
+    expect(page.locator("#wsSource")).to_contain_text("Из задачи «Покрыть корзину»")
+    expect(page.locator("#sessBar .sess-chip")).to_have_count(2)
+
+    # A session of another project: the project is switched with it.
+    page.locator("#sessBar .sess-chip", has_text="Сессия два").click()
+    expect(page.locator("#projSel")).to_have_value(other["id"])
+    expect(page.locator("#wsTitle")).to_have_text("Сессия два")
+    expect(page).to_have_url(f"{studio_url}/#/p/{other['id']}/studio/{made[1].id}")
+    # Choosing the project shows its own session.
+    page.select_option("#projSel", project["id"])
+    expect(page.locator("#wsTitle")).to_have_text("Сессия один")
+    # «+ Ещё сессия»: the form of a new test, the sessions stay open.
+    page.click("#sessBar >> text=+ Ещё сессия")
+    expect(page.locator("#startForm")).to_be_visible()
+    expect(page.locator("#sessBar .sess-chip")).to_have_count(2)
     assert page.errors == []

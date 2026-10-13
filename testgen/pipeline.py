@@ -1321,6 +1321,20 @@ def list_jobs(pid: str, limit: int = 30) -> list[dict]:
                                                                       if i["status"] == "done")} for j in jobs]
 
 
+def jobs_with_test(pid: str, test_id: str) -> list[dict]:
+    """The pipeline runs that made, reused or refined the test: {id, created, status}, newest first."""
+    out = {j.id: j.state() for j in JOBS.values() if j.project_id == pid}
+    for f, text, _ in fs.documents(_jobs_dir(pid)):
+        if f.stem not in out and test_id in text:
+            try:
+                out[f.stem] = json.loads(text)
+            except ValueError:
+                continue
+    return sorted(({"id": j["id"], "created": j.get("created"), "status": j.get("status")} for j in out.values()
+                   if any(i.get("test_id") == test_id for i in j.get("items") or [])),
+                  key=lambda j: j["created"] or 0, reverse=True)
+
+
 def get_job(jid: str) -> dict | None:
     if jid in JOBS:
         return JOBS[jid].state()

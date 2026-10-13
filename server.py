@@ -58,7 +58,6 @@ async def call(coro):
 
 
 SESSIONS: dict[str, StudioSession] = {}
-SESSION_SCENARIOS: dict[str, tuple[str, str, str]] = {}   # session id -> (project, analysis, scenario) of the test
 # With several instances of the studio (a shared database): this instance's address for the others.
 # Studio sessions and pipeline jobs live in the instance that started them; requests about them that
 # reach another instance are passed here (_elsewhere / _proxy).
@@ -1333,7 +1332,53 @@ class NewSession(BaseModel):
     accept_lifecycle: bool = False   # a person runs the scenario although the lifecycle check stopped it
 
 
-def _start_session(s: StudioSession, autopilot: bool) -> None:
+# Open Studio sessions of one person (pipeline sessions do not count): «Открытые сессии», the limit.
+SESSIONS_PER_USER = max(1, int(os.environ.get("TESTGEN_SESSIONS_PER_USER") or 3))
+
+
+def _session_row(s: StudioSession) -> dict:
+    return {"id": s.id, "project_id": s.project_id, "name": s.name, "status": s.status, "created": s.created,
+            "steps": len(agent_mod.recorded_steps(s.steps)), "dirty": s.dirty, "test_id": s.test_id}
+
+
+def _my_sessions(user: str | None) -> list[dict]:
+    """The person's open Studio sessions in the projects they may see, oldest first. With several instances the
+    sessions of the others are found by their checkpoints (the instance holding them is alive)."""
+    out, seen = [], set()
+    for s in list(SESSIONS.values()):
+        if getattr(s, "user", None) == user and s.status != "closed" and not (s.origin or {}).get("job"):
+            out.append(_session_row(s))
+            seen.add(s.id)
+    pids = {x["project_id"] for x in out}
+    if INSTANCE_URL:
+        pids |= {x["id"] for x in projects.list_projects()}
+    names = {}
+    for pid in pids:
+        p = projects.get(pid)
+        if p and access.role(user, p):
+            names[pid] = p["name"]
+            if INSTANCE_URL:
+                out += [{k: cp.get(k) for k in ("id", "name", "status", "created", "steps", "test_id")}
+                        | {"project_id": pid, "dirty": bool(cp["steps"]) and not cp.get("test_id")}
+                        for cp in agent_mod.list_checkpoints(pid)
+                        if cp["id"] not in seen and cp.get("user") == user and not (cp.get("origin") or {}).get("job")
+                        and cp.get("status") != "closed" and _alive(cp)]
+    return sorted((x | {"project": names[x["project_id"]]} for x in out if x["project_id"] in names),
+                  key=lambda x: x["created"] or 0)
+
+
+def _room_for_session(user: str | None, sid: str = "") -> None:
+    mine = [x for x in _my_sessions(user) if x["id"] != sid]
+    if len(mine) >= SESSIONS_PER_USER:
+        raise HTTPException(409, f"Открыто сессий Studio: {len(mine)} из {SESSIONS_PER_USER}. Закройте одну из них, "
+                                 "чтобы открыть новую", headers={"X-Session-Limit": str(SESSIONS_PER_USER)})
+
+
+def _start_session(s: StudioSession, autopilot: bool, user: str | None = None) -> None:
+    """Start a session in Studio; `user` - the person it is opened for (limited by TESTGEN_SESSIONS_PER_USER)."""
+    if user is not None:
+        _room_for_session(user, s.id)
+        s.user = user
     SESSIONS[s.id] = s
     if INSTANCE_URL:
         workqueue.set_owner("session", s.id, INSTANCE_URL)
@@ -1350,6 +1395,7 @@ def _start_session(s: StudioSession, autopilot: bool) -> None:
 @app.post("/api/sessions")
 async def create_session(body: NewSession, request: Request):
     p = project(body.project_id, "editor")
+    _room_for_session(request.state.user)
     url = body.url if "://" in body.url else "https://" + body.url
     creds = {"username": body.username.strip(), "password": body.password}
     account = ""
@@ -1391,18 +1437,47 @@ async def create_session(body: NewSession, request: Request):
     s = StudioSession(p, body.name, url, body.scenario, headless=body.headless, credentials=creds,
                       engine=engine, use_login_state=not body.fresh_login and not guest, account=account)
     request.state.project_id = p["id"]
-    _start_session(s, body.autopilot)
     t = tasks.load(body.task_id)
     if t and t["project_id"] == p["id"]:
         s.task_id = t["id"]
-    if a and body.scenario_id:
-        SESSION_SCENARIOS[s.id] = (p["id"], a["id"], body.scenario_id)
+    if a and sc:
+        s.analysis_id, s.scenario_id = a["id"], sc["id"]
+    _start_session(s, body.autopilot, request.state.user)
     return {"id": s.id}
+
+
+@app.get("/api/sessions")
+async def my_sessions(request: Request):
+    """The person's open Studio sessions in every project they may see: «Открытые сессии»."""
+    items = await asyncio.to_thread(_my_sessions, request.state.user)
+    return {"limit": SESSIONS_PER_USER, "items": items}
+
+
+def _source(s: StudioSession) -> dict | None:
+    """Where the session came from: a pipeline run, a task, a scenario of a requirements analysis - for
+    «Из …» over the session and «Вернуться к …» after saving. Looked up once."""
+    if s.source is None:
+        pid, job = s.project_id, (s.origin or {}).get("job")
+        t = tasks.load(s.task_id) if s.task_id else None
+        a = analyses.get(s.analysis_id) if s.analysis_id else None
+        sc = next((x for x in (a or {}).get("scenarios") or [] if x.get("id") == s.scenario_id), None)
+        j = pipeline.get_job(job) if job else None
+        if j and j.get("project_id") == pid:
+            s.source = {"kind": "job", "id": job, "created": j.get("created"), "route": f"/p/{pid}/pipe/{job}"}
+        elif t and t["project_id"] == pid:
+            s.source = {"kind": "task", "id": t["id"], "title": t["title"], "route": f"/p/{pid}/tasks/{t['id']}"}
+        elif a and a["project_id"] == pid and sc:
+            s.source = {"kind": "scenario", "id": sc["id"], "analysis_id": a["id"], "title": sc.get("title") or "",
+                        "route": f"/p/{pid}/req/{a['id']}"}
+        else:
+            s.source = {}
+    return s.source or None
 
 
 @app.get("/api/sessions/{sid}")
 async def get_session(sid: str):
-    return sess(sid).state()
+    s = sess(sid)
+    return s.state() | {"source": _source(s) if s.source is not None else await asyncio.to_thread(_source, s)}
 
 
 @app.get("/api/sessions/{sid}/screenshot")
@@ -1538,8 +1613,8 @@ async def save_session(sid: str, body: SaveBody | None = None):
     t, warnings = s.save((body or SaveBody()).status)
     if s.task_id:
         tasks.link_test(s.task_id, t["id"])
-    if sid in SESSION_SCENARIOS:
-        analyses.link_test(*SESSION_SCENARIOS[sid], t["id"])
+    if s.analysis_id and s.scenario_id:
+        analyses.link_test(s.project_id, s.analysis_id, s.scenario_id, t["id"])
     _job_session_saved(s.project_id, s.origin, sid, t)
     return t | {"warnings": warnings}
 
@@ -1547,7 +1622,6 @@ async def save_session(sid: str, body: SaveBody | None = None):
 @app.delete("/api/sessions/{sid}")
 async def close_session(sid: str):
     s = SESSIONS.pop(sid, None)
-    SESSION_SCENARIOS.pop(sid, None)
     if INSTANCE_URL:
         workqueue.drop_owner("session", sid)
     if s:
@@ -1612,13 +1686,15 @@ class RestoreBody(BaseModel):
 
 
 @app.post("/api/projects/{pid}/sessions/{sid}/restore")
-async def restore_session(pid: str, sid: str, body: RestoreBody | None = None):
+async def restore_session(pid: str, sid: str, request: Request, body: RestoreBody | None = None):
     p = project(pid)
     cp = _checkpoint_or_404(pid, sid)
     if _alive(cp):
         return {"id": sid}
     _require_model(p)
-    _start_session(agent_mod.restored(p, cp), (body or RestoreBody()).autopilot)
+    s = agent_mod.restored(p, cp)
+    # the person continuing it has it among their open sessions; a pipeline session stays the run's
+    _start_session(s, (body or RestoreBody()).autopilot, None if (s.origin or {}).get("job") else request.state.user)
     return {"id": sid}
 
 
@@ -1633,6 +1709,8 @@ async def save_interrupted(pid: str, sid: str, body: SaveBody | None = None):
     t, warnings = agent_mod.save_checkpoint(p, cp, (body or SaveBody()).status)
     if cp.get("task_id"):
         tasks.link_test(cp["task_id"], t["id"])
+    if cp.get("analysis_id") and cp.get("scenario_id"):
+        analyses.link_test(pid, cp["analysis_id"], cp["scenario_id"], t["id"])
     _job_session_saved(pid, cp.get("origin"), sid, t)
     return t | {"warnings": warnings}
 
@@ -1706,8 +1784,19 @@ async def edit_in_studio(tid: str, body: EditBody, request: Request):
                       account=t.get("account") or "", engine=agent_mod.test_engine(t))
     s.test_id, s.watch = tid, body.watch
     request.state.project_id = p["id"]
-    _start_session(s, autopilot=False)
+    _start_session(s, autopilot=False, user=request.state.user)
     return {"id": s.id}
+
+
+@app.get("/api/tests/{tid}/links")
+async def test_links(tid: str):
+    """What the test is linked to («Связано» in its card): the tasks it is made for, the scenarios of requirements
+    analyses it checks, the pipeline runs that made it."""
+    t = test_or_404(tid)
+    pid = t["project_id"]
+    return {"tasks": await asyncio.to_thread(tasks.with_test, pid, tid),
+            "scenarios": await asyncio.to_thread(analyses.with_test, pid, tid),
+            "jobs": await asyncio.to_thread(pipeline.jobs_with_test, pid, tid)}
 
 
 class MetaBody(BaseModel):
@@ -2029,7 +2118,7 @@ async def fix_run(rid: str, body: FixBody, request: Request):
                       engine=agent_mod.test_engine(t))
     s.test_id = t["id"]
     request.state.project_id = p["id"]
-    _start_session(s, autopilot=False)
+    _start_session(s, autopilot=False, user=request.state.user)
     return {"id": s.id}
 
 
@@ -2152,7 +2241,7 @@ async def strengthen(tid: str, request: Request):
                       credentials=storage.credentials(t), base_steps=t["steps"], task=mutations.improvement_task(v),
                       engine=agent_mod.test_engine(t))
     s.test_id = tid
-    _start_session(s, autopilot=False)
+    _start_session(s, autopilot=False, user=request.state.user)
     return {"id": s.id}
 
 
