@@ -481,6 +481,15 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </form>
 </section>
 
+<!-- an address of a screen that is gone or belongs to someone else: the same answer for both -->
+<section id="tab-missing" class="hidden">
+  <div class="card">
+    <h3 style="margin-top:0">Не найдено или нет доступа</h3>
+    <div class="hint">По этому адресу ничего нет: объект удалён, адрес набран с ошибкой или у вас нет доступа к проекту.</div>
+    <a class="btn primary" id="missingLink" href="#/projects">К проектам</a>
+  </div>
+</section>
+
 <!-- ============ PROJECTS ============ -->
 <section id="tab-home" class="hidden">
   <div id="homeList">
@@ -812,7 +821,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </div>
 
   <div class="card hidden" id="taskBox">
-    <h3 id="taskHead">Новая задача</h3>
+    <div class="row"><h3 id="taskHead" class="grow">Новая задача</h3>
+      <button class="btn small hidden" id="taskLink" title="Скопировать ссылку на задачу" aria-label="Скопировать ссылку">🔗</button></div>
     <label>Название</label><input id="taskTitle" maxlength="200" placeholder="Покрыть тестами оформление заказа">
     <label>Описание</label>
     <textarea id="taskDesc" rows="4" placeholder="Что сделать, ссылки на требования, критерии готовности"></textarea>
@@ -991,6 +1001,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="card">
           <h3>Уведомления</h3>
           <div class="muted">Итоги наборов, самолечение на ревью, повторяющиеся падения, расход на модели — в Telegram, Mattermost или на почту. Токены и пароли хранятся на сервере.</div>
+          <div class="hint hidden" id="ntNoLinks" style="color:var(--warn)">В уведомлениях не будет ссылок на прогоны и тесты: администратор не задал адрес студии для людей — переменную окружения <code>TESTGEN_PUBLIC_URL</code> (например, <code>https://testgen.company.ru</code>).</div>
           <div class="grid3">
             <div><label>Итог набора</label><select id="ntSuite"><option value="failed">только при падениях</option><option value="always">всегда</option><option value="off">не присылать</option></select></div>
             <div><label>Набор падает N раз подряд (0 — нет)</label><input id="ntStreak" type="number" min="0" max="50"></div>
@@ -1831,9 +1842,11 @@ async function loggedIn(me) {
   $$('.adminOnly').forEach(x => x.classList.toggle('hidden', !me.is_admin));
   $('#connPreset').innerHTML = PRESETS.filter(p => !p.admin_only || ME.is_admin)
     .map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
-  await loadProjects(store.get('tg_project'));
-  showTab('home');
-  if (!PROJECTS.length) openWizard(null);   // first start: begin with creating a project
+  // the screen comes from the address (F5, a link); without one - the projects
+  await loadProjects(parseRoute(location.hash).pid || store.get('tg_project'));
+  if (!PROJECTS.length) { showTab('home'); openWizard(null); }   // first start: begin with creating a project
+  else if (location.hash.length > 1) await route();
+  else showTab('home');
   if (SID) poll();
 }
 $('#loginForm').onsubmit = async e => {
@@ -1894,15 +1907,21 @@ async function switchProject(pid) {
   setStudioTask(null);
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
-$('#projSel').onchange = () => switchProject($('#projSel').value);
+$('#projSel').onchange = async () => { await switchProject($('#projSel').value); setRoute(tabPath(curTab())); };
 $('#newProjBtn').onclick = () => { showTab('home'); openWizard(null); };
 async function refreshProject() { PROJ = await api('GET', `/api/projects/${PID}`); }
 
 // ---- tabs
-$$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
-function showTab(t) {
+$$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
+const TABS = ['home', 'studio', 'tests', 'dash', 'tasks', 'req', 'pipe', 'proj'];
+const curTab = () => $('nav button.on')?.dataset.tab || 'home';
+// A tab writes its address when the address shows another tab (an entity opened in it writes its own first);
+// `own` - the person chose the tab: its list, not the entity open in it.
+function showTab(t, own) {
+  const at = parseRoute(location.hash);
+  if (own || routeTab(at) !== t || (at.pid || null) !== (t === 'home' ? null : PID)) setRoute(tabPath(t));
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  ['home', 'studio', 'tests', 'dash', 'tasks', 'req', 'pipe', 'proj'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
+  [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
   if (t === 'home') showHomeList();
   if (t === 'studio') loadInterrupted();
   if (t === 'tests') loadTests();
@@ -1915,6 +1934,117 @@ function showTab(t) {
     if (!$('#tab-proj').dataset.opened) { $('#tab-proj').dataset.opened = '1'; showSub(store.get('tg_settings_sub') || 'general'); }
   }
 }
+
+// ---- addresses of screens: #/projects, #/p/{pid}/{view}[/{id}[/{sec}]] - F5, «Назад»/«Вперёд», links.
+// Opening an entity is a new history entry, closing it - its list. While route() opens what an address
+// names, nothing writes the address (ROUTING).
+let ROUTING = false;
+const VIEW_TAB = {req: 'req', pipe: 'pipe', studio: 'studio', tests: 'tests', runs: 'tests', suites: 'tests',
+                  tasks: 'tasks', dash: 'dash', settings: 'proj', setup: 'home'};
+function parseRoute(hash) {
+  const h = (hash || '').replace(/^#/, '');
+  const old = h.match(/^(suite|test|run)=([\w-]+)$/);      // links of notifications before the addresses
+  if (old) return {old: old[1], id: old[2]};
+  if (h === 'tests') return {old: 'tests'};
+  const parts = h.split('?')[0].split('/').filter(Boolean);
+  if (!parts.length) return {};
+  if (parts[0] === 'projects' && parts.length <= 2) return {tab: 'home', wizard: parts[1] === 'new'};
+  if (parts[0] !== 'p' || !parts[1]) return {unknown: true};
+  return {pid: parts[1], view: parts[2] || 'req', id: parts[3] || '', sec: parts[4] || ''};
+}
+const routeTab = r => r.tab || (r.pid ? VIEW_TAB[r.view] : '');
+const projPath = (...parts) => `/p/${PID}/` + parts.filter(Boolean).join('/');
+function settingsPath(sub, sec) { return projPath('settings', sub, sub === 'data' ? sec : ''); }
+function tabPath(t) {
+  if (t === 'home' || !PID) return '/projects';
+  if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general', store.get('tg_kn_sec') || 'overview');
+  return projPath(t);
+}
+function setRoute(path, replace) {
+  if (ROUTING || location.hash === '#' + path) return;
+  history[replace || location.hash.length <= 1 ? 'replaceState' : 'pushState'](null, '', '#' + path);
+}
+function linkOf(path) { return `${location.origin}${location.pathname}#${path}`; }
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {      // not a secure context (http by an address in the network): the old way
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+}
+async function copyLink(path) { await copyText(linkOf(path)); toast('Ссылка скопирована'); }
+const linkBtn = path => `<button class="btn small" onclick="copyLink('${esc(path)}')" title="Скопировать ссылку на этот экран" aria-label="Скопировать ссылку">🔗</button>`;
+// A missing or foreign object: the same words, existence is not given away.
+function showMissing(r = {}) {
+  const own = r.pid && PROJECTS.some(p => p.id === r.pid) && VIEW_TAB[r.view];
+  $$('nav button').forEach(b => b.classList.remove('on'));
+  [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== 'missing'));
+  const link = $('#missingLink');
+  link.href = '#' + (own ? `/p/${r.pid}/${r.view === 'settings' ? 'settings' : r.view}` : '/projects');
+  link.textContent = own ? 'К списку' : 'К проектам';
+}
+// The checkpoint of a session the studio lost on a restart: offered to continue.
+async function routeSession(sid) {
+  let s;
+  try { s = await api('GET', `/api/sessions/${sid}`); }
+  catch (e) {
+    const cps = e.status === 404 ? await api('GET', `/api/projects/${PID}/sessions`).catch(() => []) : [];
+    if (!cps.some(c => c.id === sid)) throw e;
+    showTab('studio'); setTimeout(() => sessionLost(sid));
+    return;
+  }
+  if (s.project_id && s.project_id !== PID) {
+    if (!PROJECTS.some(p => p.id === s.project_id)) throw Object.assign(new Error('not found'), {status: 404});
+    await switchProject(s.project_id);
+  }
+  openSession(sid);
+}
+async function openRoute(r) {
+  const tab = VIEW_TAB[r.view], id = r.id;
+  if (!tab) return showMissing();
+  if (r.view === 'setup') { showTab('home'); return openWizard(PID); }
+  if (r.view === 'settings') {
+    if (id) { store.set('tg_settings_sub', id); if (id === 'data' && r.sec) store.set('tg_kn_sec', r.sec); }
+    $('#tab-proj').dataset.opened = '1';
+    showTab('proj');
+    return showSub(store.get('tg_settings_sub') || 'general', r.sec || undefined);
+  }
+  if (r.view === 'req' && id) { await api('GET', `/api/analyses/${id}`); return showAnalysis(id); }
+  if (r.view === 'studio' && id) return routeSession(id);
+  showTab(tab);
+  if (r.view === 'tests' && id) return openTest(id);
+  if (r.view === 'runs' && id) return openRun(id);
+  if (r.view === 'suites' && id) return openSuite(id);
+  if (r.view === 'tasks') return id ? openTask(id) : closeTask();
+  if (r.view === 'pipe' && id) return openJob(id);
+  if (r.view === 'tests') ['#testBox', '#runBox', '#suiteBox'].forEach(s => $(s).classList.add('hidden'));
+  // «Назад» from a session to Studio does not close it: the address names the open session again
+  if (r.view === 'studio' && SID && STATE?.project_id === PID) history.replaceState(null, '', '#' + projPath('studio', SID));
+}
+async function route() {
+  let r = parseRoute(location.hash);
+  ROUTING = true;
+  try {
+    if (r.old) {
+      const [view, url] = {test: ['tests', '/api/tests/'], suite: ['suites', '/api/suites/'], run: ['runs', '/api/runs/']}[r.old] || ['tests'];
+      const pid = url ? (await api('GET', url + r.id)).project_id : PID;
+      history.replaceState(null, '', `#/p/${pid}/${view}${r.id ? '/' + r.id : ''}`);
+      r = parseRoute(location.hash);
+    }
+    if (r.unknown) return showMissing();
+    if (!r.pid) { showTab('home'); if (r.wizard) openWizard(null); return; }
+    if (!PROJECTS.some(p => p.id === r.pid)) return showMissing();
+    if (r.pid !== PID) await switchProject(r.pid);
+    await openRoute(r);
+  } catch (e) {
+    if ([403, 404].includes(e.status)) showMissing(r); else toast(e.message, 'bad');
+  } finally { ROUTING = false; }
+}
+window.addEventListener('hashchange', () => { if (ME && location.hash.length > 1) route(); });
+// Studio steps not saved as a test: leaving the page asks first (the session itself lives on the server).
+window.addEventListener('beforeunload', e => {
+  if (SID && STATE?.steps?.length && !TEST_ID && !STATE.test_id && STATE.status !== 'closed') e.preventDefault();
+});
 
 // ---- studio
 let SID = null, STATE = null, TEST_ID = null, pollTimer = null, shotBusy = false, editing = false;
@@ -1944,6 +2074,7 @@ $('#startBtn').onclick = async () => {
 };
 
 function openSession(sid) {
+  setRoute(projPath('studio', sid));
   SID = sid; TEST_ID = null; STATE = null;
   $('#startForm').classList.add('hidden'); $('#resumeBox').classList.add('hidden'); $('#workspace').classList.remove('hidden');
   $('#savedBar').classList.add('hidden');
@@ -2353,6 +2484,7 @@ $('#readyBtn').onclick = async () => {
 };
 function closeWorkspace() {
   SID = null; clearTimeout(pollTimer);
+  if (curTab() === 'studio') setRoute(projPath('studio'), true);     // the session is gone: «Назад» does not lead to it
   $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
   loadInterrupted();
 }
@@ -2367,6 +2499,14 @@ const VERDICT = {product_bug: 'Дефект продукта', test_issue: 'Пр
 const RUN_STATUS = {passed: ['passed', 'ok'], flaky: ['нестабилен', 'warn'], failed: ['failed', 'bad'], error: ['ошибка', 'bad'], running: ['идёт…', 'warn']};
 const VISUAL_VERDICT = {bug: 'похоже на дефект', expected_change: 'ожидаемое изменение — обновите эталон', noise: 'шум рендеринга'};
 let TESTS = [], OPEN_TEST = null, runTimer = null, suiteTimer = null;
+// ✕ of a test, run or suite: its address goes back to what stays open (the test under a run) or the list
+function closeDetail(box) {
+  $(box).classList.add('hidden');
+  if (box === '#testBox') OPEN_TEST = null;
+  if (box === '#runBox') clearTimeout(runTimer);
+  if (box === '#suiteBox') clearTimeout(suiteTimer);
+  setRoute(OPEN_TEST && !$('#testBox').classList.contains('hidden') ? projPath('tests', OPEN_TEST) : projPath('tests'));
+}
 const runBadge = st => { const [t, c] = RUN_STATUS[st] || [st, 'off']; return `<span class="badge ${c}">${esc(t)}</span>`; };
 function hasPublish() { return !!publishConn(); }
 function strip(recent) {
@@ -2545,7 +2685,7 @@ async function delTest(id) {
   if (!ok) return;
   try { await api('DELETE', `/api/tests/${id}`); }
   catch (e) { toast(e.message, 'bad'); return; }
-  if (OPEN_TEST === id) { OPEN_TEST = null; $('#testBox').classList.add('hidden'); }
+  if (OPEN_TEST === id) closeDetail('#testBox');
   toast(name ? `Тест «${name}» удалён` : 'Тест удалён');
   loadTests();
 }
@@ -2596,13 +2736,14 @@ async function retrySuite(sid, btn) {
   try { const {id} = await api('POST', `/api/suites/${sid}/retry`); openSuite(id); loadSuites(); }
   catch (e) { alert(e.message); btn.disabled = false; }
 }
-async function openRun(rid) {
+async function openRun(rid, quiet) {     // quiet: a refresh of the open run, not opening it
   clearTimeout(runTimer);
+  if (!quiet) { setRoute(projPath('runs', rid)); if (curTab() !== 'tests') showTab('tests'); }
   let r;
-  try { r = await api('GET', `/api/runs/${rid}`); } catch (e) { alert(e.message); return; }
+  try { r = await api('GET', `/api/runs/${rid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
   const t = await api('GET', `/api/tests/${r.test_id}`).catch(() => null);
   renderRun(r, t);
-  if (r.status === 'running') runTimer = setTimeout(() => openRun(rid), 900);
+  if (r.status === 'running') runTimer = setTimeout(() => openRun(rid, true), 900);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
 }
 function detailsHtml(r, x, t) {
@@ -2711,7 +2852,8 @@ function renderRun(r, t) {
   let html = `<div class="row"><b class="grow">Прогон: ${esc(r.test_name)} ${runBadge(r.status)}${r.quarantined ? ' <span class="badge warn">в карантине</span>' : ''}</b>
       <span class="muted" style="font-size:12px">${fmtTime(r.started)}${r.user ? ' · ' + esc(r.user) : ''}${usageText(r.usage)}</span>
       ${RETRYABLE.includes(r.status) ? `<button class="btn small" onclick="retryRun('${r.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить прогон</button>` : ''}
-      <button class="btn small" onclick="$('#runBox').classList.add('hidden')">✕</button></div>`;
+      ${linkBtn(projPath('runs', r.id))}
+      <button class="btn small" onclick="closeDetail('#runBox')" aria-label="Закрыть">✕</button></div>`;
   if (r.error) html += `<div class="err">${esc(r.error)}</div>`;
   if (r.flaky) html += '<div class="hint">Упал в первой попытке и прошёл при перезапуске — нестабильный тест.</div>';
   else if (attempts.length > 1) html += '<div class="hint">Упал и при повторном запуске.</div>';
@@ -2773,16 +2915,18 @@ async function acceptBaseline(rid, stepId, btn) {
 }
 
 // test details: history, heal review, mutation testing, traffic
-async function openTest(id, quiet) {
+async function openTest(id, quiet) {     // quiet: a refresh of the open test
   OPEN_TEST = id;
+  if (!quiet) { setRoute(projPath('tests', id)); if (curTab() !== 'tests') showTab('tests'); }
   let t;
-  try { t = await api('GET', `/api/tests/${id}`); } catch (e) { if (!quiet) alert(e.message); return; }
+  try { t = await api('GET', `/api/tests/${id}`); } catch (e) { if (ROUTING && !quiet) throw e; if (!quiet) alert(e.message); return; }
   const [history, traffic] = await Promise.all([api('GET', `/api/tests/${id}/runs`),
     TESTS.find(x => x.id === id)?.has_traffic ? api('GET', `/api/tests/${id}/traffic`) : []]);
   const box = $('#testBox'); box.classList.remove('hidden');
   const stepN = sid => t.steps.findIndex(s => s.id === sid) + 1;
   let html = `<div class="row"><h3 class="grow" style="margin:0">${esc(t.name)}</h3>
-      <button class="btn small" onclick="$('#testBox').classList.add('hidden');OPEN_TEST=null">✕</button></div>
+      ${linkBtn(projPath('tests', t.id))}
+      <button class="btn small" onclick="closeDetail('#testBox')" aria-label="Закрыть">✕</button></div>
     <div class="muted" style="font-size:12px">${esc(t.url)} · шагов: ${t.steps.length}${t.authoring_usage?.requests ? ' · генерация' + usageText(t.authoring_usage) : ''}</div>
     ${t.scenario ? `<div class="hint">${esc(t.scenario)}</div>` : ''}
     ${t.quarantine?.on ? `<div class="hint"><span class="badge warn">карантин</span> ${esc(t.quarantine.reason || '')} ${t.quarantine.by ? '· ' + esc(t.quarantine.by) : ''} ${fmtTime(t.quarantine.at)}</div>` : ''}`;
@@ -3043,10 +3187,11 @@ async function loadSuites() {
     <td class="row">${s.status !== 'running' && !s.passed ? `<button class="btn small" onclick="event.stopPropagation();retrySuite('${s.id}', this)" title="Прогнать заново только упавшие тесты этого набора">Повторить упавшие</button>` : ''}${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit" onclick="event.stopPropagation()">JUnit</a>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="5" class="muted">Наборы ещё не запускались.</td></tr>';
 }
-async function openSuite(sid) {
+async function openSuite(sid, quiet) {
   clearTimeout(suiteTimer);
+  if (!quiet) { setRoute(projPath('suites', sid)); if (curTab() !== 'tests') showTab('tests'); }
   let s;
-  try { s = await api('GET', `/api/suites/${sid}`); } catch (e) { alert(e.message); return; }
+  try { s = await api('GET', `/api/suites/${sid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
   const box = $('#suiteBox'); box.classList.remove('hidden');
   const c = s.summary || {}, total = s.items.length, pct = n => `${(n || 0) / total * 100}%`;
   const doneN = s.items.filter(i => !['queued', 'running'].includes(i.status)).length;
@@ -3054,13 +3199,14 @@ async function openSuite(sid) {
       <span class="muted" style="font-size:12px">${fmtTime(s.started)}${usageText(s.usage)}</span>
       ${s.status !== 'running' && s.items.some(i => RETRYABLE.includes(i.status)) ? `<button class="btn small" onclick="retrySuite('${s.id}', this)" title="Новый прогон набора только из упавших, нестабильных и завершившихся ошибкой тестов">Перезапустить упавшие (${new Set(s.items.filter(i => RETRYABLE.includes(i.status)).map(i => i.test_id)).size})</button>` : ''}
       ${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit">JUnit XML</a>` : ''}
-      <button class="btn small" onclick="$('#suiteBox').classList.add('hidden')">✕</button></div>
+      ${linkBtn(projPath('suites', s.id))}
+      <button class="btn small" onclick="closeDetail('#suiteBox')" aria-label="Закрыть">✕</button></div>
     <div class="bar"><span style="width:${pct(c.passed)};background:var(--ok)"></span><span style="width:${pct(c.flaky)};background:var(--warn)"></span><span style="width:${pct((c.failed || 0) + (c.error || 0))};background:var(--bad)"></span></div>
     <div class="hint">passed ${c.passed || 0} · нестабильных ${c.flaky || 0} · упало ${c.failed || 0} · ошибок ${c.error || 0}${c.quarantined_failed ? ` · из них в карантине ${c.quarantined_failed}` : ''}</div>
     <table><tbody>${s.items.map(i => `<tr ${i.run_id ? `class="click" onclick="openRun('${i.run_id}')"` : ''}><td><b>${esc(i.name)}</b>${i.quarantined ? ' <span class="badge off">карантин</span>' : ''}
       ${i.error ? `<div class="err">${esc(i.failed_step ? i.failed_step + ': ' : '')}${esc(i.error)}</div>` : ''}</td>
       <td>${i.status === 'queued' ? '<span class="muted">в очереди</span>' : runBadge(i.status)}</td><td class="muted">${i.duration != null ? i.duration + ' с' : ''}</td></tr>`).join('')}</tbody></table>`;
-  if (s.status === 'running') suiteTimer = setTimeout(() => openSuite(sid), 1500);
+  if (s.status === 'running') suiteTimer = setTimeout(() => openSuite(sid, true), 1500);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
 }
 
@@ -3129,7 +3275,7 @@ async function loadTasks() {
     return `<tr class="${t.status === 'done' ? 'done' : ''}">
       <td><a href="#" onclick="openTask('${t.id}');return false"><b>${esc(t.title)}</b></a>
         ${desc ? `<div class="muted" style="font-size:12px;white-space:pre-wrap">${esc(desc)}</div>` : ''}
-        ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="showTab('tests');openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}</div>` : ''}</td>
+        ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}</div>` : ''}</td>
       <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select></td>
       <td><span class="badge ${cls}">${esc(pr)}</span></td>
       <td>${esc(t.assignee) || '<span class="muted">—</span>'}</td>
@@ -3150,7 +3296,10 @@ async function setTaskStatus(id, status) {
 }
 async function openTask(id) {
   let t = {};
-  if (id) { try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { alert(e.message); return; } }
+  if (id) {
+    setRoute(projPath('tasks', id));
+    try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { if (ROUTING) throw e; alert(e.message); return; }
+  }
   TASK = t;
   $('#taskHead').textContent = id ? 'Задача' : 'Новая задача';
   $('#taskTitle').value = t.title || ''; $('#taskDesc').value = t.description || '';
@@ -3158,6 +3307,7 @@ async function openTask(id) {
   $('#taskDue').value = t.due || ''; $('#taskAs').value = id ? t.assignee || '' : ME.user;
   $('#taskErr').textContent = '';
   $('#taskDel').classList.toggle('hidden', !id); $('#taskStudio').classList.toggle('hidden', !id);
+  $('#taskLink').classList.toggle('hidden', !id); $('#taskLink').onclick = () => copyLink(projPath('tasks', id));
   // Suggest people already working in the project.
   const people = new Set([ME.user, ...TASKS.map(x => x.assignee), ...TASKS.map(x => x.created_by)].filter(Boolean));
   $('#taskPeople').innerHTML = [...people].map(u => `<option value="${esc(u)}">`).join('');
@@ -3169,7 +3319,7 @@ async function openTask(id) {
   $('#taskBox').scrollIntoView({behavior: 'smooth', block: 'nearest'});
   $('#taskTitle').focus();
 }
-function closeTask() { TASK = null; $('#taskBox').classList.add('hidden'); }
+function closeTask() { TASK = null; $('#taskBox').classList.add('hidden'); if (curTab() === 'tasks') setRoute(projPath('tasks')); }
 $('#taskNew').onclick = () => openTask(null);
 $('#taskCancel').onclick = closeTask;
 $('#taskSave').onclick = async () => {
@@ -3252,7 +3402,7 @@ $('#srcFile').onchange = async e => {
 // The history of analyses: one is open at a time (AN, the scenarios the pipeline designed in SCEN); a scenario
 // is edited in place and saved at once; the tests made from it show under each. Test cases are generated in
 // the pipeline: «Генерировать тест-кейсы в конвейере» starts it from the reviewed requirements.
-let ANALYSES = [], AN = null, SCEN = [], SCEN_OPEN = new Set(), REQ_ABORT = null, STUDIO_SCEN = null;
+let ANALYSES = [], AN = null, AN_WANT = '', AN_LOADING = '', SCEN = [], SCEN_OPEN = new Set(), REQ_ABORT = null, STUDIO_SCEN = null;
 const LOG_LINES = 300;
 const scTypes = () => Object.fromEntries(Object.entries(PROJ.catalog.types).map(([k, v]) => [k, v.label]));
 const scType = k => PROJ.catalog.types[k]?.label || k;
@@ -3329,7 +3479,7 @@ function renderAnalyses() {
     || '<div class="muted" style="margin-top:8px">Проверок пока нет: вставьте требования выше и нажмите «Проверить требования».</div>';
   if (!ANALYSES.length) $('#reqNew').open = true;
   // The analysis in work: the one open, or the latest.
-  if (!AN && ANALYSES.length) selectAnalysis(ANALYSES[0].id);
+  if (!AN && ANALYSES.length) selectAnalysis(ANALYSES.some(a => a.id === AN_WANT) ? AN_WANT : ANALYSES[0].id);
   else renderAnalysis();
 }
 function refreshSummary() {
@@ -3342,12 +3492,17 @@ async function selectAnalysis(aid) {
   $$('.an-row').forEach(r => r.classList.toggle('on', r.dataset.aid === aid));
   if (AN && AN.id === aid) return renderAnalysis();
   $('#anActive').innerHTML = '<div class="card an-work muted">Загрузка…</div>';
-  try { openAnalysis(await api('GET', `/api/analyses/${aid}`)); }
-  catch (err) { $('#anActive').innerHTML = `<div class="card an-work err">${esc(err.message)}</div>`; }
+  AN_LOADING = aid;
+  try {
+    const a = await api('GET', `/api/analyses/${aid}`);
+    if (AN_LOADING === aid) openAnalysis(a);     // another analysis chosen meanwhile: this answer is late
+  }
+  catch (err) { if (AN_LOADING === aid) $('#anActive').innerHTML = `<div class="card an-work err">${esc(err.message)}</div>`; }
 }
 $('#anList').addEventListener('click', e => {
   const row = e.target.closest('.an-row');
   if (!row) return;
+  setRoute(projPath('req', row.dataset.aid));
   selectAnalysis(row.dataset.aid);
   $('#anActive').scrollIntoView({behavior: 'smooth', block: 'start'});
 });
@@ -3373,6 +3528,7 @@ function renderAnalysis() {
   box.innerHTML = `<div class="card an-work" id="an-body-${AN.id}">
     <div class="row" style="gap:10px;align-items:baseline">
       <h3 class="grow" style="margin:0">${esc(AN.feature || AN.title || 'Требования')}</h3>
+      ${linkBtn(projPath('req', AN.id))}
       <span class="badge ${cls}" title="${busy ? 'Пока идёт работа, действия с этими требованиями недоступны' : 'Шаг, на котором сейчас требования'}">${esc(st)}</span>
       <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''} title="Удалить анализ из истории: тесты по его сценариям останутся">Удалить</button></div>
     <div class="hint" style="margin-top:2px">${fmtTime(AN.created)}${AN.user ? ` · ${esc(AN.user)}` : ''}${AN.feature && AN.title && AN.feature !== AN.title ? ` · ${esc(AN.title)}` : ''}</div>
@@ -3720,11 +3876,7 @@ function findingsText() {
 async function copyFindings(btn) {
   const text = findingsText(), n = (text.match(/^\d+\. \[/gm) || []).length, was = btn.textContent;
   if (!n) return alert('В показанном списке нет неразобранных замечаний.');
-  try { await navigator.clipboard.writeText(text); }
-  catch {
-    const ta = document.createElement('textarea');
-    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-  }
+  await copyText(text);
   btn.textContent = `Скопировано: ${n}`;
   setTimeout(() => btn.textContent = was, 2500);
 }
@@ -3758,6 +3910,7 @@ async function fixFindings(btn) {
   } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Исправить ТЗ агентом'; }
 }
 async function showAnalysis(aid, tab = '') {      // an analysis in work in the Requirements tab (a run's, the pipeline's choice)
+  setRoute(projPath('req', aid)); AN_WANT = aid;
   showTab('req');
   await loadAnalyses();
   if (AN?.id !== aid) await selectAnalysis(aid);
@@ -3858,7 +4011,7 @@ function saveScenario(id) {
 }
 $('#anActive').addEventListener('click', async e => {
   const link = e.target.closest('[data-test]');
-  if (link) { e.preventDefault(); showTab('tests'); openTest(link.dataset.test); return; }
+  if (link) { e.preventDefault(); openTest(link.dataset.test); return; }
   const btn = e.target.closest('[data-act]');
   if (btn) {
     const id = btn.dataset.id, sc = scenById(id);
@@ -4063,7 +4216,7 @@ async function loadPipe() {
   if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
   const busy = jobs.find(j => LIVE_JOB.includes(j.status));
   pipeBusy(busy && !(JOB?.id === busy.id && !LIVE_JOB.includes(JOB.status)) ? busy : null);
-  if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id);
+  if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id, true);
 }
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
 const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
@@ -4188,13 +4341,14 @@ async function startPicked() {
   } catch (e) { $('#pipeErr').textContent = e.message; }
   finally { $('#pipeStart').disabled = false; }
 }
-async function openJob(jid) {
+async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
   clearTimeout(jobTimer);
-  try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { alert(e.message); return; }
+  if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); }
+  try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
   renderJob();
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
   else if (PIPE_BUSY?.id === JOB.id) pipeBusy(null);
-  if (LIVE_JOB.includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid), 1500);
+  if (LIVE_JOB.includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid, true), 1500);
   else if (!$('#tab-pipe').classList.contains('hidden')) loadPipe();
 }
 // A pipeline run as a process: the stages with how many scenarios each holds, then the scenarios grouped
@@ -4231,7 +4385,7 @@ function jobItemRow([it, i]) {
   const v = it.verify;
   const quality = !v ? '—' : v.status === 'done' ? `<span class="badge ${v.weak ? 'warn' : 'ok'}">мутанты: ${v.killed}/${v.total}</span>${v.improved ? '<div class="hint">проверки усилены агентом</div>' : ''}`
     : `<span class="badge off" title="${esc(v.error || '')}">${esc(v.status)}</span>`;
-  const run = it.run ? (it.run.run_id ? `<a href="#" onclick="showTab('tests');openRun('${it.run.run_id}');return false">${runBadge(it.run.status || (it.run.passed ? 'passed' : 'failed'))}</a>` : (it.run.passed ? '<span class="ok">passed</span>' : '<span class="err">failed</span>')) +
+  const run = it.run ? (it.run.run_id ? `<a href="#" onclick="openRun('${it.run.run_id}');return false">${runBadge(it.run.status || (it.run.passed ? 'passed' : 'failed'))}</a>` : (it.run.passed ? '<span class="ok">passed</span>' : '<span class="err">failed</span>')) +
     (it.run.healed ? ` · healed ${it.run.healed}` : '') +
     (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
   const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
@@ -4247,7 +4401,7 @@ function jobItemRow([it, i]) {
       ${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
       ${!it.test_id && it.status === 'needs_attention' && it.preflight?.length && it.preflight.every(p => p.kind === 'lifecycle')
         ? `<button class="btn small" onclick="runAnyway(${i})" title="Проверка по жизненному циклу ошиблась или сценарий так и задуман: сгенерировать тест без неё (учётная запись роли проверяется)">Запустить всё равно</button>` : ''}
-      ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}
+      ${it.test_id ? `<button class="btn small" onclick="openTest('${it.test_id}')">Тест</button>` : ''}
       ${it.test_id && canRole('editor') ? `<button class="btn small" onclick="editInStudio('${it.test_id}', this, true)" title="Наглядный прогон теста в Studio: шаг за шагом в Live View">Прогон в Studio</button>` : ''}</td></tr>`;
 }
 function jobItemsTable(rows, key) {
@@ -4262,6 +4416,7 @@ function renderJob() {
   const opened = new Set($$('#jobBox details[data-g][open]').map(d => d.dataset.g));
   let html = `<div class="row"><h3 class="grow" style="margin:0">Запуск от ${fmtTime(j.created)} — ${esc(JOB_STATUS[j.status] || j.status)}</h3>
     ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
+    ${linkBtn(projPath('pipe', j.id))}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}
     ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}
     ${!live && unautomatedItems(j).length ? `<button class="btn small" onclick="automateDuplicates()" title="Сценарии с решением «Не дублировать», которые завершились без теста: если прежний сценарий уже автоматизирован — берётся его тест, иначе тест генерируется и показывается под обоими сценариями">Автоматизировать без теста (${unautomatedItems(j).length})</button>` : ''}
@@ -4445,10 +4600,11 @@ async function openProject(pid) {
   showTab('req');
 }
 $('#homeNew').onclick = () => openWizard(null);
-$('#wzClose').onclick = () => { if (PID) showTab('home'); };
+$('#wzClose').onclick = () => { if (PID) showTab('home', true); };
 
 async function openWizard(pid) {
   if (pid && pid !== PID) await switchProject(pid);
+  setRoute(pid ? projPath('setup') : '/projects/new');
   WIZ = {pid, step: !pid ? 1 : PROJ.llm.model ? 3 : 2, suggestPublish: false};
   $('#homeList').classList.add('hidden'); $('#wizard').classList.remove('hidden');
   $('#wzClose').classList.toggle('hidden', !PROJECTS.length);
@@ -4586,7 +4742,10 @@ $('#wzFinish').onclick = async () => {
 };
 
 // ---- project settings
-function openSettings(sub, sec) { showTab('proj'); showSub(sub, sec); }
+function openSettings(sub, sec) {
+  store.set('tg_settings_sub', sub); if (sub === 'data' && sec) store.set('tg_kn_sec', sec);   // one history entry
+  showTab('proj'); showSub(sub, sec);
+}
 $$('.subnav button').forEach(b => b.onclick = () => showSub(b.dataset.sub, b.dataset.sec));
 // the settings tree: a section with blocks (Тестовые данные) opens its subtree; the last place is remembered
 function showSub(sub, sec) {
@@ -4596,6 +4755,7 @@ function showSub(sub, sec) {
   $('#knTree').classList.toggle('open', sub === 'data');
   $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
   store.set('tg_settings_sub', sub);
+  if (curTab() === 'proj') setRoute(settingsPath(sub, sec));
   if (sub === 'ide') loadTokens();
   if (sub === 'process') loadUsage();
   if (sub === 'access') loadAccess();
@@ -4942,6 +5102,7 @@ $('#mbSave').onclick = async () => {
 };
 function fillNotify() {
   const n = PROJ.notify, set = n.secrets_set || [], ph = k => set.includes(k) ? 'сохранён — введите новый, чтобы заменить' : '';
+  $('#ntNoLinks').classList.toggle('hidden', n.links !== false);
   $('#ntSuite').value = n.events.suite; $('#ntStreak').value = n.events.streak;
   $('#ntProposals').checked = n.events.proposals; $('#ntBudget').checked = n.events.budget;
   $('#ntTg').checked = n.telegram.enabled; $('#ntTgChat').value = n.telegram.chat_id; $('#ntTgToken').value = ''; $('#ntTgToken').placeholder = ph('telegram_token');

@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from testgen import projects, runs, storage, testdata, traffic
+from testgen import defects, notify, projects, runs, storage, testdata, traffic
 from testgen.browser import expand, group_candidates
 
 
@@ -282,3 +282,27 @@ def test_record_and_play_acts_as_a_user_would():
     assert auto_action({"tag": "select", "role": "combobox"}) == "select_option"
     assert auto_action({"tag": "input", "type": "file"}) == "upload_file"
     assert {"fill", "select_option", "upload_file"} == set(VALUE_ACTIONS)
+
+
+def test_notification_links_lead_to_the_screens(monkeypatch):
+    """Links of notifications and defects are addresses of the frontend's router: the project, then the screen."""
+    p = {"id": "p1", "name": "Shop", "notify": {"events": {"suite": "always", "proposals": True}}}
+    suite = {"id": "s1", "passed": False, "tags": ["smoke"], "summary": {"failed": 12, "total": 12},
+             "items": [{"name": f"Тест {n}", "status": "failed", "quarantined": False, "run_id": f"r{n}",
+                        "failed_step": "", "error": "упал"} for n in range(12)]}
+    monkeypatch.delenv("TESTGEN_PUBLIC_URL", raising=False)
+    assert "href" not in notify.message(p, "suite", suite=suite)[1]           # no address of the studio - no links
+    assert notify.public_view(p)["links"] is False
+
+    monkeypatch.setenv("TESTGEN_PUBLIC_URL", "https://tg.test/")
+    text = notify.message(p, "suite", suite=suite)[1]
+    assert text.endswith('<a href="https://tg.test/#/p/p1/suites/s1">Открыть в студии</a>')
+    runs_linked = [f"https://tg.test/#/p/p1/runs/r{n}" for n in range(12) if f"/runs/r{n}\"" in text]
+    assert len(runs_linked) == 10                                             # the failed runs, up to 10
+    assert "#suite=" not in text and "#test=" not in text
+    assert 'href="https://tg.test/#/p/p1/tests/t1"' in notify.message(p, "proposals", test={"id": "t1", "name": "T"},
+                                                                       run={"proposals": 1})[1]
+    assert 'href="https://tg.test/#/p/p1/tests"' in notify.message(p, "streak", n=3)[1]
+    assert notify.public_view(p)["links"] is True
+    report = defects.draft({"name": "T", "steps": []}, {"id": "r1", "project_id": "p1", "results": []})
+    assert "https://tg.test/#/p/p1/runs/r1" in report["text"]

@@ -132,6 +132,8 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
 - `TESTGEN_DATABASE_URL` — обязательный адрес PostgreSQL (`postgresql+psycopg://…`): единственное
   хранилище данных; `TESTGEN_DB_MIGRATE`, `TESTGEN_DB_POOL`.
 - `ANTHROPIC_API_KEY` — ключ для проектов без своего ключа (удобно для CI).
+- `TESTGEN_PUBLIC_URL` — адрес студии для людей: ссылки на экраны (`#/p/<проект>/runs/<id>`, `notify.screen`) в
+  уведомлениях и дефектах; без неё ссылок нет, «Проект → Общие → Уведомления» предупреждает.
 - `TESTGEN_USD_RUB` — курс для пересчёта расходов в рубли (по умолчанию 80).
 - `TESTGEN_OFFLINE=on` — без обращений в интернет: без CDN и `npx` из сети, модель только по адресу API
   проекта (во внутренней сети).
@@ -176,7 +178,10 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `/api/users`, `/api/sso`, `/api/audit`, `/api/ready`, `/metrics`), MCP-сервер на `/mcp` (смонтирован
   последним) и отдача `static/index.html`. Сообщения в интерфейсе — `toast(text, kind)` (успех, исчезает само),
   `notice(el, text)` (ошибка у кнопки или формы) и `ask({title, text, subject, actions})` (модальный вопрос, Promise),
-  не `alert`/`confirm` (`docs/usability-plan.md`, этап 7); смоук-тест интерфейса — `tests/test_ui_nav.py`. Middleware `require_login` пускает без входа только пути из
+  не `alert`/`confirm` (`docs/usability-plan.md`, этап 7); смоук-тест интерфейса — `tests/test_ui_nav.py`. **У экранов есть адреса**
+  (`#/projects`, `#/p/{pid}/{req|pipe|studio|tests|runs|suites|tasks|dash|settings|setup}[/{id}[/{sec}]]`): `route()` открывает
+  экран из адреса (вход, F5, «Назад», ссылка), открытие сущности пишет свой адрес (`setRoute`, новая запись истории), обновление
+  по таймеру — нет (`quiet`); чужое или удалённое — «Не найдено или нет доступа» (`showMissing`); новый экран — в `VIEW_TAB`/`openRoute`. Middleware `require_login` пускает без входа только пути из
   `PUBLIC`, `/mcp` — по API-токену; передаёт запрос экземпляру-владельцу сессии Studio (`_elsewhere`),
   считает метрики и пишет журнал действий (`_audit`, `AUDIT_ACTIONS`). **Доступ к проекту** проверяет
   одна зависимость `guard` для всех маршрутов: ресурс по префиксу пути (`RESOURCES`) → проект → роль

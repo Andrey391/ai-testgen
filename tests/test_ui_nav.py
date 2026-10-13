@@ -101,3 +101,74 @@ def test_delete_test_asks_and_reports(page, studio_url, project, save_test):
     expect(row).to_have_count(0)
     assert page.errors == []
     assert storage.load(t["id"]) is None
+
+
+# ---- addresses of screens (stage 1): F5, «Назад»/«Вперёд», links, the missing
+
+def test_reload_keeps_the_screen(page, studio_url, project, save_test):
+    t = save_test("Тест с адресом", [new_step("navigate", "open", project["base_url"])])
+    _open(page, studio_url, project)
+    page.click("nav button[data-tab=tests]")
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests")
+    page.locator("#testsBody a", has_text="Тест с адресом").click()
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{t['id']}")
+    page.reload()
+    expect(page.locator("#tab-tests")).to_be_visible()
+    expect(page.locator("#testBox")).to_contain_text("Тест с адресом")
+
+    page.click("nav button[data-tab=proj]")
+    page.locator(".subnav button[data-sub=process]").click()
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/settings/process")
+    page.reload()
+    expect(page.locator("[data-subpanel=process]")).to_be_visible()
+    assert page.errors == []
+
+
+def test_back_and_forward_walk_the_entities(page, studio_url, project, save_test):
+    a = save_test("Первый", [new_step("navigate", "open", project["base_url"])])
+    b = save_test("Второй", [new_step("navigate", "open", project["base_url"])])
+    _open(page, studio_url, project)
+    page.click("nav button[data-tab=tests]")
+    page.locator("#testsBody a", has_text="Первый").click()
+    expect(page.locator("#testBox h3")).to_have_text("Первый")
+    page.locator("#testsBody a", has_text="Второй").click()
+    expect(page.locator("#testBox h3")).to_have_text("Второй")
+    page.click("nav button[data-tab=dash]")
+    expect(page.locator("#tab-dash")).to_be_visible()
+
+    page.go_back()
+    expect(page.locator("#testBox h3")).to_have_text("Второй")
+    page.go_back()
+    expect(page.locator("#testBox h3")).to_have_text("Первый")
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{a['id']}")
+    page.go_forward()
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{b['id']}")
+    expect(page.locator("#testBox h3")).to_have_text("Второй")
+    page.locator("#testBox button[aria-label=Закрыть]").click()
+    expect(page.locator("#testBox")).to_be_hidden()
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests")
+    assert page.errors == []
+
+
+def test_missing_or_foreign_address_says_not_found(page, studio_url, project, save_test):
+    _open(page, studio_url, project)
+    page.goto(f"{studio_url}/#/p/{project['id']}/tests/nosuchtest")
+    expect(page.locator("#tab-missing")).to_be_visible()
+    expect(page.locator("#missingLink")).to_have_text("К списку")
+    page.click("#missingLink")
+    expect(page.locator("#tab-tests")).to_be_visible()
+
+    page.goto(f"{studio_url}/#/p/nosuchproject/tests")
+    page.reload()
+    expect(page.locator("#tab-missing")).to_be_visible()
+    expect(page.locator("#missingLink")).to_have_text("К проектам")
+    page.click("#missingLink")
+    expect(page.locator("#tab-home")).to_be_visible()
+
+
+def test_old_notification_links_open_the_screen(page, studio_url, project, save_test):
+    t = save_test("Из уведомления", [new_step("navigate", "open", project["base_url"])])
+    page.goto(f"{studio_url}/#test={t['id']}")
+    expect(page.locator("#testBox h3")).to_have_text("Из уведомления")
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{t['id']}")
+    assert page.errors == []
