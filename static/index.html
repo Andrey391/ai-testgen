@@ -3137,7 +3137,7 @@ function reuseHtml(s, attrs) {
   const m = s.match;
   if (!m) return '';
   return `<div class="hint" style="margin-top:3px;${m.decision ? '' : 'color:var(--warn)'}">≈ Похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${esc(m.title)}» (${REUSE_RELATION[m.relation] || ''}):
-    <select ${attrs} style="width:auto;padding:1px 4px;font-size:12px">${reuseOptions(m)}</select></div>`;
+    <select ${attrs} style="width:auto;padding:1px 4px;font-size:12px">${reuseOptions(m)}</select>${m.kind === 'scenario' && m.decision === 'reuse' && m.automated === false && !(s.tests || []).length ? ' <span style="color:var(--warn)">прежний сценарий не автоматизирован — тест будет создан один на оба</span>' : ''}</div>`;
 }
 const roleBadge = s => s.role ? ` <span class="badge" title="Роль, от которой выполняется сценарий">${esc(s.role)}</span>` : '';
 // ids: [id …] of the records of the application model - the agent fulfils them, the test keeps them (Studio)
@@ -3446,10 +3446,10 @@ $('#anList').addEventListener('change', async e => {
     const sc = await api('PUT', `/api/analyses/${AN.id}/scenarios/${el.dataset.decision}`, {decision: el.value});
     const old = scenById(el.dataset.decision);
     Object.assign(old, {match: sc.match, test_ids: sc.test_ids});
-    if (el.value === 'reuse' && sc.match.kind === 'test') {       // the earlier test is now this scenario's test
+    if (el.value === 'reuse') {       // the earlier test is now this scenario's test; is the earlier scenario automated
       const a = await api('GET', `/api/analyses/${AN.id}`).catch(() => null);
       const fresh = a?.scenarios.find(x => x.id === old.id);
-      if (fresh) old.tests = fresh.tests;
+      if (fresh) Object.assign(old, {tests: fresh.tests, match: fresh.match});
     }
     updateScenRow(old.id);
   } catch (err) { alert(err.message); }
@@ -3578,7 +3578,9 @@ function toStudio(id) {
   if (!sc) return;
   const m = sc.match;
   if (m && !m.decision) return alert(`Сценарий похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${m.title}». Сначала решите в строке сценария: создать новый тест, переиспользовать или доработать прежний.`);
-  if (m?.decision === 'reuse') return alert(m.kind === 'test' ? `Используется прежний тест «${m.title}» — новый не создаётся.` : `Сценарий уже есть: «${m.title}» — новый тест не создаётся.`);
+  if (m?.decision === 'reuse' && m.kind === 'test') return alert(`Используется прежний тест «${m.title}» — новый не создаётся.`);
+  if (m?.decision === 'reuse' && m.automated !== false) return alert(`Сценарий уже есть и автоматизирован: «${m.title}» — новый тест не создаётся.`);
+  // "Не дублировать" a scenario without a test: it is automated once, the test shows under both scenarios
   if (m?.decision === 'refine' && m.kind === 'test') {
     if (!confirm(`Открыть тест «${m.title}» в Studio для доработки под этот сценарий? Тест воспроизведётся, дальше — вы и агент.`)) return;
     showTab('studio');
@@ -3807,6 +3809,7 @@ function renderJob() {
     ${j.usage?.requests ? `<span class="muted" style="font-size:12px">ИИ${usageText(j.usage)}</span>` : ''}
     ${live ? `<button class="btn danger small" onclick="cancelJob()">Остановить</button>` : ''}
     ${['error', 'cancelled'].includes(j.status) ? `<button class="btn primary small" onclick="resumeJob()" title="Доделать запуск с места остановки: готовые сценарии не повторяются, прерванная генерация продолжается с записанных шагов">Продолжить</button>` : ''}
+    ${!live && unautomatedItems(j).length ? `<button class="btn small" onclick="automateDuplicates()" title="Сценарии с решением «Не дублировать», которые завершились без теста: если прежний сценарий уже автоматизирован — берётся его тест, иначе тест генерируется и показывается под обоими сценариями">Автоматизировать без теста (${unautomatedItems(j).length})</button>` : ''}
     ${!live && failedItems(j).length ? `<button class="btn small" onclick="retryJob()" title="Сгенерировать заново все сценарии, где генерация упала с ошибкой агента, агент остановился или не смог пройти сценарий: каждый начинается с новой сессии">Перезапустить сбойные (${failedItems(j).length})</button>` : ''}</div>
     ${jobStepper(j, live)}`;
   const groups = {bug: [], attention: [], active: [], done: [], waiting: []};
@@ -3886,6 +3889,13 @@ function pickAllJob(on) { JOB_PICK.sel = new Set(on ? JOB.scenarios.map((_, i) =
 // Items whose authoring failed (pipeline.retryable): an error of the agent, it stopped or gave up.
 let JOB_REUSE = {};      // decisions chosen in the run awaiting them: they survive the polling
 const failedItems = j => j.items.filter(it => !it.test_id && ['error', 'needs_attention', 'cancelled'].includes(it.status) && !it.bug);
+// "Не дублировать" items done without a test (reuse.unautomated): the earlier scenario was not automated.
+const unautomatedItems = j => j.items.map((it, i) => [it, i]).filter(([it]) => it.status === 'done' && !it.test_id && it.match?.kind === 'scenario' && it.match.decision === 'reuse').map(([, i]) => i);
+async function automateDuplicates() {
+  const indices = unautomatedItems(JOB);
+  if (!confirm(`Автоматизировать ${indices.length} сценариев «Не дублировать» без теста? Если прежний сценарий уже автоматизирован, используется его тест, иначе агент сгенерирует тест (расход модели).`)) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices}); openJob(JOB.id); } catch (e) { alert(e.message); }
+}
 async function retryJob() {
   const n = failedItems(JOB).length;
   if (!confirm(`Перезапустить генерацию ${n} сценариев с ошибкой? Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.`)) return;

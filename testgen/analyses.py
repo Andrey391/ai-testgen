@@ -266,15 +266,24 @@ def delete(pid: str, aid: str) -> bool:
 
 # ---------- tests made from scenarios ----------
 
-def link_test(pid: str, aid: str, scid: str, test_id: str) -> None:
-    if not fs.exists(_path(pid, aid)):
+def link_test(pid: str, aid: str, scid: str, test_id: str, _seen: frozenset = frozenset()) -> None:
+    """The test checks the scenario. A scenario a person decided not to duplicate ("Не дублировать" - the
+    earlier scenario checks the same) gives the test to the earlier scenario as well: it is automated."""
+    if not fs.exists(_path(pid, aid)) or (aid, scid) in _seen:
         return
+    earlier = []
 
     def fn(a):
         for s in a["scenarios"]:
-            if s["id"] == scid and test_id not in s["test_ids"]:
-                s["test_ids"].append(test_id)
+            if s["id"] == scid:
+                if test_id not in s["test_ids"]:
+                    s["test_ids"].append(test_id)
+                m = s.get("match") or {}
+                if m.get("kind") == "scenario" and m.get("decision") == "reuse" and m.get("analysis_id"):
+                    earlier.append((m["analysis_id"], m["id"]))
     _change(pid, aid, fn)
+    for e_aid, e_scid in earlier:
+        link_test(pid, e_aid, e_scid, test_id, _seen | {(aid, scid)})
 
 
 def unlink_test(pid: str, test_id: str) -> None:
@@ -289,7 +298,11 @@ def view(a: dict) -> dict:
     from . import storage
     out = dict(a)
     out["scenarios"] = []
+    from . import reuse
     for s in a["scenarios"]:
+        m = s.get("match") or {}
+        if m.get("kind") == "scenario":       # "Не дублировать" automates an earlier scenario without a test
+            s = s | {"match": m | {"automated": bool(reuse.scenario_tests(a["project_id"], m))}}
         tests = []
         for tid in s.get("test_ids") or []:
             t = storage.load(tid)

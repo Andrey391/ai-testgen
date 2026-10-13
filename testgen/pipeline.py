@@ -794,10 +794,18 @@ class Job:
         earlier = reuse.test_of(project["id"], match) if not test else None
         if test:
             item["session_id"] = None
-        elif match.get("decision") == "reuse" and match["kind"] == "scenario":
-            item["status"], item["summary"] = "done", f"Сценарий уже есть: «{match['title']}» — новый тест не создан"
+        elif match.get("decision") == "reuse" and match["kind"] == "scenario" and reuse.scenario_tests(project["id"], match):
+            # The earlier scenario is automated: its test is this scenario's test.
+            test = reuse.scenario_tests(project["id"], match)[0]
+            item["test_id"] = test["id"]
+            item["summary"] = f"Сценарий уже есть: «{match['title']}» — используется его тест «{test['name']}»"
             self._log(f"«{sc['title']}»: {item['summary']}")
-            return
+        elif match.get("decision") == "reuse" and match["kind"] == "scenario":
+            # Not duplicated, but the earlier scenario has no test: it is automated once, the test goes to both.
+            self._log(f"«{sc['title']}»: сценарий уже есть («{match['title']}»), но не автоматизирован — генерация теста")
+            test = await self._create_test(project, item, sc)
+            if not test:
+                return
         elif match.get("decision") == "reuse" and earlier:
             test = earlier
             item["test_id"], item["summary"] = test["id"], f"Переиспользован тест «{test['name']}»"
@@ -1108,6 +1116,8 @@ def retryable(item: dict, explicit: bool = False) -> bool:
     """An item whose authoring failed - an error of the agent, the agent stopped, gave up or was stopped:
     "Перезапустить" generates it again. A possible defect (the agent saw the application differ from the
     scenario) or a scenario a person cancelled is retried only when a person names it."""
+    if reuse.unautomated(item):
+        return explicit
     return (not item.get("test_id") and item.get("status") in ("error", "needs_attention", "cancelled")
             and (explicit or not item.get("bug") and not item.get("skipped")))
 
