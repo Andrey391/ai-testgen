@@ -748,16 +748,7 @@ class Job:
             self._log("Кейсы не найдены", "warn")
 
     def _model_units(self) -> list[str] | None:
-        """The parts of the application model the run's scenarios need (knowledge.units_for): their groups
-        of entities and the roles; None - one of them names no entity of the model, so the whole model."""
-        doc = knowledge.get(self.project_id)
-        out: list[str] = []
-        for sc in self.scenarios:
-            units = knowledge.units_for(self.project_id, sc, doc)
-            if units is None:
-                return None
-            out += [u for u in units if u not in out]
-        return out
+        return model_units(self.project_id, self.scenarios)
 
     async def _await_model(self) -> None:
         """Tests are generated only from a confirmed lifecycle of the system: entities, dependencies,
@@ -1333,6 +1324,19 @@ def jobs_with_test(pid: str, test_id: str) -> list[dict]:
     return sorted(({"id": j["id"], "created": j.get("created"), "status": j.get("status")} for j in out.values()
                    if any(i.get("test_id") == test_id for i in j.get("items") or [])),
                   key=lambda j: j["created"] or 0, reverse=True)
+
+
+def model_units(pid: str, scenarios: list[dict]) -> list[str] | None:
+    """The parts of the application model the run's scenarios need (knowledge.units_for): their groups
+    of entities and the roles; None - one of them names no entity of the model, so the whole model."""
+    doc = knowledge.get(pid)
+    out: list[str] = []
+    for sc in scenarios:
+        units = knowledge.units_for(pid, sc, doc)
+        if units is None:
+            return None
+        out += [u for u in units if u not in out]
+    return out
 
 
 def get_job(jid: str) -> dict | None:

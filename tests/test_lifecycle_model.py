@@ -177,6 +177,7 @@ def test_confirmation_over_the_api_and_studio_from_a_scenario(monkeypatch):
             "analysis_id": a["id"], "scenario_id": "x"}
     r = client.post("/api/sessions", json=body)
     assert r.status_code == 409 and "жизненный цикл" in r.json()["detail"]
+    assert r.headers.get("X-Preflight") == "model"          # the studio links to the model, no «run anyway»
 
     client.put(f"/api/projects/{p['id']}/knowledge", json=SHOP)
     doc = client.post(f"/api/projects/{p['id']}/knowledge/confirm").json()

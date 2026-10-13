@@ -328,6 +328,26 @@ def confirmation(doc: dict, only: list[str] | None = None) -> dict:
     return {"state": state, "at": c.get("at"), "by": c.get("by", ""), "missing": missing(doc), "units": out}
 
 
+def parts(doc: dict, only: list[str] | None = None) -> dict:
+    """The units of confirmation a run waits for (`only`; None - all of them) with what a person confirms in
+    each: the entities of a group with their dependencies, lifecycle, how they are created and the rules, or
+    the roles with their capabilities and restrictions."""
+    state = confirmation(doc, only)
+    out = []
+    for u in state["units"]:
+        if only is not None and u["unit"] not in only:
+            continue
+        if u["unit"] == ROLES_UNIT:
+            u |= {"roles": [{f: r.get(f) or "" for f in ("id", "name", "capabilities", "restrictions")}
+                            for r in doc["roles"]]}
+        else:
+            u |= {"items": [{f: e.get(f) or ([] if f == "depends_on" else "") for f in
+                             ("id", "name", "depends_on", "lifecycle", "create", "rules")}
+                            for e in doc["entities"] if e["group"] == u["unit"]]}
+        out.append(u)
+    return {"state": state["state"], "missing": state["missing"], "units": out}
+
+
 def _usage(pid: str) -> dict[str, list[dict]]:
     """Which saved tests use or create each data record (their `data_refs`): id -> [{id, name, use}]."""
     from . import storage

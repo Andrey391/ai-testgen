@@ -125,6 +125,33 @@ def test_confirmation_by_parts_of_the_model():
     assert knowledge.is_confirmed(pid)
 
 
+def test_a_run_shows_the_parts_of_the_model_it_waits_for(monkeypatch):
+    import server
+    from fastapi.testclient import TestClient
+    from testgen import auth
+    monkeypatch.setattr(auth, "ENABLED", False)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    pid = _project()["id"]
+    knowledge.save(pid, SHOP)
+    knowledge.confirm(pid, "ann", ["Каталог"])
+    jid = uuid.uuid4().hex[:10]
+    fs.write_json(pipeline._jobs_dir(pid) / f"{jid}.json", {
+        "id": jid, "project_id": pid, "status": "awaiting_model", "created": 1, "items": [],
+        "scenarios": [{"title": "Оплата", "role": "Покупатель", "instructions": "Оплатить заказ"}]})
+    m = client.get(f"/api/jobs/{jid}/model").json()
+    # Only what the scenarios need (an order needs products), with what a person confirms in each part.
+    assert not m["all"] and m["state"] == "changed" and not m["missing"]
+    assert [(u["unit"], u["state"]) for u in m["units"]] == [
+        ("Заказы", "none"), ("Каталог", "confirmed"), (knowledge.ROLES_UNIT, "none")]
+    order = next(e for e in m["units"][0]["items"] if e["name"] == "Заказ")
+    assert order["lifecycle"].startswith("новый → оплачен") and order["depends_on"] == ["Товар (в наличии)", "Покупатель"]
+    assert [r["name"] for r in m["units"][2]["roles"]] == ["Покупатель", "Менеджер"]
+    # The parts confirmed from the run: it needs nothing more, the other parts stay as they were.
+    client.post(f"/api/projects/{pid}/knowledge/confirm", json={"units": ["Заказы", knowledge.ROLES_UNIT]})
+    assert client.get(f"/api/jobs/{jid}/model").json()["state"] == "confirmed" and not knowledge.is_confirmed(pid)
+    assert client.get(f"/api/jobs/{'0' * 10}/model").status_code == 404
+
+
 def test_a_confirmed_model_takes_new_entities_and_roles_from_a_person():
     p = _project()
     pid = p["id"]
