@@ -170,7 +170,7 @@ def test_the_model_learns_only_when_every_finding_is_settled(monkeypatch, fake_l
     assert len(learned) == 1
 
 
-def test_the_pipeline_does_not_teach_the_model_unsettled_requirements(monkeypatch, fake_llm):
+def test_the_pipeline_teaches_the_model_only_settled_requirements(monkeypatch, fake_llm):
     p = _project("Конвейер", requirements={"learn_model": True, "validate": True}, scenarios={"select": "all"})
     learned = []
 
@@ -201,12 +201,19 @@ def test_the_pipeline_does_not_teach_the_model_unsettled_requirements(monkeypatc
         while job.status != "awaiting_review":
             assert not task.done(), job.error
             await asyncio.sleep(0.01)
-        job.accept_review("bob")
+        await asyncio.sleep(0.05)
+        # Waiting for the findings: the model does not learn the requirements, nothing is designed.
+        assert learned == [] and not any(kw.get("output_format") is ScenarioPlan for _, kw in fake_llm.calls)
+        assert any("не разобраны замечания, блокирующие тест-дизайн" in e["text"] for e in job.log)
+        a = analyses.get(job.analysis_id)
+        analyses.decide(p["id"], a["id"], [it["id"] for it in review.unresolved(a["review"])], review.DISMISSED,
+                        note="не про это", user="bob")
+        job.model_confirmed()
         await task
     arun(go())
+    # Settled: the model learns from them once, then the scenarios are designed.
     assert job.status == "done", job.error
-    assert learned == [] and not analyses.get(job.analysis_id).get("learned")
-    assert any("замечаний ревьюера не разобрано 3" in e["text"] for e in job.log)
+    assert learned == [SPEC] and analyses.get(job.analysis_id).get("learned")
 
 
 def _many() -> dict:

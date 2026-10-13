@@ -179,14 +179,23 @@ tr.hl-bad td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
 .finish.failed{border-color:var(--bad)}
 .finish.blocked{border-color:var(--warn)}
 .step.evidence{box-shadow:inset 3px 0 0 var(--ok)}
-details.an{border:1px solid var(--line);border-radius:8px;margin-top:8px;background:var(--panel)}
-details.an[open]{border-color:var(--accent)}
-details.an>summary{list-style:none;cursor:pointer;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-details.an>summary::-webkit-details-marker{display:none}
-details.an>summary .arrow{color:var(--muted);transition:transform .15s;display:inline-block}
-details.an[open]>summary .arrow{transform:rotate(90deg)}
-details.an>summary .an-title{font-weight:600;flex:1;min-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-details.an>.an-body{padding:0 12px 12px}
+/* Requirements: one analysis in work (its steps as tabs), the others - a compact history */
+.an-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer}
+.an-row:hover{border-color:var(--accent)}
+.an-row.on{border-color:var(--accent);background:var(--soft)}
+.an-row .an-title{font-weight:600;flex:1;min-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-work{border-color:var(--accent);margin-top:12px}
+.stepper.tabs .st{cursor:pointer;text-align:left;font:inherit;font-size:12px;color:inherit}
+.stepper.tabs .st:hover .n{color:var(--accent)}
+.stepper.tabs .st.sel{outline:2px solid var(--accent);outline-offset:-2px}
+.stepper .st.lock .n::before{content:"🔒 "}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px}
+.box.next{border-color:var(--accent);background:var(--soft)}
+.box.done{border-color:var(--ok);background:var(--ok-bg)}
+.box.bad{border-color:var(--bad);background:var(--bad-bg)}
+.box.lock{background:var(--bg)}
+.box>.row>b{font-size:14px}
+.box ul{margin:6px 0 0;padding-left:20px}
 .sc-tests{margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .sc-tests a{font-size:12px}
 .scen-list tr.sc-row{cursor:pointer}
@@ -819,8 +828,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 
 <!-- ============ REQUIREMENTS REVIEW ============ -->
 <section id="tab-req" class="hidden">
-  <div class="card">
-    <div class="muted">Сначала требования проверяются. Загрузите ТЗ из Jira, Confluence, YouTrack, Яндекс Трекера или Kaiten (через подключения проекта), из файла (.docx, .pdf, .md) или вставьте текст — ревьюер, отдельный субагент со своим чистым контекстом, найдёт дефекты документа (стандарт, качество требований, правила команды) и расхождения с жизненным циклом системы (статусы, переходы, зависимости, роли из «Тестовых данных»). Тест-кейсы по проверенным требованиям генерирует <a href="#" onclick="showTab('pipe');return false">конвейер</a>.</div>
+  <details class="card" id="reqNew"><summary style="cursor:pointer"><b>＋ Проверить новые требования</b>
+    <span class="muted" style="font-size:12px">— ТЗ из Jira, Confluence, трекера, файла или текстом</span></summary>
+    <div class="muted" style="margin-top:8px">Сначала требования проверяются. Загрузите ТЗ из Jira, Confluence, YouTrack, Яндекс Трекера или Kaiten (через подключения проекта), из файла (.docx, .pdf, .md) или вставьте текст — ревьюер, отдельный субагент со своим чистым контекстом, найдёт дефекты документа (стандарт, качество требований, правила команды) и расхождения с жизненным циклом системы (статусы, переходы, зависимости, роли из «Тестовых данных»). Тест-кейсы по проверенным требованиям генерирует <a href="#" onclick="showTab('pipe');return false">конвейер</a>.</div>
     <label>Ссылка на задачу (Jira, YouTrack, Яндекс Трекер, Kaiten) или страницу Confluence</label>
     <div class="row">
       <input id="srcLink" class="grow" placeholder="https://company.atlassian.net/browse/PROJ-123  ·  …/wiki/spaces/TEAM/pages/123456/…  ·  PROJ-123">
@@ -834,7 +844,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <textarea id="reqText" rows="7" placeholder="Как покупатель, я хочу добавлять товары в корзину, чтобы оформить заказ…"></textarea>
     <div class="row" style="margin-top:10px"><span class="muted grow" id="reqStatus"></span>
       <button class="btn primary" id="reqBtn" title="Ревьюер проверит ТЗ по стандарту (задаётся в «Проект → Требования») и сверит с жизненным циклом системы">Проверить требования</button></div>
-  </div>
+  </details>
   <div id="reqLive" class="card hidden" style="margin-top:12px">
     <div class="row"><span class="dot run" id="reqDot"></span><b class="grow" id="reqStage">Ревью требований…</b>
       <span class="muted" id="reqTimer">0 с</span>
@@ -842,9 +852,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="pbar"><i id="reqBar"></i></div>
     <div class="live-log" id="reqLog" aria-live="polite"></div>
   </div>
+  <div id="anActive"></div>
   <div class="card" style="margin-top:12px">
-    <div class="row"><h3 class="grow" style="margin:0">Проверенные требования</h3><span class="muted" id="anCount"></span></div>
-    <div class="hint">Каждая проверка сохраняется здесь вместе с требованиями и отчётом ревьюера. Исправили ТЗ — проверьте заново; требования готовы — «Генерировать тест-кейсы в конвейере». Сценарии, спроектированные конвейером, и тесты по ним появятся под требованиями.</div>
+    <div class="row"><h3 class="grow" style="margin:0">История проверок</h3><span class="muted" id="anCount"></span></div>
+    <div class="hint">Каждые требования проходят шаги: проверка ревьюером → разбор замечаний → сверка и подтверждение жизненного цикла → сценарии и тесты. Тест-дизайн начинается только после первых трёх. Выберите требования, чтобы продолжить работу с ними.</div>
     <div id="anList" data-paged></div>
   </div>
 </section>
@@ -856,7 +867,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <h2>Запуск конвейера</h2>
     <div class="muted">Генерация тест-кейсов и тестов по настройкам проекта: требования → ревью → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div>
     <div class="flow" id="pipeFlow"></div>
-    <label>Требования, проверенные во вкладке «Требования»</label>
+    <label>Требования, разобранные во вкладке «Требования»</label>
     <select id="pipeReview"></select>
     <div class="hint" id="pipeReviewNote"></div>
     <div id="pipeNewReq">
@@ -866,7 +877,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <button class="btn small" id="pipeFileBtn">Файл ТЗ</button>
       <input type="file" id="pipeFile" accept=".md,.markdown,.txt,.docx,.pdf" multiple class="hidden"></div>
     <textarea id="pipeText" rows="4"></textarea>
-    <div class="hint">Новые требования сначала проверит ревьюер (как во вкладке «Требования»); если он найдёт критичное, конвейер дождётся вашего решения.</div>
+    <div class="hint">Новые требования сначала проверит ревьюер (как во вкладке «Требования»). Сценарии конвейер спроектирует только после того, как вы разберёте замечания и подтвердите жизненный цикл во вкладке «Требования» — до тех пор запуск ждёт.</div>
     </div>
     <details class="opt" id="pipeCasesBox">
       <summary>Автоматизировать ручные кейсы из системы управления тестами</summary>
@@ -3162,7 +3173,6 @@ function reuseHtml(s, attrs) {
 const roleBadge = s => s.role ? ` <span class="badge" title="Роль, от которой выполняется сценарий">${esc(s.role)}</span>` : '';
 // ids: [id …] of the records of the application model - the agent fulfils them, the test keeps them (Studio)
 const scDataText = (s, ids) => (s.test_data || []).map(d => `${d.entity} «${d.name}»` + (d.state ? ` (${d.state})` : '') + (d.details ? ` — ${d.details}` : '') + (d.role ? `; роль: ${d.role}` : '') + (ids && d.record_id ? ` [id ${d.record_id}]` : '')).join('\n');
-const AN_STATUS = {running: ['в работе…', 'warn'], done: ['готово', 'ok'], error: ['ошибка', 'bad'], cancelled: ['остановлено', 'off']};
 const REVIEW_VERDICT = {ready: ['требования готовы', 'ok'], needs_work: ['требования нужно доработать', 'warn'], not_ready: ['требования не готовы', 'bad']};
 const TEST_STATUS = {draft: 'черновик', review: 'на ревью', ready: 'в наборе'};
 const isReady = s => !s.pending;
@@ -3179,85 +3189,232 @@ function reqLog(text) {
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
-// ---- the list of analyses
+// ---- the analyses: one in work (AN) with its steps as tabs, the others a compact history
+// The way of requirements to test design (analyses.readiness on the server): each step is a tab of the
+// analysis in work; scenarios and tests are designed only when the first three are done.
+const AN_STEPS = [['review', 'Требования'], ['findings', 'Замечания'], ['lifecycle', 'Жизненный цикл'], ['scenarios', 'Сценарии и тесты']];
+const STEP_BADGE = {review: ['шаг 1: проверка требований', 'warn'], findings: ['шаг 2: разбор замечаний', 'warn'],
+  lifecycle: ['шаг 3: жизненный цикл', 'warn'], scenarios: ['готово к тест-дизайну', 'ok']};
+const LC_CHECK = 'жизненный цикл';      // the check against the lifecycle in the errors of a report
+let AN_TAB = '';         // the step shown in the analysis in work
+const lcTheme = t => t.ids.every(i => i.startsWith('l'));      // conflicts with the lifecycle and its questions
 async function loadAnalyses() {
   if (!PID) return;
   try { ANALYSES = await api('GET', `/api/projects/${PID}/analyses`); } catch { return; }
   if (AN && AN.project_id !== PID) AN = null;
   renderAnalyses();
 }
-function anSummary(a) {
-  const [st, cls] = AN_STATUS[a.status] || [a.status, 'off'];
-  const n = AN && AN.id === a.id ? SCEN.filter(isReady).length : a.scenarios;
-  const tests = AN && AN.id === a.id ? SCEN.reduce((k, s) => k + (s.tests || []).length, 0) : a.tests;
-  const rv = AN && AN.id === a.id ? AN.review : a.review;
-  const [vt, vcls] = rv ? REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'] : ['не проверены', 'off'];
-  return `<span class="arrow">▸</span>
-    <span class="muted" style="font-size:12px;white-space:nowrap">${fmtTime(a.created)}</span>
+function anStepBadge(a, step) {
+  if (a.status === 'running') return ['в работе…', 'warn'];
+  if (!a.review) return a.status === 'error' ? ['ошибка проверки', 'bad'] : ['не проверены', 'off'];
+  return STEP_BADGE[step] || [step, 'off'];
+}
+function anRow(a) {
+  const on = AN && AN.id === a.id;
+  const n = on ? SCEN.filter(isReady).length : a.scenarios;
+  const tests = on ? SCEN.reduce((k, s) => k + (s.tests || []).length, 0) : a.tests;
+  const [st, cls] = anStepBadge(a, on ? AN.readiness?.step : a.step);
+  return `<span class="muted" style="font-size:12px;white-space:nowrap">${fmtTime(a.created)}</span>
     <span class="an-title" title="${esc(a.title)}">${esc(a.feature || a.title || 'Требования')}${a.feature && a.title && a.feature !== a.title ? ` <span class="muted" style="font-weight:400">— ${esc(a.title)}</span>` : ''}</span>
-    <span class="badge ${vcls}" title="Отчёт ревьюера">${esc(vt)}</span>
+    <span class="badge ${cls}">${esc(st)}</span>
     ${n ? `<span class="badge">сценариев: ${n}</span><span class="badge ${tests ? 'ok' : 'off'}">тестов: ${tests}</span>` : ''}
-    ${a.status !== 'done' ? `<span class="badge ${cls}" title="${esc(a.error || '')}">${esc(st)}</span>` : ''}
     ${a.user ? `<span class="muted" style="font-size:12px">${esc(a.user)}</span>` : ''}`;
 }
 function renderAnalyses() {
   $('#anCount').textContent = ANALYSES.length ? `${ANALYSES.length}` : '';
-  $('#anList').innerHTML = ANALYSES.map(a => `<details class="an" data-aid="${a.id}" ${AN && AN.id === a.id ? 'open' : ''}>
-      <summary>${anSummary(a)}</summary><div class="an-body" id="an-body-${a.id}"></div></details>`).join('')
+  $('#anList').innerHTML = ANALYSES.map(a => `<div class="an-row${AN && AN.id === a.id ? ' on' : ''}" data-aid="${a.id}">${anRow(a)}</div>`).join('')
     || '<div class="muted" style="margin-top:8px">Проверок пока нет: вставьте требования выше и нажмите «Проверить требования».</div>';
-  if (AN && $(`#an-body-${AN.id}`)) renderAnalysis();
+  if (!ANALYSES.length) $('#reqNew').open = true;
+  // The analysis in work: the one open, or the latest.
+  if (!AN && ANALYSES.length) selectAnalysis(ANALYSES[0].id);
+  else renderAnalysis();
 }
 function refreshSummary() {
   if (!AN) return;
-  const a = ANALYSES.find(x => x.id === AN.id), el = $(`details.an[data-aid="${AN.id}"] > summary`);
-  if (a && el) { Object.assign(a, {feature: AN.feature, status: AN.status, error: AN.error, review: AN.review}); el.innerHTML = anSummary(a); }
+  const a = ANALYSES.find(x => x.id === AN.id), el = $(`.an-row[data-aid="${AN.id}"]`);
+  if (a) Object.assign(a, {feature: AN.feature, status: AN.status, error: AN.error, review: AN.review, step: AN.readiness?.step || a.step});
+  if (a && el) el.innerHTML = anRow(a);
 }
-$('#anList').addEventListener('toggle', async e => {
-  const d = e.target;
-  if (!d.matches || !d.matches('details.an')) return;
-  const aid = d.dataset.aid;
-  if (!d.open) { if (AN && AN.id === aid && !REQ_ABORT) { AN = null; SCEN = []; } return; }
-  $$('details.an[open]').forEach(x => { if (x !== d) x.open = false; });
+async function selectAnalysis(aid) {
+  $$('.an-row').forEach(r => r.classList.toggle('on', r.dataset.aid === aid));
   if (AN && AN.id === aid) return renderAnalysis();
-  $(`#an-body-${aid}`).innerHTML = '<div class="muted">Загрузка…</div>';
+  $('#anActive').innerHTML = '<div class="card an-work muted">Загрузка…</div>';
   try { openAnalysis(await api('GET', `/api/analyses/${aid}`)); }
-  catch (err) { $(`#an-body-${aid}`).innerHTML = `<div class="err">${esc(err.message)}</div>`; }
-}, true);
+  catch (err) { $('#anActive').innerHTML = `<div class="card an-work err">${esc(err.message)}</div>`; }
+}
+$('#anList').addEventListener('click', e => {
+  const row = e.target.closest('.an-row');
+  if (!row) return;
+  selectAnalysis(row.dataset.aid);
+  $('#anActive').scrollIntoView({behavior: 'smooth', block: 'start'});
+});
 function openAnalysis(a) {
-  if (AN?.id !== a.id) FIX_MSG = '';
+  if (AN?.id !== a.id) { FIX_MSG = ''; AN_TAB = ''; }
   AN = a; SCEN = a.scenarios.map(s => ({...s, sel: true})); SCEN_OPEN = new Set();
+  if (!AN_TAB) AN_TAB = a.readiness?.step || 'review';     // opened: the step to work on
   renderAnalysis(); refreshSummary();
 }
+// Reloads the analysis in work: what the person did elsewhere (the model confirmed) moves its steps.
+async function reloadAnalysis() {
+  if (AN) openAnalysis(await api('GET', `/api/analyses/${AN.id}`));
+}
+function anTab(k) { AN_TAB = k; renderAnalysis(); $('#anActive').scrollIntoView({behavior: 'smooth', block: 'start'}); }
 function renderAnalysis() {
-  const body = AN && $(`#an-body-${AN.id}`);
-  if (!body) return;
+  const box = $('#anActive');
+  if (!box) return;
+  if (!AN) { box.innerHTML = ''; return; }
   const busy = AN.status === 'running' || !!REQ_ABORT;
-  const rv = AN.review, revs = AN.revisions || [];
-  const unsettled = rv?.items ? rv.items.filter(x => x.blocking && (x.status === 'open' || x.status === 'todo')).length : 0;
-  body.innerHTML = `
-    <details class="opt"><summary>Требования${AN.url ? ` · ${esc(AN.url)}` : ''}${revs.length ? ` · исправлены агентом: ${revs.length}` : ''}</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
-      ${revs.length ? `<details class="opt"><summary>Последнее исправление — ${fmtTime(revs[revs.length - 1].at)}${revs[revs.length - 1].by ? `, ${esc(revs[revs.length - 1].by)}` : ''}</summary>
-        <div class="hint">${esc(revs[revs.length - 1].summary || '')}</div>
-        ${(revs[revs.length - 1].edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
-          <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}</details>` : ''}
-      <button class="btn small" onclick="reuseRequirements()">Вставить в поле требований</button></details>
-    ${rv ? reviewHtml(rv, true) : !AN.validation && !busy ? '<div class="hint">Требования ещё не проверены ревьюером.</div>' : ''}
-    ${!rv && AN.validation ? `<details class="opt"><summary>Проверка ТЗ: ${AN.validation.score}/100 — ${esc(VERDICTS[AN.validation.verdict] || AN.validation.verdict)}</summary>${validationHtml(AN.validation)}</details>` : ''}
+  const r = AN.readiness || {done: {}, blocked: [], parts: [], missing: [], step: 'review'};
+  const tab = AN_TAB || r.step;
+  const [st, cls] = busy ? [AN.work === 'design' ? 'проектирование сценариев…' : 'проверка ревьюером…', 'warn'] : anStepBadge(AN, r.step);
+  box.innerHTML = `<div class="card an-work" id="an-body-${AN.id}">
+    <div class="row" style="gap:10px;align-items:baseline">
+      <h3 class="grow" style="margin:0">${esc(AN.feature || AN.title || 'Требования')}</h3>
+      <span class="badge ${cls}" title="${busy ? 'Пока идёт работа, действия с этими требованиями недоступны' : 'Шаг, на котором сейчас требования'}">${esc(st)}</span>
+      <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''} title="Удалить анализ из истории: тесты по его сценариям останутся">Удалить</button></div>
+    <div class="hint" style="margin-top:2px">${fmtTime(AN.created)}${AN.user ? ` · ${esc(AN.user)}` : ''}${AN.feature && AN.title && AN.feature !== AN.title ? ` · ${esc(AN.title)}` : ''}</div>
+    ${stepTabs(r, tab, busy)}
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
-    <div class="row" style="margin-top:8px"><span class="grow"></span>
-      <button class="btn small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''} title="Проверить требования этого анализа ревьюером заново: дефекты ТЗ и соответствие жизненному циклу системы">${rv ? 'Проверить заново' : 'Проверить требования'}</button>
-      <button class="btn small" onclick="learnFromAnalysis(this)" ${unsettled ? 'disabled' : ''} title="${unsettled ? `Сначала разберите замечания ревьюера, блокирующие тест-дизайн (осталось ${unsettled}): модель приложения учится только на согласованных требованиях` : 'Дополнить модель приложения (сущности, зависимости, жизненный цикл, роли) требованиями этого анализа'}">В модель приложения</button>
-      <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''}>Удалить анализ</button>
-      <button class="btn primary" onclick="toPipeline()" ${busy || !rv ? 'disabled' : ''} title="${rv ? 'Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты' : 'Сначала проверьте требования'}">Генерировать тест-кейсы в конвейере →</button></div>
-    ${AN.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${AN.assumptions.map(esc).join('; ')}</div>` : ''}
-    <div id="scenBox" class="${SCEN.length ? '' : 'hidden'}">
-      <div class="row" style="margin-top:12px"><b class="grow">Сценарии из конвейера и тесты по ним</b><span class="muted" id="scenCount"></span>
-        <button class="btn small" onclick="pickInPipeline()" title="Отметить сценарии этих требований в списке конвейера, чтобы сгенерировать по ним тесты">Выбрать в конвейере →</button></div>
-      <table class="scen-list" style="margin-top:8px"><thead><tr><th>#</th><th>Сценарий и тесты по нему</th><th>Тип</th><th>Приоритет</th><th></th></tr></thead>
-        <tbody id="scenList"></tbody></table></div>`;
+    ${tab === 'review' ? reqTabHtml(r, busy) : tab === 'findings' ? findTabHtml(r, busy) : tab === 'lifecycle' ? lcTabHtml(r, busy) : scenTabHtml(r, busy)}</div>`;
   $('#anDelete').onclick = deleteAnalysis;
   applyFindFilter();
   renderScenarios();
+}
+function stepTabs(r, tab, busy) {
+  const rv = AN.review, ts = rv?.themes || [];
+  const block = ts.filter(t => !lcTheme(t) && t.blocking), blockLeft = block.filter(themeLeft);
+  const tests = SCEN.reduce((k, s) => k + (s.tests || []).length, 0);
+  const cap = {
+    review: busy && AN.work !== 'design' ? 'проверка идёт…' : !rv ? 'не проверены' : !r.done.review ? 'проверка не завершена'
+      : `проверены${(AN.revisions || []).length ? `, исправлены: ${AN.revisions.length}` : ''}`,
+    findings: !r.done.review ? '—' : block.length ? `разобрано ${block.length - blockLeft.length} из ${block.length}` : 'блокирующих нет',
+    lifecycle: !rv ? '—' : r.done.lifecycle ? 'подтверждён' : rv.errors?.[LC_CHECK] ? 'сверка не выполнена'
+      : r.lifecycle_left ? `расхождений: ${r.lifecycle_left}` : !r.done.findings ? 'после разбора замечаний'
+      : r.learn && !r.learned ? 'модель не обновлена' : 'ждёт подтверждения',
+    scenarios: !r.ready ? 'после шагов 1–3' : SCEN.length ? `сценариев ${SCEN.length}, тестов ${tests}` : 'можно генерировать',
+  };
+  return `<div class="stepper tabs">${AN_STEPS.map(([k, name], i) => {
+    const cls = [r.done[k] || (k === 'scenarios' && r.ready && tests) ? 'done' : '', r.step === k && !busy ? 'cur' : '',
+                 tab === k ? 'sel' : '', k === 'scenarios' && !r.ready ? 'lock' : ''].filter(Boolean).join(' ');
+    return `<button class="st ${cls}" onclick="anTab('${k}')"><div class="n">${i + 1}. ${name}</div><div class="c">${esc(cap[k])}</div></button>`;
+  }).join('')}</div>`;
+}
+const nextBtn = (k, label) => `<button class="btn primary small" onclick="anTab('${k}')">${label} →</button>`;
+const lockBox = text => `<div class="box lock">${text}</div>`;
+// Step 1: the requirements and the reviewer's check of them.
+function reqTabHtml(r, busy) {
+  const rv = AN.review, v = rv?.validation, revs = AN.revisions || [], last = revs[revs.length - 1];
+  const errs = Object.entries(rv?.errors || {}).filter(([k]) => k !== LC_CHECK);
+  const [vt] = rv ? REVIEW_VERDICT[rv.verdict] || [rv.verdict] : [''];
+  const before = last && rv && last.at > rv.at;
+  let head;
+  if (busy && AN.work !== 'design') head = '<div class="box next"><b>Ревьюер проверяет требования</b><div class="hint">Ход проверки — в карточке выше; отчёт появится здесь.</div></div>';
+  else if (!rv) head = `<div class="box next"><div class="row"><b class="grow">Требования ещё не проверены ревьюером</b>
+      <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить требования</button></div></div>`;
+  else if (errs.length) head = `<div class="box bad"><div class="row"><b class="grow">Проверка документа не выполнена</b>
+      <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить заново</button></div>
+      ${errs.map(([k, e]) => `<div class="hint">«${esc(k)}»: ${esc(e)}</div>`).join('')}</div>`;
+  else head = `<div class="box done"><div class="row" style="gap:8px"><b class="grow">✓ Требования проверены ревьюером${rv.at ? ` ${fmtTime(rv.at)}` : ''}</b>
+      <button class="btn small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''} title="Проверить требования заново: решения по прежним замечаниям ревьюер учтёт">Проверить заново</button>
+      ${nextBtn('findings', 'Дальше: замечания')}</div>
+      <div class="hint">Оценка ревьюера: ${esc(vt)}${v ? `, документ — ${v.score}/100` : ''}${before ? ' (до исправлений агентом — проверьте заново, чтобы увидеть текущую)' : ''}.</div></div>`;
+  const std = v?.suggested_standard && PROJ.catalog.standards?.[v.suggested_standard];
+  const fit = v && v.standard_fits === false ? `<div class="hint">Документ — ${esc(v.document_kind || 'другого вида')}: стандарт «${esc(v.standard_title || '')}» для него не предназначен, разделы стандарта не считаются дефектами.
+      ${std ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
+      стандарт проекта — в «Проект → Требования».</div>` : '';
+  return head + fit + `
+    <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${revs.length ? ` · исправлен агентом: ${revs.length}` : ''}</summary>
+      <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
+      ${last ? `<details class="opt"><summary>Последнее исправление — ${fmtTime(last.at)}${last.by ? `, ${esc(last.by)}` : ''}</summary>
+        <div class="hint">${esc(last.summary || '')}</div>
+        ${(last.edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
+          <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}</details>` : ''}
+      <button class="btn small" style="margin-top:6px" onclick="reuseRequirements()">Вставить в поле новых требований</button></details>
+    ${v ? `<details class="opt"><summary>Подробности проверки документа — ${v.score}/100${before ? ' до исправлений' : ''}</summary>${validationHtml(v, true)}</details>` : ''}`;
+}
+// Step 2: the findings on the document (the conflicts with the lifecycle - step 3).
+function findTabHtml(r, busy) {
+  const rv = AN.review;
+  if (!rv || !r.done.review) return lockBox('Сначала требования должны быть проверены ревьюером — шаг 1.');
+  const ts = rv.themes.filter(t => !lcTheme(t)), block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
+  const blockLeft = block.filter(themeLeft), todo = ts.filter(t => t.status === 'todo');
+  if (blockLeft.length || todo.length) return findingsWork(rv, ts, busy);
+  // everything that blocks test design is settled: the step is done, what is left is history and the optional
+  const fixed = block.filter(t => t.status === 'fixed').length, qLeft = quality.filter(themeLeft);
+  const settled = ts.filter(t => !themeLeft(t));
+  return `<div class="box done"><div class="row"><b class="grow">✓ ${block.length ? `Замечания, блокирующие тест-дизайн, разобраны: ${block.length} из ${block.length}` : 'Замечаний, блокирующих тест-дизайн, нет'}</b>
+      ${nextBtn('lifecycle', 'Дальше: жизненный цикл')}</div>
+      ${block.length ? `<div class="hint">Исправлено в ТЗ: ${fixed}, не актуально: ${block.length - fixed}.${(AN.revisions || []).length ? ' Исправленный текст — на шаге «Требования».' : ''}</div>` : ''}
+      ${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
+    ${qLeft.length ? `<details class="opt"><summary>Качество документа — не обязательно: не разобрано ${qLeft.length} из ${quality.length}</summary>
+      <div class="hint">Оформление и незначительные замечания: тест-дизайн и модель приложения их не ждут.</div>${qLeft.map(t => themeCard(rv, t, true)).join('')}</details>` : ''}
+    ${settled.length ? `<details class="opt"><summary>Разобранные замечания (${settled.length})</summary>${settled.map(t => themeCard(rv, t, true)).join('')}</details>` : ''}`;
+}
+// Step 3: the check against the lifecycle, its conflicts, the model taught by the requirements and confirmed.
+function lcTabHtml(r, busy) {
+  const rv = AN.review;
+  if (!rv) return lockBox('Сначала требования должны быть проверены ревьюером — шаг 1.');
+  const err = rv.errors?.[LC_CHECK], ts = rv.themes.filter(lcTheme), left = ts.filter(themeLeft);
+  const todo = rv.themes.filter(t => t.status === 'todo');
+  let html = '';
+  if (err) html += `<div class="box bad"><div class="row"><b class="grow">Сверка с жизненным циклом системы не выполнена</b>
+      <button class="btn primary small" onclick="recheckLifecycle(this)" ${busy ? 'disabled' : ''}>Повторить сверку</button></div>
+      <div class="hint">${esc(err)}. Замечания к документу и решения по ним сохранятся.</div></div>`;
+  else if (rv.lifecycle) html += lifecycleHtml(rv.lifecycle, true);
+  if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: не разобрано ${left.length} из ${ts.length}</b>
+      ${todo.length ? `<button class="btn primary small" onclick="fixFindings(this)" ${busy ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом (${todo.length})</button>` : ''}</div>
+      <div class="hint">Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным.</div>${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
+    ${left.map(t => themeCard(rv, t, true)).join('')}`;
+  else if (!err && !ts.length && rv.lifecycle) html += '<div class="hint">Расхождений с жизненным циклом нет.</div>';
+  const settled = ts.filter(t => !themeLeft(t));
+  if (settled.length) html += `<details class="opt"><summary>Разобранные расхождения (${settled.length})</summary>${settled.map(t => themeCard(rv, t, true)).join('')}</details>`;
+  // the application model: taught by the settled requirements, then the parts they touch confirmed by a person
+  if (err || left.length || !r.done.findings) html += lockBox(`<b>Модель приложения</b><div class="hint">Обновится по требованиям и будет ждать подтверждения, когда разобраны ${!r.done.findings ? '<a href="#" onclick="anTab(\'findings\');return false">замечания к документу</a> и ' : ''}расхождения с жизненным циклом.</div>`);
+  else if (r.learn && !r.learned) html += `<div class="box next"><div class="row"><b class="grow">Модель приложения ещё не обновлена по этим требованиям</b>
+      <button class="btn primary small" onclick="learnFromAnalysis(this)" ${busy ? 'disabled' : ''} title="Сущности, зависимости, жизненный цикл и роли из требований — в модель приложения">Обновить модель приложения</button></div>
+      <div class="hint">Новое и изменения придут в «Тестовые данные» и будут ждать подтверждения.</div></div>`;
+  else if (r.confirm && r.state !== 'confirmed') html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Подтвердите жизненный цикл системы, который затрагивают требования</b>
+      <button class="btn small" onclick="openSettings('data', 'overview')" title="Диаграммы сущностей, состояний и переходов, роли и их возможности">Посмотреть модель</button>
+      <button class="btn primary small" onclick="confirmLifecycle(this)" ${busy || r.missing.length ? 'disabled' : ''}>Подтвердить жизненный цикл</button></div>
+      <div class="hint">Сущности, статусы и переходы, зависимости, роли и их возможности — тест-дизайн опирается на них.</div>
+      ${r.parts.length ? `<div style="margin-top:6px">${r.parts.map(u => `<span class="badge ${u.state === 'confirmed' ? 'ok' : u.state === 'changed' ? 'warn' : 'off'}">${esc(u.title)}${u.entities ? ` · ${u.entities}` : ''} — ${esc(MODEL_STATE[u.state] || u.state)}</span>`).join(' ')}</div>` : ''}
+      ${r.missing.length ? `<div class="err">Модель нельзя подтвердить: ${esc(r.missing.join('; '))} — дополните её в «Тестовых данных».</div>` : ''}</div>`;
+  else html += `<div class="box done"><div class="row"><b class="grow">✓ Жизненный цикл ${r.confirm ? 'подтверждён' : 'сверен'}${r.parts.length ? `: ${esc(r.parts.map(u => u.title).join(', '))}` : ''}</b>
+      ${nextBtn('scenarios', 'Дальше: сценарии и тесты')}</div></div>`;
+  return html;
+}
+// Step 4: scenarios and tests - only from requirements that went through steps 1-3.
+function scenTabHtml(r, busy) {
+  const scen = `<div id="scenBox" class="${SCEN.length ? '' : 'hidden'}">
+      <div class="row" style="margin-top:12px"><b class="grow">Сценарии и тесты по ним</b><span class="muted" id="scenCount"></span>
+        ${r.ready ? '<button class="btn small" onclick="pickInPipeline()" title="Отметить сценарии этих требований в списке конвейера, чтобы сгенерировать по ним тесты">Выбрать в конвейере →</button>' : ''}</div>
+      <table class="scen-list" style="margin-top:8px"><thead><tr><th>#</th><th>Сценарий и тесты по нему</th><th>Тип</th><th>Приоритет</th><th></th></tr></thead>
+        <tbody id="scenList"></tbody></table></div>
+    ${AN.assumptions?.length ? `<details class="opt"><summary>Допущения при проектировании (${AN.assumptions.length})</summary><ul style="margin:4px 0">${AN.assumptions.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}`;
+  if (!r.ready) {
+    const to = AN_STEPS.find(([k]) => k === r.step);
+    return `<div class="box lock"><div class="row"><b class="grow">🔒 Тест-дизайн начнётся, когда требования разобраны и жизненный цикл подтверждён</b>
+        ${to && r.step !== 'scenarios' ? nextBtn(r.step, `Перейти: ${to[1].toLowerCase()}`) : ''}</div>
+      <ul>${r.blocked.map(b => `<li class="hint" style="margin:0">${esc(b)}</li>`).join('')}</ul></div>` + scen;
+  }
+  return `<div class="box next"><div class="row"><b class="grow">Требования готовы к тест-дизайну</b>
+      <button class="btn primary small" onclick="toPipeline()" ${busy ? 'disabled' : ''} title="Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты">Генерировать тест-кейсы в конвейере →</button></div>
+      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div></div>` + scen;
+}
+async function recheckLifecycle(btn) {
+  btn.disabled = true; btn.textContent = 'Сверка идёт…';
+  try {
+    const r = await api('POST', `/api/analyses/${AN.id}/review/lifecycle`);
+    FIX_MSG = r.model || '';
+    openAnalysis(r.analysis);
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Повторить сверку'; }
+}
+async function confirmLifecycle(btn) {
+  btn.disabled = true; btn.textContent = 'Подтверждение…';
+  try {
+    await api('POST', `/api/projects/${PID}/knowledge/confirm`, {units: AN.readiness.units});
+    await reloadAnalysis();
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Подтвердить жизненный цикл'; }
 }
 // ---- what to design in this generation: layers, kinds of checks, techniques (defaults: Проект → Сценарии)
 function renderDesignChoices() {
@@ -3382,51 +3539,45 @@ function applyFindFilter() {
   });
   $('#findEmpty')?.classList.toggle('hidden', !!shown || !cards.length);
 }
-function reviewHtml(rv, editable) {
+// The reviewer's report as a run of the pipeline keeps it: read only (the findings are settled in «Требования»).
+function reviewHtml(rv) {
   const [vt, vcls] = REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'];
-  const errors = Object.entries(rv.errors || {}), v = rv.validation, busy = reviewBusy();
+  const errors = Object.entries(rv.errors || {}), v = rv.validation;
   const head = `<div class="row" style="margin-top:8px"><b class="grow">Отчёт ревьюера${rv.at ? ` <span class="muted" style="font-weight:400;font-size:12px">— ${fmtTime(rv.at)}</span>` : ''}</b>
       <span class="badge ${vcls}">${esc(vt)}</span></div>
     ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(e)}</div>`).join('')}`;
   if (!rv.themes)       // a report kept elsewhere (a run of the pipeline): as the reviewer gave it
     return head + (v ? `<details class="opt" open><summary><b>Дефекты ТЗ</b> — ${v.score}/100, замечаний ${v.findings.length}</summary>${validationHtml(v)}</details>` : '')
       + (rv.lifecycle ? `<details class="opt" open><summary><b>Соответствие жизненному циклу системы</b> — расхождений ${rv.lifecycle.conflicts.filter(c => c.kind !== 'new').length}</summary>${lifecycleHtml(rv.lifecycle)}</details>` : '');
-  const ts = rv.themes, block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
-  const blockLeft = block.filter(themeLeft), todo = ts.filter(t => t.status === 'todo');
-  const accept = blockLeft.filter(t => t.status === 'open' && !t.question);
-  const std = v?.suggested_standard && PROJ.catalog.standards?.[v.suggested_standard];
-  const fit = v && v.standard_fits === false ? `<div class="hint" style="color:var(--warn)">Документ — ${esc(v.document_kind || 'другого вида')}: стандарт «${esc(v.standard_title || '')}» для него не предназначен, разделы стандарта не считаются дефектами.
-      ${std && editable ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
-      стандарт проекта — в «Проект → Требования».</div>` : '';
-  const progress = editable && ts.length ? `<div class="card" style="margin-top:8px;padding:8px">
-      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: разобрано ${block.length - blockLeft.length} из ${block.length}</b>
-        ${quality.length ? `<span class="muted" style="font-size:12px" title="Оформление документа и незначительные замечания: модель приложения и тест-дизайн их не ждут">качество документа: не разобрано ${quality.filter(themeLeft).length} из ${quality.length} — не обязательно</span>` : ''}</div>
-      <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><span class="grow"></span>
-        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings(this)" ${busy ? 'disabled' : ''} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}
+  return head + (rv.themes.length ? rv.themes.map(t => themeCard(rv, t, false)).join('') : '<div class="hint">Замечаний нет.</div>')
+    + `<details class="opt"><summary>Подробности проверки${v ? ` — ${v.score}/100` : ''}</summary>
+      ${v ? validationHtml(v, true) : ''}${rv.lifecycle ? lifecycleHtml(rv.lifecycle, true) : ''}</details>`;
+}
+// Step 2 at work: what is left to settle on the document, the tools to settle it, the list of themes `ts`.
+function findingsWork(rv, ts, busy) {
+  const block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
+  const blockLeft = block.filter(themeLeft), todo = rv.themes.filter(t => t.status === 'todo');
+  const accept = rv.themes.filter(t => t.blocking && t.status === 'open' && !t.question);
+  return `<div class="box next">
+      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: разобрано ${block.length - blockLeft.length} из ${block.length}${todo.length ? `, ждут исправления агентом: ${todo.length}` : ''}</b>
+        <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="${todo.length ? 'Агент внесёт ответы в ТЗ; прежний текст сохранится' : 'Сначала ответьте на замечания ниже'}">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
+      <div class="hint">Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным. Похожие замечания собраны в темы: один ответ на тему.${quality.length ? ` Качество документа (${quality.length}) — не обязательно.` : ''}</div>
+      <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
         <button class="btn small" onclick="copyFindings(this)" title="Неразобранные замечания и вопросы показанного списка — одним текстом для аналитика или автора ТЗ">Скопировать для аналитика</button>
         <button class="btn small" onclick="$('#ansBox').classList.toggle('hidden');$('#ansText').focus()" ${busy ? 'disabled' : ''} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям">Вставить ответы аналитика</button>
         ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${busy ? 'disabled' : ''} title="Исправить неразобранные блокирующие замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
-        <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
+        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings(this)" ${busy ? 'disabled' : ''} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}</div>
       <div id="ansBox" class="hidden" style="margin-top:6px">
         <textarea id="ansText" rows="6" style="width:100%" placeholder="Ответы аналитика — списком, письмом, в любом порядке. Номера и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным."></textarea>
         <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small primary" onclick="pasteAnswers(this)">Разнести по замечаниям</button></div></div>
-      <div class="hint" style="margin:4px 0 0">${blockLeft.length
-        ? 'Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным. Похожие замечания обеих проверок собраны в темы: один ответ на тему. Модель приложения обновится по ТЗ, когда будут разобраны блокирующие замечания; качество документа её не держит.'
-        : AN?.learned ? 'Блокирующие замечания разобраны, модель приложения обновлена по согласованным требованиям. Проверьте исправленное ТЗ заново, если нужно.'
-        : 'Блокирующие замечания разобраны. Проверьте исправленное ТЗ заново, если нужно.'}</div>
-      ${FIX_MSG ? `<div class="hint" style="margin:4px 0 0">${esc(FIX_MSG)}</div>` : ''}</div>` : '';
-  const list = ts.length ? `<div class="row" style="gap:10px;margin-top:8px;align-items:center">
+      ${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
+    <div class="row" style="gap:10px;margin-top:8px;align-items:center">
       <select style="width:auto" onchange="FIND_SHOW=this.value;applyFindFilter()">
         ${[['blocking', `Блокируют тест-дизайн (${block.length})`], ['quality', `Качество документа (${quality.length})`], ['all', `Все (${ts.length})`]]
           .map(([k, t]) => `<option value="${k}" ${FIND_SHOW === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <label class="inline"><input type="checkbox" ${FIND_LEFT ? 'checked' : ''} onchange="FIND_LEFT=this.checked;applyFindFilter()"> только неразобранные</label></div>
-    <div id="findList">${ts.map(t => themeCard(rv, t, editable)).join('')}</div>
-    <div class="hint hidden" id="findEmpty">В этом списке ничего не осталось — смените фильтр, чтобы увидеть остальное.</div>` : '<div class="hint">Замечаний нет.</div>';
-  return head + `
-    ${rv.verdict === 'not_ready' && blockLeft.length ? `<div class="hint" style="color:var(--bad)">Есть критичные замечания: ${editable ? 'разберите их ниже' : 'исправьте ТЗ'} и проверьте заново — или генерируйте тест-кейсы, понимая риск.</div>` : ''}
-    ${fit}${progress}${list}
-    <details class="opt"><summary>Подробности проверки${v ? ` — ${v.score}/100` : ''}</summary>
-      ${v ? validationHtml(v, true) : ''}${rv.lifecycle ? lifecycleHtml(rv.lifecycle, true) : ''}</details>`;
+    <div id="findList">${ts.map(t => themeCard(rv, t, true)).join('')}</div>
+    <div class="hint hidden" id="findEmpty">В этом списке ничего не осталось — смените фильтр, чтобы увидеть остальное.</div>`;
 }
 function decideTheme(tid, status) {
   const rv = AN.review, t = rv.themes.find(x => x.id === tid);
@@ -3503,21 +3654,26 @@ async function fixFindings(btn) {
     openAnalysis(r.analysis);
   } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Исправить ТЗ агентом'; }
 }
-async function showAnalysis(aid) {      // the analysis that keeps a run's scenarios, open in the Requirements tab
+async function showAnalysis(aid, tab = '') {      // an analysis in work in the Requirements tab (a run's, the pipeline's choice)
   showTab('req');
   await loadAnalyses();
-  const d = $(`details.an[data-aid="${aid}"]`);
-  if (d) { d.open = true; d.scrollIntoView({block: 'start'}); }
+  if (AN?.id !== aid) await selectAnalysis(aid);
+  if (tab && AN?.id === aid) AN_TAB = tab;
+  renderAnalysis();
+  $('#anActive').scrollIntoView({block: 'start'});
 }
 async function learnFromAnalysis(btn) {
-  btn.disabled = true; btn.textContent = 'Анализ…';
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Модель учится на требованиях…';
   try {
     const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: AN.id});
-    btn.textContent = `В модели: сущностей ${k.entities.length}, ролей ${k.roles.length}`;
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'В модель приложения'; }
+    FIX_MSG = `Модель приложения: сущностей ${k.entities.length}, ролей ${k.roles.length}.`;
+    await reloadAnalysis();
+  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = was; }
 }
 
 function reuseRequirements() {
+  $('#reqNew').open = true;
   $('#reqText').value = AN.requirements;
   $('#reqText').scrollIntoView({behavior: 'smooth'}); $('#reqText').focus();
 }
@@ -3597,7 +3753,7 @@ function saveScenario(id) {
     } catch (e) { if (msg) msg.textContent = e.message; }
   }, 500);
 }
-$('#anList').addEventListener('click', async e => {
+$('#anActive').addEventListener('click', async e => {
   const link = e.target.closest('[data-test]');
   if (link) { e.preventDefault(); showTab('tests'); openTest(link.dataset.test); return; }
   const btn = e.target.closest('[data-act]');
@@ -3620,7 +3776,7 @@ $('#anList').addEventListener('click', async e => {
   updateScenRow(id);
   if (SCEN_OPEN.has(id)) $(`#sc-edit-${id} [data-f="instructions"]`)?.focus();
 });
-$('#anList').addEventListener('change', async e => {
+$('#anActive').addEventListener('change', async e => {
   const el = e.target.closest('[data-decision]');
   if (!el) return;
   try {
@@ -3635,7 +3791,7 @@ $('#anList').addEventListener('change', async e => {
     updateScenRow(old.id);
   } catch (err) { alert(err.message); }
 });
-$('#anList').addEventListener('input', e => {
+$('#anActive').addEventListener('input', e => {
   const el = e.target, sc = el.dataset.id && scenById(el.dataset.id);
   if (!sc || !el.dataset.f) return;
   sc[el.dataset.f] = el.value;
@@ -3647,9 +3803,8 @@ $('#anList').addEventListener('input', e => {
 });
 // ---- to the pipeline: test cases are generated there, from the reviewed requirements
 async function toPipeline() {
-  const rv = AN.review;
-  if (!rv) return alert('Сначала проверьте требования.');
-  if (rv.verdict === 'not_ready' && !confirm('Ревьюер нашёл критичные замечания: тест-кейсы по таким требованиям могут проверять не то. Всё равно генерировать?')) return;
+  // Test design only from settled requirements and a confirmed lifecycle: the step left is shown instead.
+  if (!AN.readiness?.ready) return anTab('scenarios');
   showTab('pipe');
   await loadPipeReviews();
   $('#pipeReview').value = AN.id; pipeReviewChanged();
@@ -3674,6 +3829,7 @@ function reqEvent(ev) {
     if (AN) { AN.review = ev.review; renderAnalysis(); refreshSummary(); }
     $('#reqBar').style.width = '80%';
   } else if (ev.type === 'done') {
+    AN_TAB = ev.analysis.readiness?.step || AN_TAB;      // the review is done: on to the step to work on
     openAnalysis(ev.analysis); REQ_ABORT = null; renderAnalysis(); refreshSummary();
   } else if (ev.type === 'error') throw new Error(ev.text);
 }
@@ -3821,17 +3977,17 @@ let PIPE_REVIEWS = [];
 async function loadPipeReviews() {
   try { PIPE_REVIEWS = (await api('GET', `/api/projects/${PID}/analyses`)).filter(a => a.review); } catch { PIPE_REVIEWS = []; }
   const cur = $('#pipeReview').value;
+  // Only the requirements that went through their steps (settled, the lifecycle confirmed) can be chosen.
   $('#pipeReview').innerHTML = `<option value="">— новые требования: ссылки или текст ниже —</option>` + PIPE_REVIEWS.map(a =>
-    `<option value="${a.id}">${esc(fmtTime(a.created))} · ${esc(a.feature || a.title || 'Требования')} — ${esc((REVIEW_VERDICT[a.review.verdict] || [a.review.verdict])[0])}${a.scenarios ? `, сценариев ${a.scenarios}` : ''}</option>`).join('');
-  if (PIPE_REVIEWS.some(a => a.id === cur)) $('#pipeReview').value = cur;
+    `<option value="${a.id}" ${a.step === 'scenarios' ? '' : 'disabled'}>${esc(fmtTime(a.created))} · ${esc(a.feature || a.title || 'Требования')} — ${esc(anStepBadge(a, a.step)[0])}${a.scenarios ? `, сценариев ${a.scenarios}` : ''}</option>`).join('');
+  if (PIPE_REVIEWS.some(a => a.id === cur && a.step === 'scenarios')) $('#pipeReview').value = cur;
   pipeReviewChanged();
 }
 function pipeReviewChanged() {
   const a = PIPE_REVIEWS.find(x => x.id === $('#pipeReview').value);
   $('#pipeNewReq').classList.toggle('hidden', !!a);
-  $('#pipeReviewNote').innerHTML = !a ? (PIPE_REVIEWS.length ? '' : 'Проверенных требований пока нет: проверьте ТЗ во вкладке <a href="#" onclick="showTab(\'req\');return false">«Требования»</a> — или укажите новые требования ниже.')
+  $('#pipeReviewNote').innerHTML = !a ? (PIPE_REVIEWS.some(x => x.step === 'scenarios') ? '' : 'Готовых к тест-дизайну требований пока нет: проверьте и разберите их во вкладке <a href="#" onclick="showTab(\'req\');return false">«Требования»</a> (замечания, жизненный цикл) — или укажите новые требования ниже: запуск дождётся их разбора.')
     : `Конвейер спроектирует сценарии по этим требованиям (повторной проверки не будет) и сгенерирует тесты. <a href="#" onclick="showAnalysis('${a.id}');return false">Отчёт ревьюера</a>` +
-      (a.review.verdict === 'not_ready' ? ' · <span class="err">есть критичные замечания</span>' : '') +
       (a.scenarios ? ` · <span class="warn">по ним уже есть сценарии (${a.scenarios}) — новые добавятся к ним; уже спроектированные можно отметить в списке ниже</span>` : '');
 }
 $('#pipeReview').onchange = pipeReviewChanged;
@@ -3901,7 +4057,6 @@ $('#pipeStart').onclick = async () => {
   if (!reviewed && !links.length && !text && !explore && !caseConn) { $('#pipeErr').textContent = 'Выберите проверенные требования, укажите ссылки, текст, ручные кейсы или включите исследование сайта'; return; }
   if (reviewed && (explore || caseConn)) { $('#pipeErr').textContent = 'Проверенные требования запускаются отдельно: снимите «Исследовать сайт» и ручные кейсы'; return; }
   if (!$('#pipeUrl').value.trim() && !PROJ.base_url) { $('#pipeErr').textContent = 'Укажите URL приложения (или задайте его в настройках проекта)'; return; }
-  if (reviewed?.review.verdict === 'not_ready' && !confirm('По этим требованиям ревьюер нашёл критичные замечания. Генерировать тест-кейсы всё равно?')) return;
   $('#pipeStart').disabled = true;
   try {
     const r = await api('POST', `/api/projects/${PID}/jobs`, reviewed
@@ -4019,13 +4174,14 @@ function renderJob() {
         ${k(groups.active.length, 'в работе')}${k(groups.done.length, 'готово', 'ok')}${k(groups.waiting.length, live ? 'в очереди' : 'не начато или прервано')}</div>`;
   }
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
-  if (j.status === 'awaiting_review' && j.review) {
-    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: ревьюер нашёл в требованиях критичное — тест-кейсы по ним могут проверять не то. Исправьте ТЗ и проверьте заново во вкладке «Требования» — или продолжите генерацию по этим требованиям.</span>
+  // Test design waits for the requirements to be settled: in the Requirements tab; the run goes on by itself.
+  if (j.status === 'awaiting_review' || (j.status === 'awaiting_model' && j.stage === 'requirements' && j.analysis_id)) {
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: тест-дизайн начнётся, когда требования разобраны —
+        ${j.status === 'awaiting_review' ? 'замечания ревьюера и расхождения с жизненным циклом' : 'модель приложения обновлена и жизненный цикл подтверждён'} — во вкладке «Требования». Запуск продолжится сам.</span>
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
-      <button class="btn primary" onclick="acceptJobReview()">Продолжить генерацию</button></div>
-      <div style="padding:0 10px 8px">${reviewHtml(j.review)}</div></div>`;
-  }
-  if (j.status === 'awaiting_model') {
+      ${j.analysis_id ? `<button class="btn primary" onclick="showAnalysis('${j.analysis_id}')">Разобрать требования →</button>` : ''}</div>
+      ${j.review ? `<details class="opt" style="margin:0 10px 8px"><summary>Отчёт ревьюера</summary>${reviewHtml(j.review)}</details>` : ''}</div>`;
+  } else if (j.status === 'awaiting_model') {
     html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите жизненный цикл системы — сущности, статусы и переходы, роли и их возможности. Тесты генерируются только по подтверждённой модели.</span>
       <button class="btn" onclick="openSettings('data', 'overview')">Открыть модель</button>
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
@@ -4113,10 +4269,6 @@ async function runAnyway(i) {    // the lifecycle check stopped the item: a pers
 async function applyReuse() {
   const decisions = Object.fromEntries($$('#jobBox select[data-reuse]').map(el => [el.dataset.reuse, el.value]).filter(([, v]) => v));
   try { await api('POST', `/api/jobs/${JOB.id}/reuse`, {decisions}); JOB_REUSE = {}; setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
-}
-async function acceptJobReview() {
-  if (!confirm('Продолжить генерацию тест-кейсов по требованиям с критичными замечаниями ревьюера?')) return;
-  try { await api('POST', `/api/jobs/${JOB.id}/review`); setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
 }
 async function confirmModelFromJob() {
   try { await api('POST', `/api/projects/${PID}/knowledge/confirm`); openJob(JOB.id); }

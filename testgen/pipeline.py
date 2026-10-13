@@ -311,11 +311,11 @@ class Job:
         self.validation: dict | None = None     # the specification checked against the documentation standard
         # The reviewer's report on the requirements (review.review): what blocks test design waits for a person.
         self.review: dict | None = None
-        self.review_accepted = ""               # who let the run go on in spite of the blocking findings
+        # Kept in the states of earlier versions: who let a run go on in spite of the blocking findings. Test
+        # design waits for the requirements to be settled now (analyses.readiness), nobody skips it.
+        self.review_accepted = ""
         # Requirements reviewed in the Requirements tab: the run designs the scenarios of that analysis.
         self.review_id = review_id
-        if review_id:
-            self.review_accepted = user or "студия"     # a person read the report and sent them here
         # The analysis of requirements that keeps the scenarios this run designed: the ones not chosen for
         # automation stay in the common list of scenarios for a later run or the Studio.
         self.analysis_id = ""
@@ -356,14 +356,7 @@ class Job:
         self._selected.set()
 
     def model_confirmed(self) -> None:
-        self._wake.set()
-
-    def accept_review(self, user: str = "") -> None:
-        """A person read what the reviewer found and lets the run design tests from these requirements."""
-        if self.status != "awaiting_review":
-            return
-        self.review_accepted = user or "студия"
-        self.save()
+        """The application model or the requirements the run waits for changed: it looks again."""
         self._wake.set()
 
     def session_saved(self, sid: str, test: dict) -> None:
@@ -603,6 +596,7 @@ class Job:
             raise ValueError("Анализ требований не найден")
         if not analyses.reviewed(a):
             raise ValueError("Требования ещё не проверены: «Проверить требования» во вкладке «Требования»")
+        analyses.require_ready(a, project)
         self.requirements.append({"source": "Требования", "title": f"Проверенные требования: {a['title'] or 'без названия'}",
                                   "chars": len(a["requirements"])})
         self.review = a["review"]
@@ -635,18 +629,14 @@ class Job:
         learn_from - what the application model learns from ("" - nothing)."""
         if spec and self.review is None and cfg["requirements"]["validate"]:
             await self._review(project, spec)
-        if review.blocking(self.review) and not self.review_accepted:
-            await self._await_review()
+        if self.review is not None and not self.review_id:
+            # Scenarios are designed only from settled requirements and a confirmed lifecycle of the system.
+            await self._await_requirements(learn_from)
             if self._cancel:
                 return
         learn = None
-        left = review.unresolved((analyses.get(self.analysis_id) or {}).get("review") if self.analysis_id else self.review)
-        if cfg["requirements"].get("learn_model") and learn_from and left:
-            # The lifecycle of the system takes in only what the authors settled: the model learns from these
-            # requirements once every finding is fixed or marked not relevant in the Requirements tab.
-            self._log(f"Модель приложения не обновляется по требованиям: замечаний ревьюера не разобрано {len(left)} — "
-                      "исправьте их или отметьте неактуальными во вкладке «Требования»", "warn")
-        elif cfg["requirements"].get("learn_model") and learn_from:
+        a = analyses.get(self.analysis_id) if self.analysis_id else None
+        if cfg["requirements"].get("learn_model") and learn_from and not (a or {}).get("learned")                 and self.review is None:
             learn = asyncio.create_task(knowledge.extract(project, learn_from, self.user))
 
         try:
@@ -799,25 +789,59 @@ class Job:
             self.review = await review.review(project, spec, log=self._log, done=self.review_parts, keep=keep)
             self.review_parts = {}
         except Exception as e:
-            self._log(f"Проверка требований не удалась: {_err(e)}", "warn")
-            return
+            # Test design waits for reviewed requirements: «Продолжить» reviews them again.
+            raise RuntimeError(f"Проверка требований не удалась: {_err(e)}") from e
         self.validation = self.review.get("validation")
         if self.analysis_id:
             analyses.set_review(self.project_id, self.analysis_id, self.review)
         self.save()
 
-    async def _await_review(self) -> None:
-        """The reviewer found what blocks test design (critical findings, the document is not ready): a person
-        reads the report and lets the run go on («Продолжить генерацию») or stops it to fix the requirements."""
-        self.status = "awaiting_review"
-        self._log("Ревьюер нашёл в требованиях то, что мешает проектированию тестов: прочитайте отчёт и "
-                  "продолжите генерацию или остановите запуск, чтобы исправить ТЗ", "warn")
-        while not self._cancel and not self.review_accepted:
+    async def _await_requirements(self, learn_from: str) -> None:
+        """Test design starts only from settled requirements (analyses.readiness): every finding of the reviewer
+        that blocks it fixed or marked not relevant, both checks finished, the application model taught by the
+        requirements and the parts of it they touch confirmed by a person. The run waits for that in the
+        Requirements tab (awaiting_review - the findings, awaiting_model - the lifecycle); nothing skips it."""
+        if not self.analysis_id:
+            if review.unresolved(self.review) or self.review.get("errors"):
+                raise ValueError("Требования не разобраны, а без этапа «Сценарии» разобрать их негде: проверьте их "
+                                 "во вкладке «Требования»")
+            return
+        said, tried = None, False
+        while not self._cancel:
+            project = projects.get(self.project_id)
+            a = analyses.get(self.analysis_id)
+            if not a:
+                raise ValueError("Анализ требований удалён")
+            r = analyses.readiness(a, project)
+            if r["ready"]:
+                break
+            if r["settled"] and r["learn"] and not r["learned"] and learn_from and not tried:
+                tried = True
+                self._log("Требования разобраны: модель приложения учится на них — новое ждёт подтверждения")
+                try:
+                    doc = await knowledge.extract(project, learn_from, self.user)
+                    analyses.mark_learned(self.project_id, self.analysis_id)
+                    self._log(f"Модель приложения обновлена: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}")
+                except Exception as e:
+                    self._log(f"Модель приложения не обновлена: {_err(e)} — «В модель приложения» во вкладке "
+                              "«Требования»", "warn")
+                continue
+            status = "awaiting_review" if not r["settled"] else "awaiting_model"
+            if (status, r["blocked"]) != said:
+                said = (status, r["blocked"])
+                self.status = status
+                self._log("Тест-дизайн ждёт разбора требований во вкладке «Требования»: " + "; ".join(r["blocked"]),
+                          "warn")
+                self.save()
             self._wake.clear()
-            await self._wake.wait()
+            try:
+                await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
+            except asyncio.TimeoutError:
+                pass
         if not self._cancel:
+            if said:
+                self._log("Требования разобраны, жизненный цикл подтверждён: проектирование сценариев")
             self.status = "running"
-            self._log(f"Генерация по требованиям с замечаниями ревьюера продолжена ({self.review_accepted})")
 
     def _undecided(self) -> list[dict]:
         return [it for it in self.items if it["status"] not in DONE_ITEMS and reuse.pending(it.get("match"))]

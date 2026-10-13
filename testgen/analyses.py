@@ -138,7 +138,9 @@ def _change(pid: str, aid: str, fn) -> dict:
 
 
 def list_analyses(pid: str, limit: int = 50) -> list[dict]:
-    out = []
+    """The history, newest first; `step` - where each analysis is on the way to test design (readiness())."""
+    from . import knowledge
+    out, project, doc = [], projects.get(pid), knowledge.get(pid)
     for _, text, _ in fs.documents(_dir(pid)):
         try:
             a = _stale(json.loads(text))
@@ -149,7 +151,8 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
         out.append({k: a.get(k) for k in ("id", "created", "finished", "user", "title", "feature", "status", "error",
                                           "url")}
                    | {"scenarios": len(ready), "tests": sum(len(s.get("test_ids") or []) for s in ready),
-                      "review": {"verdict": rv.get("verdict"), "at": rv.get("at")} if rv else None})
+                      "review": {"verdict": rv.get("verdict"), "at": rv.get("at")} if rv else None,
+                      "step": readiness(a, project, doc)["step"]})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:limit]
 
 
@@ -438,6 +441,17 @@ def revise(pid: str, aid: str, result: dict, user: str = "") -> dict:
     return _change(pid, aid, fn)
 
 
+def set_lifecycle(pid: str, aid: str, lc: dict) -> None:
+    """The check against the lifecycle made again (review.with_lifecycle): the decisions on the document stay."""
+    from . import review
+
+    def fn(a):
+        if not a.get("review"):
+            raise KeyError("review")
+        a["review"] = review.with_lifecycle(a["review"], lc)
+    _change(pid, aid, fn)
+
+
 def mark_learned(pid: str, aid: str) -> None:
     """The application model has learned from these requirements: the pipeline does not extract them again."""
     if fs.exists(_path(pid, aid)):
@@ -447,6 +461,77 @@ def mark_learned(pid: str, aid: str) -> None:
 def reviewed(a: dict) -> bool:
     """The reviewer has a report on the requirements of the analysis."""
     return bool(a.get("review"))
+
+
+STEPS = ("review", "findings", "lifecycle", "scenarios")
+LIFECYCLE_CHECK = "жизненный цикл"      # the name of the check against the lifecycle in a report's errors
+
+
+def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> dict:
+    """The way of the requirements to test design, step by step (STEPS): review - the reviewer checked the
+    document and the lifecycle, both checks finished; findings - every finding that blocks test design is
+    settled; lifecycle - the application model learned from the requirements ("requirements.learn_model") and a
+    person confirmed the parts of it they touch ("requirements.confirm_model"). Scenarios, and tests from them,
+    are designed only when all are done: `ready`; `settled` - the review alone (findings and checks, not the
+    model) is done; `blocked` - why not, for the person; `step` - the first one
+    left. `units` - the parts of the model to confirm (None - all of it) with `parts` - their state."""
+    from . import explorer, knowledge, review
+    project = project or projects.get(a["project_id"]) or {}
+    cfg = (project.get("pipeline") or {}).get("requirements") or {}
+    rv = a.get("review")
+    blocked: list[str] = []
+    errors = (rv or {}).get("errors") or {}
+    if not rv:
+        blocked.append("требования не проверены ревьюером")
+    for name, error in errors.items():
+        blocked.append(f"проверка «{name}» не выполнена: {error}")
+    # Counted by themes, as a person settles them: a theme of the lifecycle alone (its conflicts and questions,
+    # l<i>/lq<i>) is settled with the lifecycle, the others with the document.
+    left = [t for t in review.themes(rv) if t["blocking"] and t["status"] in (review.OPEN, review.TODO)]
+    lc_left = [t for t in left if all(i.startswith("l") for i in t["ids"])]
+    if len(left) > len(lc_left):
+        blocked.append(f"не разобраны замечания, блокирующие тест-дизайн: {len(left) - len(lc_left)}")
+    if lc_left:
+        blocked.append(f"не разобраны расхождения с жизненным циклом: {len(lc_left)}")
+    text = a.get("requirements") or ""
+    learn = bool(cfg.get("learn_model")) and not text.lstrip().startswith(explorer.MAP_TITLE)
+    learned = bool(a.get("learned"))
+    if rv and learn and not learned:
+        blocked.append("модель приложения ещё не обновлена по этим требованиям")
+    confirm = bool(cfg.get("confirm_model"))
+    units, parts, state = None, [], "confirmed"
+    if confirm and a.get("project_id"):
+        doc = doc or knowledge.get(a["project_id"])
+        units = knowledge.units_for(a["project_id"], text, doc)
+        c = knowledge.confirmation(doc, units)
+        state = c["state"]
+        parts = [u for u in c["units"] if units is None or u["unit"] in units]
+        if state != "confirmed":
+            todo = [u["title"] for u in parts if u["state"] != "confirmed"]
+            blocked.append("жизненный цикл системы не подтверждён" + (f": {', '.join(todo)}" if todo else "")
+                           + (f" (не хватает: {'; '.join(c['missing'])})" if c["missing"] else ""))
+    # A failed check of the document holds the review back; a failed check of the lifecycle - the lifecycle.
+    done = {"review": bool(rv) and not set(errors) - {LIFECYCLE_CHECK}}
+    done["findings"] = done["review"] and len(left) == len(lc_left)
+    done["lifecycle"] = (bool(rv) and LIFECYCLE_CHECK not in errors and not lc_left and (not learn or learned)
+                         and state == "confirmed")
+    step = next((s for s in STEPS[:-1] if not done[s]), "scenarios")
+    return {"ready": not blocked, "blocked": blocked, "step": step, "done": done,
+            "settled": bool(rv) and not errors and not left,
+            "left": len(left) - len(lc_left), "lifecycle_left": len(lc_left),
+            "learn": learn, "learned": learned, "confirm": confirm, "units": units, "parts": parts,
+            "state": state, "missing": knowledge.missing(doc) if doc else []}
+
+
+class NotReady(ValueError):
+    """Test design from requirements that are not settled yet (readiness())."""
+
+
+def require_ready(a: dict, project: dict | None = None) -> None:
+    r = readiness(a, project)
+    if not r["ready"]:
+        raise NotReady("Тест-дизайн по этим требованиям начнётся, когда они разобраны и жизненный цикл подтверждён "
+                       "(вкладка «Требования»): " + "; ".join(r["blocked"]))
 
 
 def restart(pid: str, aid: str, force: bool = False, work: str = "review") -> dict:
@@ -503,6 +588,7 @@ def view(a: dict) -> dict:
     from . import review, storage
     out = dict(a)
     out["review"] = review.public(a.get("review"))
+    out["readiness"] = readiness(a)
     out["scenarios"] = []
     from . import reuse
     for s in a["scenarios"]:
