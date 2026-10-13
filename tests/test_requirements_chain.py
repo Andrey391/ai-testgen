@@ -123,16 +123,16 @@ def test_a_failed_validation_does_not_stop_the_scenarios(monkeypatch, fake_llm):
     p = _project("Без проверки", requirements={"validate": True, "learn_model": False})
     client = TestClient(server.app, base_url="http://127.0.0.1:8765")
     with client.stream("POST", "/api/scenarios", json={"project_id": p["id"], "requirements": SPEC,
-                                                       "stream": True}) as r:
+                                                       "stream": True, "validate_spec": True}) as r:
         events = [json.loads(line) for line in r.iter_lines() if line.strip()]
     assert events[-1]["type"] == "done" and len(events[-1]["analysis"]["scenarios"]) == 1
     assert "validation" not in [e["type"] for e in events]
     assert any("Проверка ТЗ не удалась" in e["text"] for e in events if e["type"] == "log")
 
-    # Switched off for one generation: no validation request at all.
+    # Not asked for: no validation request at all (the project's "validate" is the pipeline's review).
     fake_llm.calls.clear()
     with client.stream("POST", "/api/scenarios", json={"project_id": p["id"], "requirements": SPEC,
-                                                       "stream": True, "validate_spec": False}) as r:
+                                                       "stream": True}) as r:
         events = [json.loads(line) for line in r.iter_lines() if line.strip()]
     assert events[-1]["type"] == "done"
     assert all(kw.get("output_format") is not validation.Validation for _, kw in fake_llm.calls)
@@ -215,7 +215,7 @@ def test_the_chosen_design_reaches_every_request(fake_llm):
         assert "- security:" in sent and "Layers: api." in sent and "- positive:" not in sent
 
 
-# ---------- the pipeline: requirements -> validation -> scenarios -> selection ----------
+# ---------- the pipeline: requirements -> review -> scenarios -> selection ----------
 
 def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monkeypatch, fake_llm):
     from testgen import analyses, storage
@@ -233,7 +233,7 @@ def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monk
             data = [{"entity": "Заказ", "name": "Оплаченный заказ", "details": "", "state": "оплачен",
                      "role": "Покупатель"}]
             return _batch(_task(kw), lambda i: _full(i, test_data=data if i == 3 else []))
-        raise RuntimeError("модель приложения недоступна")
+        raise RuntimeError("модель приложения недоступна")      # the lifecycle check and the model fail
     fake_llm.script = script
     p = _project("Конвейер", requirements={"validate": True}, scenarios={"select": "manual"})
     job = pipeline.Job(p, [], SPEC, "", {}, user="alice")
@@ -257,7 +257,8 @@ def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monk
     arun(go())
 
     assert job.status == "done", job.error
-    assert order[0] == "Validation" and "ScenarioPlan" in order
+    # The reviewer goes first: its check of the document and of the lifecycle (a tool loop), then the design.
+    assert "Validation" in order[:2] and "create" in order[:2] and "ScenarioPlan" in order[2:]
     assert seen == [("Сценарий 3", "Шаги 3")]
     # The designed scenarios are an analysis of requirements: the ones not chosen stay for a later run.
     a = analyses.get(job.analysis_id)
@@ -270,8 +271,11 @@ def test_the_pipeline_waits_for_a_choice_and_keeps_the_scenarios_not_chosen(monk
     assert job.scenarios[2]["test_data"][0]["record_id"]
     assert a["scenarios"][2]["test_data"][0]["record_id"] == job.scenarios[2]["test_data"][0]["record_id"]
     text = " ".join(e["text"] for e in job.log)
-    assert "Проверка ТЗ: 55/100" in text and "Тестовые данные сценариев записаны" in text
-    assert "Модель приложения не обновлена" in text and "не выбранные останутся" in text
+    assert "стандарт и качество 55/100" in text and "жизненный цикл: не удалось" in text
+    assert a["review"]["verdict"] == "ready" and a["review"]["lifecycle"] is None
+    assert "Тестовые данные сценариев записаны" in text
+    # The reviewer's findings are not settled yet: the model does not learn from these requirements.
+    assert "Модель приложения не обновляется по требованиям" in text and "не выбранные останутся" in text
 
 
 def test_automatic_selection_keeps_the_rest_in_the_list(monkeypatch, fake_llm):
@@ -303,7 +307,8 @@ def test_stopping_interrupts_the_design_at_once_and_keeps_what_is_ready(monkeypa
     p = _project("Стоп", requirements={"learn_model": False})
     started = []
 
-    async def generate(requirements, url="", project=None, log=None, progress=None, cfg=None, record=True):
+    async def generate(requirements, url="", project=None, log=None, progress=None, cfg=None, record=True,
+                       resume=None):
         progress({"type": "plan", "feature": "Заказы", "assumptions": [], "scenarios": [_planned(1), _planned(2)]})
         progress({"type": "batch", "start": 0, "scenarios": [_full(1)]})
         started.append(True)
@@ -391,7 +396,7 @@ def test_cancelling_an_item_over_the_api(monkeypatch):
 
 
 def test_the_pipeline_without_test_design_takes_the_whole_text(monkeypatch, fake_llm):
-    p = _project("Без дизайна", requirements={"learn_model": False}, scenarios={"enabled": False})
+    p = _project("Без дизайна", requirements={"learn_model": False, "validate": False}, scenarios={"enabled": False})
     job = pipeline.Job(p, [], SPEC, "", {})
     seen = []
 
