@@ -384,6 +384,7 @@ FRESH_TASK = ("To keep the requests short, the conversation was started over: th
               "the browser and recorded. The browser keeps its state: the same page, still logged in if the steps "
               "above logged in. Do not repeat them (do not log in or fill a form again): continue the test scenario "
               "from the current page.")
+WATCH_PAUSE = 0.6      # seconds between the steps of «Прогон в Studio»: a person sees each one in Live View
 EDIT_TASK = ("A person opened this saved test to edit it: the steps above are already recorded in the test and have "
              "been replayed. Do only what the person asks in the chat (add, change or re-record steps from the current "
              "page); do not repeat the steps above and do not go on with the scenario on your own.")
@@ -491,7 +492,8 @@ def _same_page(a: str, b: str) -> bool:
 def recorded_steps(steps: list[dict]) -> list[dict]:
     """Steps that go into the saved test: failed attempts are dropped, since the
     agent retries them another way and replay stops at the first failing step."""
-    return [{k: v for k, v in st.items() if k != "ref"} for st in steps if st.get("status") != "failed"]
+    return [{k: v for k, v in st.items() if k not in ("ref", "replay_error")} for st in steps
+            if st.get("status") != "failed"]
 
 
 def _api_check(step: dict) -> bool:
@@ -541,6 +543,7 @@ class StudioSession:
         self.id = session_id or uuid.uuid4().hex[:10]
         self.created = time.time()
         self.restored = False               # continues an interrupted session (restored)
+        self.watch = False                  # «Прогон в Studio»: the saved test is replayed step by step for a person
         self.origin: dict | None = None     # {"job": id} for a session of a pipeline run
         self.task_id = ""                   # project task the test is made for (server.py)
         self._creds_kept = False
@@ -754,14 +757,24 @@ class StudioSession:
                     if not self.restored and self.task != EDIT_TASK and not self.task.startswith(FIX_TASK):
                         raise
                     # The steps stay in the session: a person saves, corrects or continues them.
-                    self.steps = copy.deepcopy(self.base_steps)
+                    self.steps = self.steps or copy.deepcopy(self.base_steps)
                     self.status = "idle"
+                    if self.watch:
+                        self._say("system", f"Прогон в Studio упал. {e}. Шаг отмечен в списке: исправьте его (описание, "
+                                            "«+ шаг», Element Picker) или попросите агента в чате, затем «Сохранить "
+                                            "тест» — новая версия того же теста.")
+                        return
                     self._say("system", f"{e}. Записанные шаги сохранены в сессии: их можно сохранить как тест, "
                                         "исправить или продолжить с текущей страницы («Продолжить ИИ» или вручную).")
                     return
                 if self.task == EDIT_TASK:
                     # Editing: the person leads. The model is asked only when they write in the chat.
                     self.status = "idle"
+                    if self.watch:
+                        self._say("system", f"Прогон в Studio пройден: шагов {len(self.steps)}. Страница осталась в "
+                                            "браузере — можно продолжить тест («+ шаг», Element Picker, агент в чате) "
+                                            "и сохранить новую версию.")
+                        return
                     self._say("system", f"Тест воспроизведён в браузере (шагов: {len(self.steps)}). Правьте шаги в "
                                         "списке, добавляйте новые кнопкой «+ шаг», через Element Picker или попросите "
                                         "агента в чате, затем «Сохранить тест» — изменения уйдут в тот же тест "
@@ -1054,23 +1067,47 @@ class StudioSession:
     # ---------- internals ----------
 
     async def _replay(self) -> None:
-        """Run the saved steps (base_steps) and record them as passed (modules included, no healing)."""
+        """Run the saved steps (base_steps) and record them as passed (modules included, no healing). The steps
+        show in the session as they run (pending -> running -> passed), Live View follows every step; a step that
+        fails keeps its place (pending, `replay_error`) so the steps stay whole for a person to fix."""
         from . import runner
         self.status = "executing"
         steps = [st | {"status": "pending", "error": ""} for st in self.base_steps]
         report = {"passed": True, "healed": 0, "proposals": []}
         results: list[dict] = []
+        self.steps = steps
+        if steps:
+            steps[0]["status"] = "running"
+        shots = self.engine != "api"
+
+        async def progress(_report):
+            i = len(results) - 1
+            res = results[i]
+            if res.get("screenshot"):
+                self.screenshot, self.page_url = res["screenshot"], res.get("url") or self.page_url
+            if res["status"] != "passed":
+                return
+            steps[i]["status"] = "passed"
+            if i + 1 < len(steps):
+                steps[i + 1]["status"] = "running"
+                if self.watch:
+                    await asyncio.sleep(WATCH_PAUSE)     # a person follows the steps in Live View
+
         self.bs.follow_new_tabs = not any(s["action"] == "switch_tab" for s in steps)
-        await runner.run_steps(self.bs, {"id": self.test_id or "", "project_id": self.project_id, "steps": steps},
-                               steps, {"self_heal": False}, report, results, shots=False, heal_ok=False)
-        self.bs.follow_new_tabs = True
+        try:
+            await runner.run_steps(self.bs, {"id": self.test_id or "", "project_id": self.project_id, "steps": steps},
+                                   steps, {"self_heal": False}, report, results, shots=shots, heal_ok=False,
+                                   on_progress=progress)
+        finally:
+            self.bs.follow_new_tabs = True
         if not report["passed"]:
             failed = results[-1]
-            raise ValueError(f"Не удалось воспроизвести сохранённый тест на шаге «{failed['description']}»: "
-                             f"{failed['error'][:200]}")
-        for step in steps:
-            step["status"] = "passed"
-            self.steps.append(step)
+            steps[len(results) - 1].update(status="pending", replay_error=failed["error"][:500])
+            for st in steps[len(results):]:
+                st["status"] = "pending"
+            self.checkpoint()
+            raise ValueError(f"Не удалось воспроизвести сохранённый тест на шаге {len(results)} "
+                             f"«{failed['description']}»: {failed['error'][:200]}")
         self.bs.new_tabs = 0
         self.screenshot = await self.bs.screenshot_b64()
         self.page_url = self.bs.url

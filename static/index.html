@@ -82,6 +82,9 @@ button:disabled{opacity:.5;cursor:default}
 #credDlg::backdrop{background:rgba(0,0,0,.35)}
 .st-passed{border-left:3px solid var(--ok)}
 .st-failed{border-left:3px solid var(--bad)}
+.st-running{border-left:3px solid var(--warn);background:color-mix(in srgb, var(--warn) 8%, transparent)}
+.st-pending{opacity:.65}
+.st-pending.st-broken{opacity:1;border-left:3px solid var(--bad)}
 .err{color:var(--bad);font-size:12px}
 .ok{color:var(--ok)}
 table{width:100%;border-collapse:collapse}
@@ -694,6 +697,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <span class="muted grow" id="savedText">Сохранено</span>
         <button class="btn" id="readyBtn" title="Вы проверили тест: он войдёт в регрессионный набор">В набор</button>
         <button class="btn" id="runSavedBtn">Запустить</button>
+        <button class="btn" id="watchSavedBtn" title="Прогнать сохранённый тест заново в Studio шаг за шагом">Прогон в Studio</button>
         <a class="btn small" id="expPy" target="_blank">.py</a>
         <a class="btn small" id="expFeat" target="_blank">.feature</a>
         <a class="btn small hidden" id="expApi" target="_blank" title="API-тесты (pytest + httpx) по запросам, записанным при генерации">API</a>
@@ -2071,13 +2075,15 @@ function usageText(u) {
 function renderSteps(steps) {
   $('#stepCount').textContent = steps.length ? `(${steps.length})` : '';
   $('#steps').innerHTML = steps.map((st, i) => `
-    <div class="step st-${st.status}${(STATE?.finish?.assertions || []).includes(i + 1) ? ' evidence' : ''}" data-i="${i}">
+    <div class="step st-${st.status}${st.replay_error ? ' st-broken' : ''}${(STATE?.finish?.assertions || []).includes(i + 1) ? ' evidence' : ''}" data-i="${i}">
       <div class="n">${i + 1}</div>
       <div>
         <span class="badge ${st.action.startsWith('assert') ? 'assert' : ''}">${esc(st.action)}</span>
         <span class="d" contenteditable="true" data-i="${i}">${esc(st.description)}</span>
         <div class="meta">${st.value ? 'значение: ' + esc(st.value) + ' · ' : ''}${esc(locText(st.locator))}${st.source !== 'ai' ? ' · ' + esc(st.source) : ''}${st.healed ? ' · healed' : ''}</div>
         ${st.error ? `<div class="err">${esc(st.error)}</div>` : ''}
+        ${st.status === 'running' ? '<div class="hint">выполняется…</div>' : ''}
+        ${st.replay_error ? `<div class="err">✘ Упал при прогоне: ${esc(st.replay_error)}</div>` : ''}
       </div>
       <div class="acts">
         <button title="Вверх" data-op="up" data-i="${i}">▲</button>
@@ -2232,6 +2238,7 @@ $('#saveBtn').onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 $('#runSavedBtn').onclick = () => { showTab('tests'); runTest(TEST_ID); };
+$('#watchSavedBtn').onclick = e => editInStudio(TEST_ID, e.target, true);
 $('#readyBtn').onclick = async () => {
   try { await api('PATCH', `/api/tests/${TEST_ID}/meta`, {status: 'ready'}); $('#savedText').textContent = 'Сохранено, в наборе'; $('#readyBtn').classList.add('hidden'); }
   catch (e) { alert(e.message); }
@@ -2298,6 +2305,7 @@ async function loadTests() {
       <td>${verifyCell(t)}</td>
       <td>${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
+        ${canRole('editor') ? `<button class="btn small" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
         <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
           <button onclick="openTest('${t.id}').then(() => editSteps('${t.id}'))">Редактировать шаги</button>
@@ -2758,7 +2766,8 @@ function stepsViewHtml(t) {
   const can = canRole('editor');
   return `<div class="row"><b class="grow">Шаги (${t.steps.length})</b>
       ${can ? `<button class="btn small" onclick="editSteps('${t.id}')" title="Изменить описания, значения, локаторы и порядок шагов">Редактировать</button>
-      <button class="btn small" onclick="editInStudio('${t.id}', this)" title="Тест воспроизводится в браузере Studio: шаги можно дописать, перезаписать кликом или попросить агента">Править в Studio</button>` : ''}</div>
+      <button class="btn small" onclick="editInStudio('${t.id}', this)" title="Тест воспроизводится в браузере Studio: шаги можно дописать, перезаписать кликом или попросить агента">Править в Studio</button>
+      <button class="btn small" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: шаги выполняются по одному, Live View показывает каждый">Прогон в Studio</button>` : ''}</div>
     <div class="hint" style="margin-top:2px">${t.steps.map((s, i) => `<div style="margin:2px 0">${i + 1}. <span class="badge ${s.action.startsWith('assert') ? 'assert' : ''}">${esc(STEP_ACTIONS[s.action] || s.action)}</span> ${esc(s.description)}${s.value ? ` <span class="muted">— ${esc(s.value.length > 80 ? s.value.slice(0, 80) + '…' : s.value)}</span>` : ''}</div>`).join('') || 'Шагов нет.'}</div>`;
 }
 async function editSteps(tid) {
@@ -2816,12 +2825,13 @@ async function saveSteps(btn) {
     STEP_EDIT = null; openTest(OPEN_TEST, true); loadTests();
   } catch (e) { $('#stepsMsg').textContent = e.message; btn.disabled = false; }
 }
-async function editInStudio(tid, btn) {
+// watch - «Прогон в Studio»: the steps run one by one, Live View follows them; then the test can be edited
+async function editInStudio(tid, btn, watch = false) {
   if (SID && !confirm('Текущая сессия в Studio будет закрыта. Продолжить?')) return;
   btn.disabled = true;
   try {
     if (SID) await api('DELETE', `/api/sessions/${SID}`);
-    const {id} = await api('POST', `/api/tests/${tid}/edit`, {headless: true});
+    const {id} = await api('POST', `/api/tests/${tid}/edit`, {headless: true, watch});
     openSession(id);
   } catch (e) { alert(e.message); btn.disabled = false; }
 }
@@ -3979,7 +3989,8 @@ function jobItemRow([it, i]) {
       ${it.session_id ? `<button class="btn small" onclick="openSession('${it.session_id}')">Открыть в Studio</button>` : ''}
       ${!it.test_id && it.status === 'needs_attention' && it.preflight?.length && it.preflight.every(p => p.kind === 'lifecycle')
         ? `<button class="btn small" onclick="runAnyway(${i})" title="Проверка по жизненному циклу ошиблась или сценарий так и задуман: сгенерировать тест без неё (учётная запись роли проверяется)">Запустить всё равно</button>` : ''}
-      ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}</td></tr>`;
+      ${it.test_id ? `<button class="btn small" onclick="showTab('tests');openTest('${it.test_id}')">Тест</button>` : ''}
+      ${it.test_id && canRole('editor') ? `<button class="btn small" onclick="editInStudio('${it.test_id}', this, true)" title="Наглядный прогон теста в Studio: шаг за шагом в Live View">Прогон в Studio</button>` : ''}</td></tr>`;
 }
 function jobItemsTable(rows, key) {
   return `<table class="scen-list" data-key="${key}"><thead><tr><th>#</th><th>Сценарий</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Прогон</th><th>Качество</th><th>Публикация</th><th></th></tr></thead><tbody>` +

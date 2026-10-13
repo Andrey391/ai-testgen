@@ -1662,18 +1662,20 @@ async def edit_test_steps(tid: str, body: StepsBody):
 
 class EditBody(BaseModel):
     headless: bool = True
+    watch: bool = False     # «Прогон в Studio»: the steps run one by one in Live View, then the person leads
 
 
 @app.post("/api/tests/{tid}/edit")
 async def edit_in_studio(tid: str, body: EditBody, request: Request):
     """A Studio session that replays the saved test and waits for the person: steps are added,
-    changed or re-recorded there and saved into the same test."""
+    changed or re-recorded there and saved into the same test. `watch` - «Прогон в Studio»: the replay
+    is paced so a person follows every step, a failed step stays marked in the list."""
     t = test_or_404(tid)
     p = project(t["project_id"], "editor")
     s = StudioSession(p, t["name"], t["url"], t.get("scenario", ""), headless=body.headless,
                       credentials=storage.credentials(t), base_steps=t["steps"], task=agent_mod.EDIT_TASK,
                       account=t.get("account") or "", engine=agent_mod.test_engine(t))
-    s.test_id = tid
+    s.test_id, s.watch = tid, body.watch
     request.state.project_id = p["id"]
     _start_session(s, autopilot=False)
     return {"id": s.id}

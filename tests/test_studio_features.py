@@ -3,6 +3,7 @@ read-only built-in skills with local copies, the application model, the choice o
 and the validation of a specification."""
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from types import SimpleNamespace
@@ -456,6 +457,35 @@ def test_edit_in_studio_replays_and_waits_for_the_person(stand, project, save_te
     status, statuses = arun(go())
     assert status == "idle" and statuses == ["passed", "passed"] and not fake_llm.calls   # no model until asked
     assert "Тест воспроизведён" in s.chat[-1]["text"]
+
+
+def test_watch_run_in_studio_shows_every_step_and_keeps_a_failed_one(stand, project, save_test, fake_llm, monkeypatch):
+    monkeypatch.setattr(agent, "WATCH_PAUSE", 0)
+    t = save_test("Список", [new_step("navigate", "Открыть", f"{stand.url}/list.html"),
+                             new_step("assert_text_present", "Нет такого текста", "Такого на странице нет"),
+                             new_step("assert_text_present", "Список открыт", "Хлеб")])
+    s = StudioSession(project, t["name"], t["url"], "", base_steps=t["steps"], task=agent.EDIT_TASK)
+    s.test_id, s.watch = t["id"], True
+    seen = []
+
+    async def go():
+        try:
+            task = asyncio.create_task(s.start())
+            while not task.done():       # what the studio polls while the steps run
+                seen.append(tuple(x["status"] for x in s.steps))
+                await asyncio.sleep(0.01)
+            await task
+            return s.status, [x["status"] for x in s.steps]
+        finally:
+            await s.close()
+    status, statuses = arun(go())
+    assert status == "idle" and not fake_llm.calls and s.screenshot
+    assert ("running", "pending", "pending") in seen                       # the steps show as they run
+    assert statuses == ["passed", "pending", "pending"]                    # the steps stay whole
+    assert "Такого" not in (s.steps[1].get("error") or "") and s.steps[1]["replay_error"]
+    assert "Прогон в Studio упал" in s.chat[-1]["text"]
+    assert len(agent.recorded_steps(s.steps)) == 3
+    assert all("replay_error" not in x for x in agent.recorded_steps(s.steps))
 
 
 def test_api_steps_are_exported_with_their_checks():
