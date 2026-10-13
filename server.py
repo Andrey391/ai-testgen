@@ -25,7 +25,7 @@ from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Re
                                StreamingResponse)
 from pydantic import BaseModel
 
-from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, checks, db, defects, explorer, exporters, fs, knowledge,
+from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, checks, db, defects, explorer, exporters, fs, inbox, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
                      publisher, reports, reuse, review, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
@@ -1579,6 +1579,32 @@ async def interrupted_sessions(pid: str):
     """Sessions of the project that were interrupted (the studio restarted): continue or save them."""
     project(pid)
     return [cp for cp in agent_mod.list_checkpoints(pid) if not _alive(cp)]
+
+
+# ---------- «Ждёт вас»: decisions waiting for a person ----------
+
+@app.get("/api/projects/{pid}/inbox")
+async def project_inbox(pid: str, request: Request):
+    """What in the project waits for a person's decision (inbox.py): the bell's list."""
+    project(pid)
+    entries = await asyncio.to_thread(inbox.project_inbox, pid, request.state.user, _alive)
+    return {"total": inbox.total(entries), "items": entries}
+
+
+@app.get("/api/inbox")
+async def all_inboxes(request: Request):
+    """How much waits for a decision in each project the user may see (others are not named)."""
+    user = request.state.user
+
+    def count():
+        out = []
+        for item in projects.list_projects():
+            p = projects.get(item["id"])
+            if p and access.role(user, p):
+                n = inbox.total(inbox.project_inbox(p["id"], user, _alive))
+                out.append({"project_id": p["id"], "name": p["name"], "total": n})
+        return out
+    return await asyncio.to_thread(count)
 
 
 class RestoreBody(BaseModel):

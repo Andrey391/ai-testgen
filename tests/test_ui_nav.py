@@ -10,12 +10,13 @@ from __future__ import annotations
 import socket
 import threading
 import time
+import types
 
 import pytest
 import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
-from testgen import auth, storage
+from testgen import auth, pipeline, storage
 from testgen.steps import new_step
 
 TABS = ["studio", "tests", "dash", "tasks", "req", "pipe", "proj", "home"]
@@ -171,4 +172,42 @@ def test_old_notification_links_open_the_screen(page, studio_url, project, save_
     page.goto(f"{studio_url}/#test={t['id']}")
     expect(page.locator("#testBox h3")).to_have_text("Из уведомления")
     expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{t['id']}")
+    assert page.errors == []
+
+
+# ---- the bell «Ждёт вас» (stage 2)
+
+def test_bell_counts_decisions_and_opens_them(page, studio_url, project, save_test, monkeypatch):
+    step = new_step("click", "Войти", "", [{"kind": "text", "value": "Войти"}])
+    t = save_test("Лечится", [step], heal_proposals=[{
+        "id": "p1", "step_id": step["id"], "test_id": "", "module": False, "description": "Войти", "action": "click",
+        "old": step["locator"], "new": [{"kind": "role", "role": "button", "name": "Вход"}], "reason": "кнопку переименовали",
+        "screenshot": "", "at": time.time()}])
+    job = {"id": "c3" * 5, "project_id": project["id"], "status": "awaiting_model", "created": time.time(),
+           "waiting_since": time.time(), "items": []}
+    monkeypatch.setitem(pipeline.JOBS, job["id"], types.SimpleNamespace(id=job["id"], project_id=project["id"],
+                                                                        state=lambda: job))
+    _open(page, studio_url, project)
+    page.click("nav button[data-tab=dash]")
+    expect(page.locator("#bellCount")).to_have_text("2")
+    expect(page.locator("nav button[data-tab=pipe] .badge")).to_have_text("1")
+
+    page.click("#bellBtn")
+    menu = page.locator("#bellMenu")
+    expect(menu).to_contain_text("Запуски ждут решения")
+    expect(menu).to_contain_text("подтверждения жизненного цикла")
+    menu.get_by_role("menuitem", name="«Лечится»: самолечение ждёт ревью").click()
+    expect(menu).to_be_hidden()
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{t['id']}")
+    expect(page.locator("#testBox h3")).to_have_text("Лечится")
+
+    # Decided elsewhere: the next look (the menu opened, the tab back, the timer) has it gone.
+    job["status"] = "running"
+    storage.update(t["id"], lambda x: x.update(heal_proposals=[]))
+    page.click("#bellBtn")
+    expect(menu).to_contain_text("Вашего решения ничего не ждёт")
+    expect(page.locator("#bellCount")).to_be_hidden()
+    expect(page.locator("nav button[data-tab=pipe] .badge")).to_be_hidden()
+    page.keyboard.press("Escape")
+    expect(menu).to_be_hidden()
     assert page.errors == []

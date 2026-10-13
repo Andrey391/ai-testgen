@@ -98,6 +98,7 @@ def test_no_access_is_404_everywhere(studio):
         assert bob.post("/api/scenarios", json={"project_id": ids["pid"], "requirements": "x"}).status_code == 404
         assert bob.post("/api/requirements/fetch", json={"project_id": ids["pid"], "link": "x"}).status_code == 404
         assert ids["pid"] not in {p["id"] for p in bob.get("/api/projects").json()}
+        assert ids["pid"] not in {p["project_id"] for p in bob.get("/api/inbox").json()}
         # The same requests of the owner reach the resources.
         alice = studio.client("alice")
         assert alice.get(f"/api/runs/{ids['run']}/files/trace.zip").status_code == 200

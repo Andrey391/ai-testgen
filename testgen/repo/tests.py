@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from .. import db
 from . import held
@@ -104,6 +104,17 @@ class Sql:
         with db.engine().connect() as c:
             return [{"id": r.id, "name": r.name or r.id, "data_refs": list(r.refs or [])} for r in c.execute(
                 select(t.c.id, t.c.name, refs.label("refs")).where(t.c.project_id == pid, t.c.body.has_key("data_refs")))]
+
+    @classmethod
+    def healing(cls, pid: str) -> list[dict]:
+        """Tests of the project with self-healing proposals waiting for a person: {id, name, count, updated}."""
+        t = cls.t
+        props = t.c.body["heal_proposals"]
+        # SQL does not promise to check the type first: the length only of an array
+        n = case((func.jsonb_typeof(props) == "array", func.jsonb_array_length(props)), else_=0)
+        with db.engine().connect() as c:
+            return [{"id": r.id, "name": r.name or r.id, "count": r.n, "updated": r.updated} for r in c.execute(
+                select(t.c.id, t.c.name, t.c.updated, n.label("n")).where(t.c.project_id == pid, n > 0))]
 
     @classmethod
     def counts(cls) -> dict[str, int]:
