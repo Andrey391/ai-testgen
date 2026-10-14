@@ -10,10 +10,15 @@ The test data of a scenario is recorded in the application model (knowledge.need
 the scenario's ref "<analysis>:<scenario>", and each item gets the id of its record (`record_id`): an edit
 of the scenario updates the model, a deleted scenario or analysis lets its records go (knowledge.release).
 
-Work on an analysis (a review, a design of scenarios) beats while it goes (working()): an analysis "running" with
-no beat for BEAT_STALE seconds was cut off - the studio restarted - and says so at once, not an hour later. What
-was done by then is kept to go on from: the finished checks of a review (review_parts(), keep_review_part()) and
-the plan of a design with the scenarios detailed by then (`plan`, resume_plan()).
+Work on an analysis (WORK: a review, a design of scenarios, a fix of the requirements, the answers of an analyst…)
+is one at a time: the analysis is "running" with its `work`, and whatever would break that work - another work, a
+decision on the findings, deleting it - waits for it to end (Conflict with busy_text(): what goes, who started
+it). The work goes on when the page that started it goes away; it is stopped only on purpose (request_stop()).
+It beats while it goes (working()): an analysis "running" with no beat for BEAT_STALE seconds was cut off - the
+studio restarted - and says so at once, not an hour later. Its progress (`progress`: the stage and the last lines
+of its log) is in the analysis, so any page shows it - after another tab, F5, on another computer. What was done
+by then is kept to go on from: the finished checks of a review (review_parts(), keep_review_part()) and the plan
+of a design with the scenarios detailed by then (`plan`, resume_plan()).
 """
 from __future__ import annotations
 
@@ -36,6 +41,18 @@ STALE = 3600     # a "running" analysis of an earlier version (no beats) older t
 BEAT = 15        # seconds between the beats of the work on an analysis
 BEAT_STALE = 60  # a "running" analysis without a beat this long was cut off (the studio restarted)
 PARTS_TTL = 86400    # the finished checks of an interrupted review are reused this long
+PROGRESS_LINES = 80  # the last lines of the log of a work kept in the analysis (`progress`)
+# The works on an analysis, for the person: what goes now (busy_text()). review and design end with finish();
+# the others leave the analysis as it was before them (start_work() / end_work()).
+WORK = {
+    "review": "проверка требований ревьюером",
+    "design": "проектирование сценариев конвейером",
+    "fix": "исправление ТЗ агентом",
+    "answers": "разбор ответов аналитика по замечаниям",
+    "group": "сведение замечаний в темы",
+    "lifecycle": "сверка с жизненным циклом системы",
+    "learn": "обучение модели приложения на требованиях",
+}
 INTERRUPTED = {
     "review": "Проверка прервана перезапуском студии — «Проверить заново» продолжит с готовой части",
     "design": "Проектирование сценариев прервано перезапуском студии — «Продолжить» запуск конвейера продолжит "
@@ -47,6 +64,19 @@ INTERRUPTED = {
 
 class Conflict(ValueError):
     pass
+
+
+def busy_text(a: dict) -> str:
+    """What goes on the analysis now, for a person whose action has to wait for it."""
+    what = WORK.get(a.get("work") or "", "работа с этими требованиями")
+    who = f" (запустил {a['by']})" if a.get("by") else ""
+    return f"Сейчас идёт: {what}{who}. Действие станет доступно после окончания"
+
+
+def check_idle(a: dict) -> None:
+    """Nothing goes on the analysis: a decision, a delete, another work may change it. Conflict - something goes."""
+    if _stale(a)["status"] == "running":
+        raise Conflict(busy_text(a))
 
 
 def _dir(pid: str):
@@ -102,23 +132,34 @@ def _stale(a: dict) -> dict:
             gone = time.time() - (a["beat"] or 0) > BEAT_STALE
         else:       # written by a version without beats
             gone = time.time() - (a.get("started") or a["created"]) > STALE
-        if gone and a.get("work") == "fix" and a.get("before_fix"):     # the fix: the batches done stay
-            was = a["before_fix"]
+        was = a.get("before_work") or a.get("before_fix")
+        if gone and was:        # a work of start_work(): the analysis is what it was (a fix: the batches done stay)
+            work = a.get("work") or ""
             a.update(status=was["status"] or "done", work=was["work"], error=was["error"] or "",
-                     fix_error=INTERRUPTED["fix"])
+                     work_error=INTERRUPTED.get(work) or f"Прервано перезапуском студии: {WORK.get(work, work)} — "
+                                                        "запустите заново")
         elif gone:
             a["status"] = "error"
             a["error"] = a["error"] or INTERRUPTED.get(a.get("work") or "", "Генерация была прервана")
     return a
 
 
+_TASKS: dict[str, asyncio.Task] = {}     # the work on an analysis that goes on this instance: request_stop()
+
+
 @contextlib.asynccontextmanager
 async def working(pid: str, aid: str):
     """The work on the analysis is alive while this is open: it beats every BEAT seconds. A studio that stops
-    stops beating, and the analysis reads as interrupted (_stale) - on this instance and on the others."""
+    stops beating, and the analysis reads as interrupted (_stale) - on this instance and on the others. A stop
+    asked on another instance (`stop`) is seen at the next beat: the work is cancelled."""
+    me = asyncio.current_task()
+    stop = []
+
     def touch(a):
         if a["status"] == "running":
             a["beat"] = time.time()
+            if a.get("stop"):
+                stop.append(True)
 
     async def beat():
         while True:
@@ -128,11 +169,53 @@ async def working(pid: str, aid: str):
                     _change(pid, aid, touch)
             except Exception as e:      # a missed beat: the next one comes
                 print(f"analysis {aid}: {e}")
+            if stop and me:
+                me.cancel()
+                return
     task = asyncio.create_task(beat())
+    if me:
+        _TASKS[aid] = me
     try:
         yield
     finally:
         task.cancel()
+        if _TASKS.get(aid) is me:
+            _TASKS.pop(aid, None)
+
+
+def request_stop(pid: str, aid: str) -> bool:
+    """Stop the work on the analysis on purpose («Остановить»): at once on this instance, at its next beat on
+    another one. False - nothing goes."""
+    def fn(a):
+        if _stale(a)["status"] != "running":
+            return False
+        a["stop"] = True
+        return True
+    if not fs.exists(_path(pid, aid)) or not _change(pid, aid, fn):
+        return False
+    task = _TASKS.get(aid)
+    if task and not task.done():
+        task.get_loop().call_soon_threadsafe(task.cancel)
+    return True
+
+
+def progress(pid: str, aid: str, line: str) -> None:
+    """A line of the log of the work on the analysis: the stage now and the log any page shows (`progress`)."""
+    line = str(line or "").strip()
+    if not line or not fs.exists(_path(pid, aid)):
+        return
+
+    def fn(a):
+        if a["status"] != "running":
+            return
+        p = a.get("progress") or {}
+        p["stage"] = line[:300]
+        p["log"] = (p.get("log") or [])[-(PROGRESS_LINES - 1):] + [{"at": time.time(), "text": line[:2000]}]
+        a["progress"] = p
+    try:
+        _change(pid, aid, fn)
+    except Exception as e:      # the progress is for a person: the work goes on without it
+        print(f"analysis {aid}: {e}")
 
 
 def _change(pid: str, aid: str, fn) -> dict:
@@ -345,7 +428,7 @@ def add_scenario(pid: str, aid: str, data: dict) -> dict:
 
 def delete_scenario(pid: str, aid: str, scid: str) -> bool:
     def fn(a):
-        if a["status"] == "running":
+        if _stale(a)["status"] == "running" and a.get("work") == "design":
             raise Conflict("Дождитесь окончания генерации сценариев")
         n = len(a["scenarios"])
         a["scenarios"] = [s for s in a["scenarios"] if s["id"] != scid]
@@ -407,11 +490,14 @@ def keep_review_part(pid: str, aid: str, key: str, name: str, value: dict) -> No
 
 
 def decide(pid: str, aid: str, ids: list[str], status: str, answer: str | None = None, note: str | None = None,
-           user: str = "") -> dict:
-    """A person's decision on findings of the review (review.decide): fix by the answer, not relevant, undecided."""
+           user: str = "", idle: bool = False) -> dict:
+    """A person's decision on findings of the review (review.decide): fix by the answer, not relevant, undecided.
+    idle - only when nothing goes on the analysis (a fix or a review would lose it or apply half of it): Conflict."""
     from . import review
 
     def fn(a):
+        if idle:
+            check_idle(a)
         if not a.get("review"):
             raise KeyError("review")
         review.decide(a["review"], ids, status, answer, note, user)
@@ -427,25 +513,61 @@ def set_groups(pid: str, aid: str, groups: list[dict]) -> dict:
     return _change(pid, aid, fn)
 
 
-def start_fix(pid: str, aid: str) -> dict:
-    """The editor fixes the requirements (review.revise): the analysis is in work, what it was is kept for
-    end_fix(). Conflict - it is in work already."""
+def _begin(a: dict, work: str, user: str) -> None:
+    a.update(status="running", started=time.time(), beat=time.time(), work=work, by=user, work_error="",
+             work_result="", progress={"stage": "", "log": []})
+    a.pop("stop", None)
+    a.pop("fix_error", None)        # of a version before work_error
+
+
+def start_work(pid: str, aid: str, work: str, user: str = "") -> dict:
+    """A work on the analysis that leaves it as it was (WORK: fix, answers, group, lifecycle, learn): it is in work,
+    what it was is kept for end_work(). Conflict - something goes on it already (busy_text())."""
     def fn(a):
         if _stale(a)["status"] == "running":
-            raise Conflict("Анализ уже в работе: дождитесь окончания проверки, исправления или генерации")
-        # kept already - the fix before was cut off by a restart of the studio: what it was before that one
-        a["before_fix"] = a.get("before_fix") or {k: a.get(k) for k in ("status", "error", "work", "finished")}
-        a.update(status="running", started=time.time(), beat=time.time(), work="fix", fix_error="")
+            raise Conflict(busy_text(a))
+        # kept already - the work before was cut off by a restart of the studio: what it was before that one
+        a["before_work"] = a.get("before_work") or a.get("before_fix") or {
+            k: a.get(k) for k in ("status", "error", "work", "finished")}
+        a.pop("before_fix", None)
+        _begin(a, work, user)
     return _change(pid, aid, fn)
+
+
+def end_work(pid: str, aid: str, error: str = "", result: str = "") -> dict:
+    """The work is over: the analysis is what it was before it; `work_error` - why it stopped (a fix: the batches
+    done stay), `work_result` - what it did, for a page that did not wait for it."""
+    def fn(a):
+        was = a.pop("before_work", None) or a.pop("before_fix", None) or {
+            "status": "done", "error": "", "work": "review", "finished": None}
+        a.update(status=was["status"] or "done", work=was["work"], error=was["error"] or "",
+                 finished=was.get("finished"), work_error=error, work_result=result)
+        a.pop("stop", None)
+    return _change(pid, aid, fn)
+
+
+def start_fix(pid: str, aid: str, user: str = "") -> dict:
+    """The editor fixes the requirements (review.revise)."""
+    return start_work(pid, aid, "fix", user)
 
 
 def end_fix(pid: str, aid: str, error: str = "") -> dict:
-    """The fix is over: the analysis is what it was before it; `fix_error` - why it stopped (the batches done stay)."""
-    def fn(a):
-        was = a.pop("before_fix", None) or {"status": "done", "error": "", "work": "review", "finished": None}
-        a.update(status=was["status"] or "done", work=was["work"], error=was["error"] or "",
-                 finished=was.get("finished"), fix_error=error)
-    return _change(pid, aid, fn)
+    return end_work(pid, aid, error)
+
+
+def learning(pid: str) -> dict | None:
+    """An analysis of the project whose requirements the application model learns from now: the model is about to
+    change - it is not confirmed meanwhile."""
+    for _, text, _ in fs.documents(_dir(pid)):
+        if '"learn"' not in text:
+            continue
+        try:
+            a = _stale(json.loads(text))
+        except ValueError:
+            continue
+        if a["status"] == "running" and a.get("work") == "learn":
+            return a
+    return None
 
 
 def revise(pid: str, aid: str, result: dict, user: str = "", run: str = "") -> dict:
@@ -571,20 +693,33 @@ def require_ready(a: dict, project: dict | None = None) -> None:
                        "(вкладка «Требования»): " + "; ".join(r["blocked"]))
 
 
-def restart(pid: str, aid: str, force: bool = False, work: str = "review") -> dict:
+def restart(pid: str, aid: str, force: bool = False, work: str = "review", user: str = "",
+            requirements: str = "") -> dict:
     """The analysis is in work again (`work`: review | design): its requirements are reviewed again, or the
-    pipeline designs scenarios from them. force - a run of the pipeline that goes on after a restart of the studio."""
+    pipeline designs scenarios from them. force - a run of the pipeline that goes on after a restart of the studio
+    (its own design may still read as running; any other work is waited for). requirements - a new version of the
+    document (the analyst corrected it): it replaces the text, the previous one is kept in `revisions`."""
     def fn(a):
-        if _stale(a)["status"] == "running" and not force:
-            raise Conflict("Анализ уже в работе: дождитесь окончания проверки или генерации")
-        a.pop("before_fix", None)       # a fix cut off: the new work decides what the analysis is
-        a.update(status="running", started=time.time(), beat=time.time(), work=work, error="", finished=None)
+        if _stale(a)["status"] == "running" and not (force and a.get("work") == "design"):
+            raise Conflict(busy_text(a))
+        a.pop("before_work", None)      # a work cut off: the new work decides what the analysis is
+        a.pop("before_fix", None)
+        if requirements.strip() and _norm(requirements) != _norm(a["requirements"]):
+            a.setdefault("revisions", []).append({
+                "at": time.time(), "by": user, "requirements": a["requirements"], "kind": "version",
+                "summary": "Загружена новая версия ТЗ: проверяется заново с учётом решений по прежним замечаниям",
+                "edits": [], "fixed": []})
+            a["requirements"] = requirements[:200_000]
+            a.pop("learned", None)      # the model learns the new text, once its findings are settled
+        _begin(a, work, user)
+        a.update(error="", finished=None)
     return _change(pid, aid, fn)
 
 
 def delete(pid: str, aid: str) -> bool:
     if not fs.exists(_path(pid, aid)):
         return False
+    check_idle(fs.read_json(_path(pid, aid)))
     fs.unlink(_path(pid, aid))
     from . import knowledge
     knowledge.release(pid, f"{aid}:")

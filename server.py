@@ -2574,6 +2574,43 @@ async def _while_connected(request: Request, coro):
                 raise asyncio.CancelledError()
 
 
+async def _analysis_work(p: dict, aid: str, work: str, user: str, job):
+    """`job(log)` as a work on the analysis (analyses.WORK) on the worker loop: one at a time - something goes on
+    the analysis already: 409 with what (busy_text); it goes on when the page goes away (another tab, F5), its log
+    is the progress any page shows; «Остановить» (POST …/stop) stops it - 499. job returns (result, text): the
+    result for the page that waits, the text - what it did, kept for a page that did not (`work_result`)."""
+    pid = p["id"]
+    try:
+        analyses.start_work(pid, aid, work, user)
+    except analyses.Conflict as e:
+        raise HTTPException(409, str(e))
+
+    async def run():
+        async with analyses.working(pid, aid):
+            try:
+                out, text = await job(lambda line: analyses.progress(pid, aid, line))
+            except asyncio.CancelledError:
+                analyses.end_work(pid, aid, error=f"Остановлено: {analyses.WORK[work]}")
+                raise
+            except Exception as e:
+                analyses.end_work(pid, aid, error=llm.api_error_text(e) if llm.is_api_error(e) else str(e)
+                                  or type(e).__name__)
+                raise
+            analyses.end_work(pid, aid, result=text)
+            _wake_jobs(pid)
+            return out
+    try:
+        return await asyncio.shield(asyncio.wrap_future(submit(run())))
+    except asyncio.CancelledError:      # stopped on purpose (or the page went away: the work goes on)
+        raise HTTPException(499, f"Остановлено: {analyses.WORK[work]}")
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, llm.api_error_text(e))
+
+
 @app.post("/api/requirements/validate")
 async def validate_requirements(body: ValidateBody, request: Request):
     """The specification against the documentation standard: sections, quality of requirements, questions."""
@@ -2598,27 +2635,39 @@ async def validate_requirements(body: ValidateBody, request: Request):
 
 class ReviewBody(BaseModel):
     project_id: str
-    requirements: str = ""
+    requirements: str = ""      # with analysis_id: a new version of its document (the analyst corrected it)
     analysis_id: str = ""       # review again the requirements of this analysis (the new report replaces the old)
     standard: str = ""          # empty = the project's ("requirements.standard")
 
 
-async def _learn_reviewed(p: dict, aid: str, user: str, log=None) -> str:
-    """The application model learns from the reviewed requirements ("requirements.learn_model") only when every
-    finding of the review is fixed or marked not relevant: the lifecycle of the system does not take in what
-    the authors have not settled. What happened, for the person ("" - nothing to do)."""
-    say = log or (lambda line: None)
-    a = analyses.get(aid)
+def _learn_waits(p: dict, a: dict | None) -> str | None:
+    """Should the application model learn from the reviewed requirements of the analysis now: None - yes; "" -
+    nothing to learn (learned already, the stage does not learn, a map of the site); a text - it waits for the
+    findings, for the person."""
     text = (a or {}).get("requirements", "")
     if not a or a.get("learned") or not p["pipeline"]["requirements"].get("learn_model") \
             or text.lstrip().startswith(explorer.MAP_TITLE):
         return ""
     left = review.unresolved(a.get("review"))
     if left:
-        line = (f"Модель приложения обновится по требованиям, когда замечания, блокирующие тест-дизайн, будут "
+        return (f"Модель приложения обновится по требованиям, когда замечания, блокирующие тест-дизайн, будут "
                 f"исправлены или отмечены неактуальными (осталось {len(left)})")
-        say(line)
-        return line
+    return None
+
+
+async def _learn_reviewed(p: dict, aid: str, user: str, log=None) -> str:
+    """The application model learns from the reviewed requirements ("requirements.learn_model") only when every
+    finding of the review is fixed or marked not relevant: the lifecycle of the system does not take in what
+    the authors have not settled. What happened, for the person ("" - nothing to do). Call it within a work on
+    the analysis (it changes what the requirements are ready for)."""
+    say = log or (lambda line: None)
+    a = analyses.get(aid)
+    wait = _learn_waits(p, a)
+    if wait is not None:
+        if wait:
+            say(wait)
+        return wait
+    text = a["requirements"]
     say("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
     try:
         doc = await knowledge.extract(p, text, user)
@@ -2637,13 +2686,20 @@ async def review_requirements(body: ReviewBody, request: Request):
     """The first job of the Requirements tab: the reviewer subagent (review.py), on a clean context of its own,
     finds the defects of the specification and where it disagrees with the lifecycle of the system; then the
     application model learns from it ("requirements.learn_model"). The analysis keeps the report; scenarios and
-    tests are designed from it in the pipeline. NDJSON events: analysis, log, review, done | error; the page
-    went away («Остановить») - the review stops and the previous report stays."""
+    tests are designed from it in the pipeline. With analysis_id and requirements - a new version of its document
+    (the analyst sent the corrected one): it replaces the text (the previous one stays in `revisions`) and the
+    reviewer checks it knowing the decisions and answers on the earlier findings. NDJSON events: analysis, log,
+    review, done | error. The review goes on when the page goes away (its progress is in the analysis);
+    «Остановить» (POST /api/analyses/{aid}/stop) stops it and the previous report stays."""
     p = project(body.project_id, "editor")
     _require_model(p)
     a = analyses.get(body.analysis_id) if body.analysis_id else None
     if body.analysis_id and (not a or a["project_id"] != p["id"]):
         raise HTTPException(404, "Анализ не найден")
+    version = body.requirements.strip() if a else ""
+    if len(body.requirements) > 200_000:
+        raise HTTPException(400, f"Текст требований больше 200 000 символов ({len(body.requirements):,})"
+                                 .replace(",", " "))
     text = body.requirements.strip() or (a or {}).get("requirements", "")
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
@@ -2652,15 +2708,15 @@ async def review_requirements(body: ReviewBody, request: Request):
     again = bool(same) and same["status"] != "running"
     if again:
         a = same
+    notes = review.notes((a or {}).get("review"))
     if a:
         try:
-            a = analyses.restart(p["id"], a["id"])
+            a = analyses.restart(p["id"], a["id"], user=user, requirements=version)
         except analyses.Conflict as e:
             raise HTTPException(409, str(e))
     else:
         a = analyses.create(p["id"], text, "", user, work="review")
     pid, aid = p["id"], a["id"]
-    notes = review.notes(a.get("review"))
     # A review cut off (a restart of the studio, «Остановить») kept the checks it finished: only the rest is asked.
     key = review.parts_key(p, text, body.standard, notes)
     done = analyses.review_parts(a, key)
@@ -2670,6 +2726,7 @@ async def review_requirements(body: ReviewBody, request: Request):
         loop.call_soon_threadsafe(queue.put_nowait, event | {"at": time.time()})
 
     def log(line: str) -> None:
+        analyses.progress(pid, aid, line)
         send({"type": "log", "text": line})
 
     def keep(name: str, value: dict) -> None:
@@ -2689,29 +2746,34 @@ async def review_requirements(body: ReviewBody, request: Request):
             send({"type": "done", "analysis": analyses.view(analyses.get(aid))})
         except asyncio.CancelledError:
             analyses.finish(pid, aid, error="Проверка остановлена", status="cancelled")
+            send({"type": "error", "text": "Проверка остановлена", "stopped": True})
             raise
         except Exception as e:
             analyses.finish(pid, aid, error=llm.api_error_text(e))
             send({"type": "error", "text": llm.api_error_text(e)})
 
     send({"type": "analysis", "analysis": analyses.view(a)})
-    if again:
+    if version and a.get("revisions") and a["revisions"][-1].get("kind") == "version":
+        log("Новая версия ТЗ: ревьюер проверит её заново с учётом решений и ответов по прежним замечаниям")
+    elif again:
         log("Эти требования уже проверялись: обновляю их анализ — решения по прежним замечаниям ревьюер учтёт")
-    future = submit(work())
+    submit(work())
+    return _ndjson(queue)
 
+
+def _ndjson(queue: asyncio.Queue) -> StreamingResponse:
+    """The events of a work on an analysis as they come, till done | error. The page going away does not stop the
+    work: its progress is in the analysis, «Остановить» is POST /api/analyses/{aid}/stop."""
     async def events():
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), 15)
-                except asyncio.TimeoutError:
-                    yield "\n"      # keeps proxies from closing a quiet connection
-                    continue
-                yield json.dumps(event, ensure_ascii=False) + "\n"
-                if event["type"] in ("done", "error"):
-                    return
-        finally:
-            future.cancel()
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), 15)
+            except asyncio.TimeoutError:
+                yield "\n"      # keeps proxies from closing a quiet connection
+                continue
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+            if event["type"] in ("done", "error"):
+                return
 
     return StreamingResponse(events(), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -2744,6 +2806,11 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
     a = analyses.get(body.analysis_id) if body.analysis_id else None
     if body.analysis_id and (not a or a["project_id"] != pid):
         raise HTTPException(404, "Анализ не найден")
+    if a:
+        try:
+            analyses.check_idle(a)
+        except analyses.Conflict as e:
+            raise HTTPException(409, str(e))
     left = review.unresolved((a or {}).get("review"))
     if a and left:
         raise HTTPException(409, f"Сначала разберите замечания ревьюера, блокирующие тест-дизайн (осталось {len(left)}): "
@@ -2752,10 +2819,18 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
     text = body.requirements.strip() or (a or {}).get("requirements", "")
     if not text.strip():
         raise HTTPException(400, "Нет текста требований")
+    if a:       # a work on the analysis: one at a time, its progress on any page (_analysis_work)
+        async def learn(log):
+            log("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
+            doc = await knowledge.extract(p, a["requirements"], request.state.user)
+            analyses.mark_learned(pid, a["id"])
+            line = f"Модель приложения: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}"
+            log(line)
+            return None, line
+        await _analysis_work(p, a["id"], "learn", request.state.user, learn)
+        return knowledge.view(pid)
     try:
         await call(knowledge.extract(p, text, request.state.user))
-        if a:
-            analyses.mark_learned(pid, a["id"])
     except Exception as e:
         raise HTTPException(502, llm.api_error_text(e))
     _wake_jobs(pid)
@@ -2883,8 +2958,13 @@ class ConfirmBody(BaseModel):
 @app.post("/api/projects/{pid}/knowledge/confirm")
 async def confirm_knowledge(pid: str, request: Request, body: ConfirmBody | None = None):
     """A person confirms the lifecycle of the system (or some of its parts): runs of the pipeline waiting
-    for it go on."""
+    for it go on. Not while the model learns from requirements: it is about to change."""
     project(pid, "editor")
+    busy = analyses.learning(pid)
+    if busy:
+        raise HTTPException(409, f"Модель приложения сейчас учится на требованиях «{busy['feature'] or busy['title']}»"
+                                 f"{' (запустил ' + busy['by'] + ')' if busy.get('by') else ''}: подтвердите после "
+                                 "окончания — модель вот-вот изменится")
     try:
         doc = knowledge.confirm(pid, request.state.user, body.units if body else None)
     except ValueError as e:
@@ -2928,9 +3008,23 @@ async def get_analysis(aid: str):
 
 @app.delete("/api/analyses/{aid}")
 async def delete_analysis(aid: str):
-    """The analysis only: the tests made from its scenarios stay."""
+    """The analysis only: the tests made from its scenarios stay. Not while a work goes on it."""
     a = _analysis(aid)
-    return {"ok": analyses.delete(a["project_id"], aid)}
+    try:
+        return {"ok": analyses.delete(a["project_id"], aid)}
+    except analyses.Conflict as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/analyses/{aid}/stop")
+async def stop_analysis_work(aid: str):
+    """«Остановить» the work on the analysis (a review, a fix, the answers of an analyst…): the page that started
+    it may be gone - the work does not stop with it. What was done by then stays (a fix: its batches)."""
+    a = _analysis(aid)
+    if a["status"] == "running" and a.get("work") == "design":
+        raise HTTPException(409, "Сценарии проектирует запуск конвейера: остановите его во вкладке «Конвейер»")
+    stopped = analyses.request_stop(a["project_id"], aid)
+    return {"stopped": stopped, "analysis": analyses.view(analyses.get(aid))}
 
 
 class ScenarioPatch(BaseModel):
@@ -2985,90 +3079,120 @@ class FindingsBody(BaseModel):
     note: str | None = None         # why it is not relevant
 
 
-def _not_fixing(a: dict) -> None:
-    """The findings are not decided while the editor applies them to the requirements."""
-    if a["status"] == "running" and a.get("work") == "fix":
-        raise HTTPException(409, "Агент исправляет ТЗ: дождитесь окончания или остановите исправление")
-
-
 def _review_result(aid: str, model: str = "", **extra) -> dict:
     a = analyses.view(analyses.get(aid))
     _wake_jobs(a["project_id"])
     return {"analysis": a, "unresolved": len(review.unresolved(a.get("review"))), "model": model} | extra
 
 
+def _reviewed(a: dict) -> None:
+    if not a.get("review"):
+        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+
+
+def _learn_soon(p: dict, aid: str, user: str) -> str:
+    """The last blocking finding settled by a person: the application model learns from the requirements now, as a
+    work of the analysis in the background (the page shows its progress; meanwhile the requirements wait for it).
+    What happens, for the person ("" - nothing)."""
+    wait = _learn_waits(p, analyses.get(aid))
+    if wait is not None:
+        return wait
+    pid = p["id"]
+    try:
+        analyses.start_work(pid, aid, "learn", user)
+    except analyses.Conflict:
+        return ""
+
+    async def run():
+        async with analyses.working(pid, aid):
+            try:
+                line = await _learn_reviewed(p, aid, user, lambda text: analyses.progress(pid, aid, text))
+            except asyncio.CancelledError:
+                analyses.end_work(pid, aid, error=f"Остановлено: {analyses.WORK['learn']}")
+                raise
+            learned = (analyses.get(aid) or {}).get("learned")
+            analyses.end_work(pid, aid, **({"result": line} if learned else {"error": line}))
+            _wake_jobs(pid)
+    submit(run())
+    return "Замечания, блокирующие тест-дизайн, разобраны: модель приложения учится на требованиях…"
+
+
 @app.put("/api/analyses/{aid}/review/findings")
 async def decide_findings(aid: str, body: FindingsBody, request: Request):
-    """A person settles findings of the review. The last one settled - the model learns from the requirements."""
+    """A person settles findings of the review - not while a work goes on the analysis (a fix would apply half of
+    it, a review would lose it): 409. The last one settled - the model learns from the requirements (_learn_soon)."""
     a = _analysis(aid)
     p = project(a["project_id"], "editor")
-    _not_fixing(a)
     try:
-        analyses.decide(p["id"], aid, body.ids, body.status, body.answer, body.note, request.state.user)
+        analyses.decide(p["id"], aid, body.ids, body.status, body.answer, body.note, request.state.user, idle=True)
+    except analyses.Conflict as e:
+        raise HTTPException(409, str(e))
     except KeyError:
         raise HTTPException(404, "Замечание не найдено: проверьте требования заново")
     except ValueError as e:
         raise HTTPException(400, str(e))
-    model = await call(_learn_reviewed(p, aid, request.state.user)) if body.status == review.DISMISSED else ""
+    model = _learn_soon(p, aid, request.state.user) if body.status == review.DISMISSED else ""
     return _review_result(aid, model)
 
 
 @app.post("/api/analyses/{aid}/review/group")
 async def group_findings(aid: str, request: Request):
-    """The findings of a report made before themes, grouped now (review.group): the same thing - one answer."""
+    """The findings of a report made before themes, grouped now (review.group): the same thing - one answer.
+    A work of the analysis (_analysis_work)."""
     a = _analysis(aid)
     p = project(a["project_id"], "editor")
-    _not_fixing(a)
     _require_model(p)
-    if not a.get("review"):
-        raise HTTPException(400, "Требования ещё не проверены ревьюером")
-    try:
-        groups = await _while_connected(request, review.group(p, a["review"]))
-    except asyncio.CancelledError:
-        raise HTTPException(499, "Отменено")
-    except Exception as e:
-        raise HTTPException(502, llm.api_error_text(e))
-    analyses.set_groups(p["id"], aid, groups)
+    _reviewed(a)
+
+    async def job(log):
+        log("Свожу замечания обеих проверок об одном и том же в темы…")
+        groups = await review.group(p, analyses.get(aid)["review"])
+        analyses.set_groups(p["id"], aid, groups)
+        return groups, (f"Замечания сведены в темы: {len(groups)}" if groups else "Похожих замечаний не нашлось")
+    groups = await _analysis_work(p, aid, "group", request.state.user, job)
     return _review_result(aid, groups=len(groups))
 
 
 class AnswersBody(BaseModel):
-    text: str           # the answers of an analyst to the findings, in one text
+    text: str           # the answers of an analyst to the findings, in one text (up to review.ANSWERS_MAX)
 
 
 @app.post("/api/analyses/{aid}/review/answers")
 async def answer_findings(aid: str, body: AnswersBody, request: Request):
-    """The answers of an analyst pasted as one text: a model matches them to the unsettled themes of findings
-    (review.distribute); an answer - the theme waits for the editor, «not relevant» - it is dismissed."""
+    """The answers of an analyst pasted as one text (up to review.ANSWERS_MAX characters): a model matches them to
+    the unsettled themes of findings (review.distribute); an answer - the theme waits for the editor, «not
+    relevant» - it is dismissed. A work of the analysis (_analysis_work): the decisions are not changed meanwhile."""
     a = _analysis(aid)
     p = project(a["project_id"], "editor")
-    _not_fixing(a)
     _require_model(p)
-    if not a.get("review"):
-        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    _reviewed(a)
     if not body.text.strip():
         raise HTTPException(400, "Вставьте ответы аналитика")
-    try:
-        found = await _while_connected(request, review.distribute(p, a["review"], body.text))
-    except asyncio.CancelledError:
-        raise HTTPException(499, "Разбор ответов отменён")
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(502, llm.api_error_text(e))
-    answered = dismissed = 0
-    for x in found:
-        ids = review.unsettled_ids(analyses.get(aid)["review"], x["id"])
-        if not ids:
-            continue
-        if x["not_relevant"]:
-            analyses.decide(p["id"], aid, ids, review.DISMISSED, note=x["note"], user=request.state.user)
-            dismissed += 1
-        else:
-            analyses.decide(p["id"], aid, ids, review.TODO, x["answer"], user=request.state.user)
-            answered += 1
-    model = await call(_learn_reviewed(p, aid, request.state.user)) if dismissed else ""
-    return _review_result(aid, model, answered=answered, dismissed=dismissed)
+    if len(body.text) > review.ANSWERS_MAX:
+        raise HTTPException(400, f"Ответ аналитика больше {review.ANSWERS_MAX:,} символов ({len(body.text):,}): "
+                                 "разбейте его на части или, если это исправленное ТЗ целиком, загрузите его как "
+                                 "«Новая версия ТЗ»".replace(",", " "))
+    user = request.state.user
+
+    async def job(log):
+        found = await review.distribute(p, analyses.get(aid)["review"], body.text, log=log)
+        answered = dismissed = 0
+        for x in found:
+            ids = review.unsettled_ids(analyses.get(aid)["review"], x["id"])
+            if not ids:
+                continue
+            if x["not_relevant"]:
+                analyses.decide(p["id"], aid, ids, review.DISMISSED, note=x["note"], user=user)
+                dismissed += 1
+            else:
+                analyses.decide(p["id"], aid, ids, review.TODO, x["answer"], user=user)
+                answered += 1
+        line = f"Ответы разнесены: ждут исправления в ТЗ {answered}, не актуально {dismissed}"
+        log(line)
+        model = await _learn_reviewed(p, aid, user, log) if dismissed else ""
+        return {"answered": answered, "dismissed": dismissed, "model": model}, " ".join(x for x in (line, model) if x)
+    out = await _analysis_work(p, aid, "answers", user, job)
+    return _review_result(aid, out["model"], answered=out["answered"], dismissed=out["dismissed"])
 
 
 FIX_KEPT = "готовые правки сохранены, «Исправить ТЗ агентом» продолжит с оставшихся замечаний"
@@ -3079,25 +3203,29 @@ async def fix_findings(aid: str, request: Request):
     """The editor (review.revise) fixes the requirements by the findings a person answered, a few themes per
     request: each batch done replaces the requirements of the analysis at once (the previous text is kept, one
     revision per fix). The work of the analysis («fix»: one at a time, beats, interrupted by a restart - _stale).
-    NDJSON events: analysis, log, batch (the analysis after a batch), done (fixed, failed, summary) | error; the
-    page went away («Остановить») - the fix stops, the batches done stay. The application model learns separately
-    (POST …/knowledge/extract, the page asks it when every finding is settled)."""
+    NDJSON events: analysis, log, batch (the analysis after a batch), done (fixed, failed, summary) | error. The
+    fix goes on when the page goes away (its progress is in the analysis); «Остановить» (POST …/stop) stops it,
+    the batches done stay. The application model learns separately (POST …/knowledge/extract, the page asks it
+    when every finding is settled)."""
     a = _analysis(aid)
     p = project(a["project_id"], "editor")
     _require_model(p)
-    if not a.get("review"):
-        raise HTTPException(400, "Требования ещё не проверены ревьюером")
+    _reviewed(a)
     if not any(it["status"] == review.TODO for it in review.items(a["review"])):
         raise HTTPException(400, "Нет замечаний для исправления: ответьте на замечания или примите предложения ревьюера")
     pid, user, run = p["id"], request.state.user, os.urandom(5).hex()
     try:
-        a = analyses.start_fix(pid, aid)
+        a = analyses.start_fix(pid, aid, user)
     except analyses.Conflict as e:
         raise HTTPException(409, str(e))
     loop, queue = asyncio.get_running_loop(), asyncio.Queue()
 
     def send(event: dict) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event | {"at": time.time()})
+
+    def log(line: str) -> None:
+        analyses.progress(pid, aid, line)
+        send({"type": "log", "text": line})
 
     def keep(part: dict) -> None:
         analyses.revise(pid, aid, part, user, run=run)
@@ -3106,13 +3234,15 @@ async def fix_findings(aid: str, request: Request):
     async def work():
         async with analyses.working(pid, aid):
             try:
-                result = await review.revise(p, a["requirements"], a["review"],
-                                             log=lambda line: send({"type": "log", "text": line}), keep=keep)
-                analyses.end_fix(pid, aid)
+                result = await review.revise(p, a["requirements"], a["review"], log=log, keep=keep)
+                analyses.end_work(pid, aid, result=f"Исправлено в ТЗ: {len(result['fixed'])}"
+                                  + (f", не удалось: {len(result['failed'])}" if result["failed"] else ""))
                 send(_review_result(aid, type="done", fixed=result["fixed"], failed=result["failed"],
                                     summary=result["summary"]))
             except asyncio.CancelledError:
                 analyses.end_fix(pid, aid, error=f"Исправление ТЗ остановлено: {FIX_KEPT}")
+                send({"type": "error", "text": "Исправление ТЗ остановлено: готовые правки сохранены", "stopped": True,
+                      "analysis": analyses.view(analyses.get(aid))})
                 raise
             except Exception as e:
                 text = llm.api_error_text(e) if llm.is_api_error(e) else str(e) or type(e).__name__
@@ -3120,45 +3250,31 @@ async def fix_findings(aid: str, request: Request):
                 send({"type": "error", "text": text, "analysis": analyses.view(analyses.get(aid))})
 
     send({"type": "analysis", "analysis": analyses.view(a)})
-    future = submit(work())
-
-    async def events():
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), 15)
-                except asyncio.TimeoutError:
-                    yield "\n"      # keeps proxies from closing a quiet connection
-                    continue
-                yield json.dumps(event, ensure_ascii=False) + "\n"
-                if event["type"] in ("done", "error"):
-                    return
-        finally:
-            future.cancel()
-
-    return StreamingResponse(events(), media_type="application/x-ndjson",
-                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    submit(work())
+    return _ndjson(queue)
 
 
 @app.post("/api/analyses/{aid}/review/lifecycle")
 async def recheck_lifecycle(aid: str, request: Request):
     """The check against the lifecycle of the system made again (it failed, or the model changed since): the check
-    of the document and the decisions on it stay. Every finding settled - the model learns from the requirements."""
+    of the document and the decisions on it stay. Every finding settled - the model learns from the requirements.
+    A work of the analysis (_analysis_work)."""
     a = _analysis(aid)
     p = project(a["project_id"], "editor")
     _require_model(p)
-    if a["status"] == "running":
-        raise HTTPException(409, "Анализ в работе: дождитесь окончания проверки или генерации")
-    if not a.get("review"):
-        raise HTTPException(400, "Требования ещё не проверены ревьюером")
-    try:
-        lc = await _while_connected(request, review.lifecycle(p, a["requirements"], notes=review.notes(a["review"])))
-    except asyncio.CancelledError:
-        raise HTTPException(499, "Проверка отменена")
-    except Exception as e:
-        raise HTTPException(502, llm.api_error_text(e))
-    analyses.set_lifecycle(p["id"], aid, lc)
-    model = await call(_learn_reviewed(p, aid, request.state.user))
+    _reviewed(a)
+    user = request.state.user
+
+    async def job(log):
+        now = analyses.get(aid)
+        lc = await review.lifecycle(p, now["requirements"], log=log, notes=review.notes(now["review"]))
+        analyses.set_lifecycle(p["id"], aid, lc)
+        bad = [c for c in lc["conflicts"] if c["kind"] != "new"]
+        line = f"Сверка с жизненным циклом: расхождений {len(bad)}"
+        log(line)
+        model = await _learn_reviewed(p, aid, user, log)
+        return model, " ".join(x for x in (line, model) if x)
+    model = await _analysis_work(p, aid, "lifecycle", user, job)
     return _review_result(aid, model)
 
 
@@ -3267,8 +3383,10 @@ async def start_job(pid: str, body: JobBody, request: Request):
             analyses.require_ready(reviewed, p)
         except analyses.NotReady as e:
             raise HTTPException(409, str(e))
-        if reviewed["status"] == "running":
-            raise HTTPException(409, "Анализ уже в работе: дождитесь окончания проверки или генерации")
+        try:
+            analyses.check_idle(reviewed)
+        except analyses.Conflict as e:
+            raise HTTPException(409, str(e))
         if ready or body.links or body.text.strip() or body.explore or cases:
             raise HTTPException(400, "Проверенные требования запускаются отдельно от других источников")
     if not [l for l in body.links if l.strip()] and not body.text.strip() and not body.explore and not cases \

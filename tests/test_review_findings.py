@@ -383,7 +383,7 @@ def test_the_editor_keeps_each_batch_and_a_failure_loses_only_the_batch_in_work(
     res = a["review"]["resolutions"]
     assert res["d0"]["status"] == res["l0"]["status"] == "fixed" and res["vq0"]["status"] == "todo"
     assert a["status"] == "done" and a["work"] == "review" and not a["error"]
-    assert "готовые правки сохранены" in a["fix_error"]
+    assert "готовые правки сохранены" in a["work_error"]
 
     # Fixed again: only what is left is asked; the fix before does not stay as an error.
     fake_llm.calls.clear()
@@ -392,7 +392,7 @@ def test_the_editor_keeps_each_batch_and_a_failure_loses_only_the_batch_in_work(
     assert done["type"] == "done" and done["fixed"] == ["vq0"] and done["unresolved"] == 0
     assert len(fake_llm.calls) == 1 and "[d0]" not in fake_llm.calls[0][1]["messages"][0]["content"]
     a = analyses.get(aid)
-    assert len(a["revisions"]) == 2 and a["fix_error"] == "" and "3. Отменяет менеджер." in a["requirements"]
+    assert len(a["revisions"]) == 2 and a["work_error"] == "" and "3. Отменяет менеджер." in a["requirements"]
 
 
 def test_a_fix_is_one_at_a_time_and_the_findings_wait_for_it(monkeypatch, fake_llm):
@@ -407,9 +407,9 @@ def test_a_fix_is_one_at_a_time_and_the_findings_wait_for_it(monkeypatch, fake_l
     # The studio restarted during the fix: the analysis is what it was, the fix is said to be cut off.
     analyses._change(p["id"], aid, lambda a: a.update(beat=0))
     a = analyses.get(aid)
-    assert a["status"] == "done" and "прервано перезапуском" in a["fix_error"]
+    assert a["status"] == "done" and "прервано перезапуском" in a["work_error"]
     analyses.end_fix(p["id"], aid)
-    assert analyses.get(aid)["status"] == "done" and "before_fix" not in analyses.get(aid)
+    assert analyses.get(aid)["status"] == "done" and "before_work" not in analyses.get(aid)
 
 
 def test_an_answer_cut_off_keeps_the_complete_edits(fake_llm):
