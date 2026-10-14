@@ -40,6 +40,8 @@ INTERRUPTED = {
     "review": "Проверка прервана перезапуском студии — «Проверить заново» продолжит с готовой части",
     "design": "Проектирование сценариев прервано перезапуском студии — «Продолжить» запуск конвейера продолжит "
               "с места остановки",
+    "fix": "Исправление ТЗ прервано перезапуском студии — готовые правки сохранены, «Исправить ТЗ агентом» "
+           "продолжит с оставшихся замечаний",
 }
 
 
@@ -100,7 +102,11 @@ def _stale(a: dict) -> dict:
             gone = time.time() - (a["beat"] or 0) > BEAT_STALE
         else:       # written by a version without beats
             gone = time.time() - (a.get("started") or a["created"]) > STALE
-        if gone:
+        if gone and a.get("work") == "fix" and a.get("before_fix"):     # the fix: the batches done stay
+            was = a["before_fix"]
+            a.update(status=was["status"] or "done", work=was["work"], error=was["error"] or "",
+                     fix_error=INTERRUPTED["fix"])
+        elif gone:
             a["status"] = "error"
             a["error"] = a["error"] or INTERRUPTED.get(a.get("work") or "", "Генерация была прервана")
     return a
@@ -151,7 +157,7 @@ def list_analyses(pid: str, limit: int = 50) -> list[dict]:
         rv = a.get("review") or {}
         state = readiness(a, project, doc)
         out.append({k: a.get(k) for k in ("id", "created", "finished", "user", "title", "feature", "status", "error",
-                                          "url")}
+                                          "url", "work")}
                    | {"scenarios": len(ready), "tests": sum(len(s.get("test_ids") or []) for s in ready),
                       "review": {"verdict": rv.get("verdict"), "at": rv.get("at")} if rv else None,
                       "step": state["step"], "blocked": state["blocked"]})
@@ -421,16 +427,45 @@ def set_groups(pid: str, aid: str, groups: list[dict]) -> dict:
     return _change(pid, aid, fn)
 
 
-def revise(pid: str, aid: str, result: dict, user: str = "") -> dict:
+def start_fix(pid: str, aid: str) -> dict:
+    """The editor fixes the requirements (review.revise): the analysis is in work, what it was is kept for
+    end_fix(). Conflict - it is in work already."""
+    def fn(a):
+        if _stale(a)["status"] == "running":
+            raise Conflict("Анализ уже в работе: дождитесь окончания проверки, исправления или генерации")
+        # kept already - the fix before was cut off by a restart of the studio: what it was before that one
+        a["before_fix"] = a.get("before_fix") or {k: a.get(k) for k in ("status", "error", "work", "finished")}
+        a.update(status="running", started=time.time(), beat=time.time(), work="fix", fix_error="")
+    return _change(pid, aid, fn)
+
+
+def end_fix(pid: str, aid: str, error: str = "") -> dict:
+    """The fix is over: the analysis is what it was before it; `fix_error` - why it stopped (the batches done stay)."""
+    def fn(a):
+        was = a.pop("before_fix", None) or {"status": "done", "error": "", "work": "review", "finished": None}
+        a.update(status=was["status"] or "done", work=was["work"], error=was["error"] or "",
+                 finished=was.get("finished"), fix_error=error)
+    return _change(pid, aid, fn)
+
+
+def revise(pid: str, aid: str, result: dict, user: str = "", run: str = "") -> dict:
     """The editor fixed the document by the findings (review.revise): the requirements become the new text, the
-    previous one is kept in `revisions` with the edits; the findings applied are fixed, the others stay to fix."""
+    previous one is kept in `revisions` with the edits; the findings applied are fixed, the others stay to fix.
+    run - the fix that made it: its batches (one call each) make one revision."""
     from . import review
 
     def fn(a):
         if result["fixed"]:
-            a.setdefault("revisions", []).append({"at": time.time(), "by": user, "requirements": a["requirements"],
-                                                  "summary": result["summary"], "edits": result["edits"],
-                                                  "fixed": result["fixed"]})
+            revs = a.setdefault("revisions", [])
+            last = revs[-1] if revs else None
+            if run and last and last.get("run") == run:
+                last["summary"] = " ".join(s for s in (last["summary"], result["summary"]) if s)
+                last["edits"] += result["edits"]
+                last["fixed"] += result["fixed"]
+            else:
+                revs.append({"at": time.time(), "by": user, "requirements": a["requirements"],
+                             "summary": result["summary"], "edits": result["edits"], "fixed": result["fixed"]}
+                            | ({"run": run} if run else {}))
             a["requirements"] = result["requirements"][:200_000]
             a.pop("learned", None)      # the model learns the corrected text, once every finding is settled
             review.fixed(a["review"], result["fixed"], user)
@@ -542,6 +577,7 @@ def restart(pid: str, aid: str, force: bool = False, work: str = "review") -> di
     def fn(a):
         if _stale(a)["status"] == "running" and not force:
             raise Conflict("Анализ уже в работе: дождитесь окончания проверки или генерации")
+        a.pop("before_fix", None)       # a fix cut off: the new work decides what the analysis is
         a.update(status="running", started=time.time(), beat=time.time(), work=work, error="", finished=None)
     return _change(pid, aid, fn)
 

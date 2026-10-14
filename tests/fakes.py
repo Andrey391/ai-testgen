@@ -49,6 +49,24 @@ class FakeMessages:
         self.owner.calls.append(("parse", kw))
         return self.owner.script("parse", kw)
 
+    # A streamed request: the script answers it whole; with a JSON schema in output_config it is a "parse".
+    def stream(self, **kw):
+        kw = kw | {"messages": list(kw["messages"])}
+        kind = "parse" if "format" in (kw.get("output_config") or {}) else "create"
+        self.owner.calls.append((kind, kw))
+        owner = self.owner
+
+        class Stream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get_final_message(self):
+                return owner.script(kind, kw)
+        return Stream()
+
 
 class FakeClient:
     def __init__(self, script=None):

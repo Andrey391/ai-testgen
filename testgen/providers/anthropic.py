@@ -11,8 +11,10 @@ Features (llm.Model.features) a model may lack - the studio then does the same o
 from __future__ import annotations
 
 import anthropic
+import httpx
 import pydantic
 from anthropic.lib._parse._response import parse_beta_response
+from anthropic.lib._parse._transform import transform_schema
 from anthropic.types.beta import BetaMessage
 
 from .base import ProviderError, Reply, Request, fill_empty, trim_history, usage_dict
@@ -65,6 +67,8 @@ def error_text(e: Exception) -> str:
         return NO_KEY
     if isinstance(e, anthropic.APIStatusError) and _no_credits(e):
         return NO_CREDITS
+    if isinstance(e, anthropic.APITimeoutError):
+        return "API ИИ: модель не ответила за отведённое время — повторите или выберите модель быстрее."
     if isinstance(e, anthropic.RateLimitError):
         return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
@@ -89,6 +93,14 @@ def _context_editing_failed(e: Exception) -> bool:
 
 # Connections (API address, model) where context editing failed: the studio cuts old screenshots itself.
 NO_CONTEXT_EDITING: set[tuple[str, str]] = set()
+# Connections (a gateway of the project's own) that refused a streamed request: they get plain ones.
+NO_STREAM: set[tuple[str, str]] = set()
+STREAM_REFUSED = {400, 404, 405, 415, 422, 501}
+
+
+def _timeout(req: Request) -> dict:
+    """The request's own wait: for a stream - the longest pause in it, so a long answer still arriving is not cut."""
+    return {"timeout": httpx.Timeout(req.timeout, connect=min(req.timeout, 30.0))} if req.timeout else {}
 
 
 class AnthropicProvider:
@@ -167,9 +179,30 @@ class AnthropicProvider:
             raise
         return self._reply(resp)
 
+    def _streams(self, req: Request) -> bool:
+        return req.stream and self._key(req.model) not in NO_STREAM and hasattr(self.client().beta.messages, "stream")
+
+    async def _streamed(self, req: Request, call, plain) -> Reply:
+        """A streamed request; a gateway that refuses streams gets the plain one (and from now on)."""
+        try:
+            return await self._send(req, call)
+        except ProviderError as e:
+            if e.status not in STREAM_REFUSED:
+                raise
+            NO_STREAM.add(self._key(req.model))
+            return await self._send(req, plain)
+
     async def chat(self, req: Request) -> Reply:
-        return await self._send(req, lambda p, betas: self.client().beta.messages.create(
-            **p, **({"betas": betas} if betas else {})))
+        def plain(p, betas):
+            return self.client().beta.messages.create(**p, **({"betas": betas} if betas else {}), **_timeout(req))
+
+        async def streamed(p, betas):
+            async with self.client().beta.messages.stream(**p, **({"betas": betas} if betas else {}),
+                                                          **_timeout(req)) as s:
+                return await s.get_final_message()
+        if self._streams(req):
+            return await self._streamed(req, streamed, plain)
+        return await self._send(req, plain)
 
     @property
     def structured(self) -> bool:
@@ -179,16 +212,30 @@ class AnthropicProvider:
         """Server-side structured output; the caller falls back to the prompt when it is off.
         The SDK validates the answer itself and raises on one cut off by max_tokens, losing the
         stop reason and the usage: the raw response is read and validated here instead."""
+        def parsed(msg):
+            try:
+                return parse_beta_response(response=msg, output_format=schema)
+            except pydantic.ValidationError:
+                return msg          # no parsed_output: the caller sees the stop reason and the text
+
         async def call(p, betas):
-            kw = {**p, "output_format": schema, **({"betas": betas} if betas else {})}
+            kw = {**p, "output_format": schema, **({"betas": betas} if betas else {}), **_timeout(req)}
             api = self.client().beta.messages
             raw_api = getattr(api, "with_raw_response", None)
             if raw_api is None:
                 return await api.parse(**kw)
             raw = await raw_api.parse(**kw)
-            msg = BetaMessage.model_validate(_lenient(raw.http_response.json()))
-            try:
-                return parse_beta_response(response=msg, output_format=schema)
-            except pydantic.ValidationError:
-                return msg          # no parsed_output: the caller sees the stop reason and the text
+            return parsed(BetaMessage.model_validate(_lenient(raw.http_response.json())))
+
+        async def streamed(p, betas):
+            # The schema as output_config, not output_format: the SDK would validate a cut-off answer itself
+            # and raise, losing what came; it is validated here.
+            fmt = {"type": "json_schema", "schema": transform_schema(pydantic.TypeAdapter(schema).json_schema())}
+            kw = {**p, "output_config": {**(p.get("output_config") or {}), "format": fmt},
+                  **({"betas": betas} if betas else {}), **_timeout(req)}
+            async with self.client().beta.messages.stream(**kw) as s:
+                msg = await s.get_final_message()
+            return parsed(msg) if isinstance(msg, BetaMessage) and getattr(msg, "parsed_output", None) is None else msg
+        if self._streams(req):
+            return await self._streamed(req, streamed, call)
         return await self._send(req, call)

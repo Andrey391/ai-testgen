@@ -32,11 +32,13 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import datetime
+import json
 import os
 import re
 from typing import Callable
 
 import anthropic
+import pydantic
 
 from .paths import OFFLINE
 from .repo import usage as usage_repo
@@ -390,28 +392,30 @@ def _check(usage: Usage | None, project_id: str) -> None:
 async def chat(stage: dict | None, *, system: str, messages: list[dict], tools: list[dict] | None = None,
                max_tokens: int = 16000, one_tool: bool = True, cache: bool = True, cache_all: bool = False,
                context: str = "", keep_images: int = 0, usage: Usage | None = None, project_id: str = "",
-               stage_name: str = "") -> Reply:
-    """One answer of the project's model (the stage may override it)."""
+               stage_name: str = "", stream: bool = False, timeout: float = 0) -> Reply:
+    """One answer of the project's model (the stage may override it). stream - a long answer comes as a stream;
+    timeout - seconds of the wait (of a pause in a stream), 0 - the SDK's."""
     m = model(project_id, stage)
     _check(usage, project_id)
     req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
                   tools=tools or [], max_tokens=max_tokens, one_tool=one_tool, cache=cache and PROMPT_CACHE,
-                  cache_all=cache_all, context=context, keep_images=keep_images)
+                  cache_all=cache_all, context=context, keep_images=keep_images, stream=stream, timeout=timeout)
     reply = await m.provider().chat(req)
     track(reply, usage, m.prices, project_id, stage_name)
     return reply
 
 
 async def parse(stage: dict | None, *, system: str, messages: list[dict], schema, max_tokens: int = 4000,
-                context: str = "", usage: Usage | None = None, project_id: str = "", stage_name: str = "") -> Reply:
-    """An answer as `schema` (reply.parsed; None if the model declined). A model without
-    server-side structured output gets the schema in the prompt; an answer that does not
-    validate is sent back with the error once."""
+                context: str = "", usage: Usage | None = None, project_id: str = "", stage_name: str = "",
+                stream: bool = False, timeout: float = 0) -> Reply:
+    """An answer as `schema` (reply.parsed; None if the model declined or the answer was cut off - salvage()
+    takes what came). A model without server-side structured output gets the schema in the prompt; an answer
+    that does not validate is sent back with the error once. stream, timeout - as chat()."""
     m = model(project_id, stage)
     _check(usage, project_id)
     prov = m.provider()
     req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
-                  max_tokens=max_tokens, cache=PROMPT_CACHE, context=context)
+                  max_tokens=max_tokens, cache=PROMPT_CACHE, context=context, stream=stream, timeout=timeout)
     if prov.structured:
         reply = await prov.parse(req, schema)
         track(reply, usage, m.prices, project_id, stage_name)
@@ -431,6 +435,23 @@ async def parse(stage: dict | None, *, system: str, messages: list[dict], schema
         parsed, _ = validate(schema, reply.text)
     reply.parsed = parsed
     return reply
+
+
+def salvage(text: str, key: str, item) -> list:
+    """The complete entries of the list `key` (pydantic `item`) in a structured answer cut off by the output
+    limit: they are kept, not asked again."""
+    m = re.search(rf'"{key}"\s*:\s*\[', text or "")
+    if not m:
+        return []
+    decoder, pos, out = json.JSONDecoder(), m.end(), []
+    while True:
+        while pos < len(text) and text[pos] in " \t\r\n,":
+            pos += 1
+        try:
+            obj, pos = decoder.raw_decode(text, pos)
+            out.append(item.model_validate(obj))
+        except (ValueError, pydantic.ValidationError):
+            return out
 
 
 def is_api_error(e: Exception) -> bool:
