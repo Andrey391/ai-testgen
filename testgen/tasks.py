@@ -135,16 +135,12 @@ def _order(t: dict) -> tuple:
 
 
 def suggest(status: str, tests: list[dict]) -> str:
-    """The status the task's tests point to, when it is further than the task's own: «Готово» - every test is in
-    the regression suite (ready), «На проверке» - the last runs of all of them passed. Only a hint: a person moves it."""
-    if not tests:
+    """The status the task's tests point to, when it is further than the task's own: «На проверке» - the last runs
+    of all of them passed, «Готово» - besides, every test is in the regression suite (ready); a test whose last run
+    failed (or that never ran) points to nothing. Only a hint: a person moves it."""
+    if not tests or not all(x["last_status"] == "passed" for x in tests):
         return ""
-    if all(x["status"] == "ready" for x in tests):
-        best = "done"
-    elif all(x["last_status"] == "passed" for x in tests):
-        best = "review"
-    else:
-        return ""
+    best = "done" if all(x["status"] == "ready" for x in tests) else "review"
     return best if STATUSES.index(best) > STATUSES.index(status) else ""
 
 

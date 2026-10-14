@@ -343,6 +343,24 @@ def documents(d: Path | str, pattern: str = "*.json") -> list[tuple[Path, str, f
     return sorted(out, key=lambda x: x[2], reverse=True)
 
 
+def stamps(d: Path | str, pattern: str = "*.json") -> list[tuple[Path, float]]:
+    """documents() without the texts: (path, modified), newest first - to read again only what changed."""
+    k = key(d)
+    if k is None:
+        return [(p, m) for p, _, m in documents(d, pattern)]
+    from sqlalchemy import select
+    t = db.docs
+    segments = pattern.split("/")
+    out = []
+    with db.engine().connect() as c:
+        for r in c.execute(select(t.c.path, t.c.updated).where(t.c.path.like(_like(k + "/"), escape="\\"),
+                                                               t.c.kind.in_(("json", "text")))):
+            rel = r.path[len(k) + 1:].split("/")
+            if len(rel) == len(segments) and all(fnmatch.fnmatchcase(a, b) for a, b in zip(rel, segments)):
+                out.append((_path_of(r.path), r.updated))
+    return sorted(out, key=lambda x: x[1], reverse=True)
+
+
 def iterdir(d: Path | str) -> list[Path]:
     """Children of a folder: files and sub-folders."""
     k = key(d)

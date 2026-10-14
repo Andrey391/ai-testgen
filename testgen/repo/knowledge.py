@@ -7,7 +7,8 @@ A write stores only the rows that changed.
 """
 from __future__ import annotations
 
-from sqlalchemy import or_, select
+from sqlalchemy import Text, cast, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 
 from .. import db
 
@@ -49,6 +50,20 @@ class Sql:
             for kind, rid in set(have) - keep:
                 c.execute(t.delete().where(t.c.project_id == pid, t.c.kind == kind, t.c.id == rid))
             db.upsert(c, cls.m, {"project_id": pid, "updated": doc.get("updated"), "body": doc})
+
+    @classmethod
+    def signature(cls, pid: str) -> str | None:
+        """A digest of the whole model, counted by the database (no rows leave it): the same while nothing in the
+        model changed. None - the project has no model in the tables."""
+        t = cls.t
+        row = func.concat(t.c.kind, ":", t.c.id, ":", t.c.pos, ":", cast(t.c.body, Text))
+        with db.engine().connect() as c:
+            meta = c.execute(select(func.md5(cast(cls.m.c.body, Text))).where(cls.m.c.project_id == pid)).scalar()
+            if meta is None:
+                return None
+            items = c.execute(select(func.md5(func.string_agg(row, aggregate_order_by(literal("|"), t.c.kind, t.c.pos))))
+                              .where(t.c.project_id == pid)).scalar()
+        return f"{meta}:{items or ''}"
 
     @classmethod
     def search(cls, pid: str, words: list[str], kinds: tuple[str, ...] = ("entities", "data", "roles"),

@@ -327,9 +327,10 @@ class Job:
         self.resuming = False                   # goes on after a restart of the studio (resumed())
         self.preselect: list[int] = []          # scenarios checked when a person chooses ("scenarios.select")
         self.sessions = sessions
+        self.waiting_since = None       # since when the run waits for a person (an awaiting_* status)
+        self.waits: list[dict] = []     # the waits that ended: {status, since, until} - the dashboard's wait time
         # running | awaiting_review | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
         self.status = "running"
-        self.waiting_since = None       # since when the run waits for a person (an awaiting_* status)
         self.notified: list[str] = []   # the waits the team was told of (notify "job_waiting"): once each
         self.stage = "requirements"
         self.created = time.time()
@@ -418,7 +419,22 @@ class Job:
             "id", "project_id", "links", "text", "url", "user", "explore", "cases", "status", "stage", "created",
             "finished", "log", "requirements", "feature", "assumptions", "given", "scenarios", "items", "error", "usage",
             "design", "validation", "analysis_id", "preselect", "review", "review_id", "review_accepted",
-            "spec_chars", "review_parts", "waiting_since", "notified")}
+            "spec_chars", "review_parts", "waiting_since", "waits", "notified")}
+
+    @property
+    def status(self) -> str:
+        return self._status
+
+    @status.setter
+    def status(self, value: str) -> None:
+        # A wait for a person ends (the run goes on, waits for something else, is stopped or fails): how long it
+        # took is kept - the dashboard shows the median.
+        old = getattr(self, "_status", None)
+        if old != value and old in WAITING and self.waiting_since:
+            self.waits.append({"status": old, "since": self.waiting_since, "until": time.time()})
+            self.waits = self.waits[-MAX_WAITS:]
+            self.waiting_since = None
+        self._status = value
 
     @classmethod
     def resumed(cls, project: dict, j: dict, sessions: dict, user: str = "") -> "Job":
@@ -430,7 +446,7 @@ class Job:
                   design=j.get("design"), review_id=j.get("review_id") or "")
         job.id, job.created = j["id"], j["created"]
         for k in ("log", "feature", "assumptions", "given", "scenarios", "items", "validation", "analysis_id",
-                  "preselect", "review", "review_accepted", "review_parts", "notified"):
+                  "preselect", "review", "review_accepted", "review_parts", "waits", "notified"):
             setattr(job, k, j.get(k) or getattr(job, k))
         job.spec_chars = j.get("spec_chars")     # None - cut off by a version that did not keep it
         job.requirements = j.get("requirements") or []
@@ -461,8 +477,8 @@ class Job:
         """The run waits for a person's decision (an awaiting_* status): the inbox shows it from now on, the team
         is told once for each kind of wait of the run."""
         if self.status != status:
+            self.status = status            # the wait before this one (if any) ends
             self.waiting_since = time.time()
-        self.status = status
         if status not in self.notified:
             self.notified.append(status)
             notify.event(projects.get(self.project_id), "job_waiting", job=self.state())
@@ -1196,6 +1212,8 @@ class Job:
 
 # A run in these states is working (or waiting for a person) in the instance that owns it.
 LIVE = ("running", "awaiting_review", "awaiting_model", "awaiting_selection", "awaiting_reuse")
+WAITING = LIVE[1:]          # the run waits for a person's decision
+MAX_WAITS = 50              # the ended waits a run keeps
 MODEL_POLL = 3      # seconds between checks of the application model while a run waits for its confirmation
 DONE_ITEMS = ("done", "needs_attention")     # a resumed run does not redo them
 

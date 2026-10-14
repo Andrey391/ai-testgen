@@ -3721,6 +3721,8 @@ function tile(value, label, sub, path, hint) {
   const body = `<div class="l">${label}</div><div class="v">${value}</div>${sub ? `<div class="s">${sub}</div>` : ''}`;
   return path ? `<a class="tile" href="#${esc(path)}" title="${esc(hint || '')}">${body}</a>` : `<div class="tile">${body}</div>`;
 }
+// How long the pipeline waited for a person: minutes, hours past an hour.
+const waitTime = min => min == null ? '—' : min < 60 ? `${Math.round(min)} мин` : `${(min / 60).toFixed(1).replace('.0', '')} ч`;
 function bars(points, label, title) {
   if (!points.length) return '<div class="hint">Данных пока нет — появятся после первых прогонов тестов и наборов.</div>';
   const max = Math.max(...points.map(label)) || 1;
@@ -3731,7 +3733,7 @@ async function loadDash() {
   if (!PID) return;
   let m;
   try { m = await api('GET', `/api/projects/${PID}/metrics?days=${$('#dashDays').value}`); } catch (e) { $('#dashTiles').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-  const a = m.automation, st = m.stability, q = m.quality, r = m.regression, sv = m.saved, sp = m.spending;
+  const a = m.automation, st = m.stability, q = m.quality, r = m.regression, sv = m.saved, sp = m.spending, w = m.waits;
   $('#dashTiles').innerHTML =
     tile(m.tests, 'Автотестов', Object.entries(m.by_status).map(([k, v]) => `${({draft: 'черновиков', review: 'на ревью', ready: 'в наборе'})[k] || k}: ${v}`).join(' · '), projPath('tests'), 'Все тесты проекта') +
     tile(a.share == null ? a.linked_cases : pct(a.share), 'Автоматизировано ручных кейсов', a.imported_cases ? `${a.linked_cases} из ${a.imported_cases} импортированных` : `привязано к кейсам: ${a.linked_cases}`) +
@@ -3741,6 +3743,9 @@ async function loadDash() {
     tile(r.last_minutes == null ? '—' : r.last_minutes + ' мин', 'Время регрессии', 'последний запуск набора',
          r.last_id ? projPath('suites', r.last_id) : projPath('suites'), r.last_id ? 'Последний запуск набора' : 'Запуски наборов') +
     tile(sv.hours + ' ч', 'Сэкономлено ручного труда', `${sv.runs} автопрогонов × ${sv.manual_minutes} мин (настройка «Ручной прогон кейса»)`) +
+    tile(waitTime(w.median_minutes), 'Конвейер ждёт решения', (w.count ? `медиана, ожиданий за ${m.days} дн.: ${w.count}` : `за ${m.days} дн. не ждал`)
+         + (w.model_count ? ` · подтверждение модели — ${waitTime(w.model_median_minutes)}` : '') + (w.now ? ` · ждут сейчас: ${w.now}` : ''),
+         projPath('pipe'), 'Запуски конвейера') +
     tile(`$${sp.usd.toFixed(2)}`, `Расход на модели за ${sp.month}`, `≈ ${sp.rub.toFixed(0)} ₽` + (sp.test_generation_usd != null ? ` · генерация теста ≈ $${sp.test_generation_usd}` : ''));
   $('#dashSuites').innerHTML = bars(r.suites, p => p.minutes, p => `${fmtTime(p.at)}: ${p.minutes} мин, ${p.passed ? 'успешно' : 'есть падения'}`);
   $('#dashRuns').innerHTML = bars(sv.per_day, p => p.runs, p => `${p.day}: ${p.runs} прогонов`);
@@ -3787,7 +3792,7 @@ async function loadTasks() {
         ${t.tests.length ? `<div class="chips" style="margin-top:3px">${t.tests.map(x => `<a href="#" class="badge" onclick="openTest('${x.id}');return false">${esc(x.name)}</a>`).join('')}
           ${t.tests.length > 1 ? `<a class="linkbtn" href="#${projPath('tests')}?task=${t.id}" title="Тесты задачи во вкладке «Тесты»: прогоны, качество проверок">все в «Тестах» →</a>` : ''}</div>` : ''}</td>
       <td><select class="inline" onchange="setTaskStatus('${t.id}', this.value)">${statusOptions(t.status)}</select>
-        ${t.suggest ? `<div><button class="linkbtn" onclick="setTaskStatus('${t.id}', '${t.suggest}')" title="${t.suggest === 'done' ? 'Все тесты задачи проверены и в наборе' : 'Последние прогоны всех тестов задачи прошли'}">→ ${esc(TASK_STATUS[t.suggest])}?</button></div>` : ''}</td>
+        ${t.suggest ? `<div><button class="linkbtn" onclick="setTaskStatus('${t.id}', '${t.suggest}')" title="${t.suggest === 'done' ? 'Все тесты задачи в наборе, их последние прогоны прошли' : 'Последние прогоны всех тестов задачи прошли'}">→ ${esc(TASK_STATUS[t.suggest])}?</button></div>` : ''}</td>
       <td><span class="badge ${cls}">${esc(pr)}</span></td>
       <td>${esc(t.assignee) || '<span class="muted">—</span>'}</td>
       <td class="${t.overdue ? 'overdue' : ''}" title="${t.overdue ? 'Срок прошёл' : ''}">${t.due ? new Date(t.due + 'T00:00').toLocaleDateString('ru-RU') : '—'}</td>
