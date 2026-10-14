@@ -4513,8 +4513,9 @@ function checkVersion(btn) {
   AN_TAB = 'review';
   runReview({analysis_id: AN.id, requirements: text});
 }
-// The editor fixes the requirements a few themes at a time (review.revise): the live card above shows the batches,
-// each batch done is kept at once - «Остановить» or a failure loses only the batch in work. Every finding settled,
+// The editor fixes the requirements a theme per request, a few at a time (review.revise): the live card above shows
+// the batches and how the requests in work go (status: the model thinks / writes), each batch done is kept at
+// once - «Остановить» or a failure loses only the batches in work. Every finding settled,
 // the application model learns from the corrected text: a work of its own (learnAfterFix).
 async function fixFindings() {
   if (!AN || REQ_ABORT) return;
@@ -4526,7 +4527,8 @@ async function fixFindings() {
     const finished = await readNdjson(`/api/analyses/${aid}/review/fix`, {}, ev => {
       if (ev.type === 'log') {
         reqLog(ev.text); $('#reqStage').textContent = ev.text.slice(0, 160); liveBar(ev.text);
-      } else if (ev.type === 'analysis' || ev.type === 'batch') { if (mine()) openAnalysis(ev.analysis); }
+      } else if (ev.type === 'status') $('#reqStage').textContent = ev.text.slice(0, 160);
+      else if (ev.type === 'analysis' || ev.type === 'batch') { if (mine()) openAnalysis(ev.analysis); }
       else if (ev.type === 'done') { done = ev; if (mine()) openAnalysis(ev.analysis); }
       else if (ev.type === 'error') { if (ev.analysis && mine()) openAnalysis(ev.analysis); throw liveError(ev); }
     });
@@ -4588,6 +4590,7 @@ function liveStart(stage, aid = '', own = true, started = Date.now()) {
   $('#reqLog').innerHTML = '';
   $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
   $('#reqStage').textContent = stage; $('#reqBar').style.width = '10%'; $('#reqBar').style.background = '';
+  LIVE_DONE = new Set();
   clearInterval(LIVE_TIMER);
   const tick = () => $('#reqTimer').textContent = elapsed(Date.now() - started);
   LIVE_TIMER = setInterval(tick, 1000); tick();
@@ -4602,9 +4605,12 @@ function liveEnd(text, colour, log = false) {        // colour: of the dot and t
   clearInterval(LIVE_TIMER); REQ_ABORT = null; LIVE_OWN = false;
   $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
 }
-function liveBar(text) {         // «Пакет 2 из 5 (готов)» of a fix -> the bar
-  const m = String(text).match(/^Пакет (\d+) из (\d+)( готов)?/);
-  if (m) $('#reqBar').style.width = `${Math.round(5 + 90 * (m[1] - (m[3] ? 0 : 1)) / m[2])}%`;
+let LIVE_DONE = new Set();
+function liveBar(text) {         // «Пакет 2 из 5 готов» of a fix (the batches go a few at a time) -> the bar
+  const m = String(text).match(/^Пакет (\d+) из (\d+) готов/);
+  if (!m) return;
+  LIVE_DONE.add(m[1]);
+  $('#reqBar').style.width = `${Math.round(5 + 90 * LIVE_DONE.size / m[2])}%`;
 }
 function liveError(ev) { const e = new Error(ev.text); e.stopped = !!ev.stopped; return e; }
 $('#reqStop').onclick = async () => {
@@ -4658,10 +4664,11 @@ function watchShow(a) {       // the lines of the log of the work not shown yet
     const d = document.createElement('div');
     d.innerHTML = `<span class="t">${new Date(l.at * 1000).toLocaleTimeString('ru-RU')}</span>${esc(l.text)}`;
     box.appendChild(d);
+    liveBar(l.text);
   });
   if (lines.length) WATCH.shown = Math.max(WATCH.shown, lines[lines.length - 1].at);
   box.scrollTop = box.scrollHeight;
-  if (a.progress?.stage) { $('#reqStage').textContent = a.progress.stage.slice(0, 160); liveBar(a.progress.stage); }
+  if (a.progress?.stage) $('#reqStage').textContent = a.progress.stage.slice(0, 160);
 }
 async function showAnalysis(aid, tab = '') {      // an analysis in work in the Requirements tab (a run's, the pipeline's choice)
   setRoute(projPath('req', aid)); AN_WANT = aid;

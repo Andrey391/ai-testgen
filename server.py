@@ -3200,10 +3200,11 @@ FIX_KEPT = "готовые правки сохранены, «Исправить
 
 @app.post("/api/analyses/{aid}/review/fix")
 async def fix_findings(aid: str, request: Request):
-    """The editor (review.revise) fixes the requirements by the findings a person answered, a few themes per
-    request: each batch done replaces the requirements of the analysis at once (the previous text is kept, one
-    revision per fix). The work of the analysis («fix»: one at a time, beats, interrupted by a restart - _stale).
-    NDJSON events: analysis, log, batch (the analysis after a batch), done (fixed, failed, summary) | error. The
+    """The editor (review.revise) fixes the requirements by the findings a person answered, a theme per request,
+    a few at a time: each batch done replaces the requirements of the analysis at once (the previous text is kept,
+    one revision per fix). The work of the analysis («fix»: one at a time, beats, interrupted by a restart - _stale).
+    NDJSON events: analysis, log, status (how a request in work goes: the stage, not the log), batch (the analysis
+    after a batch), done (fixed, failed, summary) | error. The
     fix goes on when the page goes away (its progress is in the analysis); «Остановить» (POST …/stop) stops it,
     the batches done stay. The application model learns separately (POST …/knowledge/extract, the page asks it
     when every finding is settled)."""
@@ -3227,6 +3228,10 @@ async def fix_findings(aid: str, request: Request):
         analyses.progress(pid, aid, line)
         send({"type": "log", "text": line})
 
+    def status(line: str) -> None:
+        analyses.progress(pid, aid, line, logged=False)
+        send({"type": "status", "text": line})
+
     def keep(part: dict) -> None:
         analyses.revise(pid, aid, part, user, run=run)
         send({"type": "batch", "analysis": analyses.view(analyses.get(aid))})
@@ -3234,7 +3239,8 @@ async def fix_findings(aid: str, request: Request):
     async def work():
         async with analyses.working(pid, aid):
             try:
-                result = await review.revise(p, a["requirements"], a["review"], log=log, keep=keep)
+                result = await review.revise(p, a["requirements"], a["review"], log=log, keep=keep,
+                                             status=status)
                 analyses.end_work(pid, aid, result=f"Исправлено в ТЗ: {len(result['fixed'])}"
                                   + (f", не удалось: {len(result['failed'])}" if result["failed"] else ""))
                 send(_review_result(aid, type="done", fixed=result["fixed"], failed=result["failed"],

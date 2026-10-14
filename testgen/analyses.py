@@ -199,8 +199,9 @@ def request_stop(pid: str, aid: str) -> bool:
     return True
 
 
-def progress(pid: str, aid: str, line: str) -> None:
-    """A line of the log of the work on the analysis: the stage now and the log any page shows (`progress`)."""
+def progress(pid: str, aid: str, line: str, logged: bool = True) -> None:
+    """A line of the log of the work on the analysis: the stage now and the log any page shows (`progress`).
+    logged=False - the stage only (how a request in work goes, every few seconds)."""
     line = str(line or "").strip()
     if not line or not fs.exists(_path(pid, aid)):
         return
@@ -210,7 +211,8 @@ def progress(pid: str, aid: str, line: str) -> None:
             return
         p = a.get("progress") or {}
         p["stage"] = line[:300]
-        p["log"] = (p.get("log") or [])[-(PROGRESS_LINES - 1):] + [{"at": time.time(), "text": line[:2000]}]
+        if logged:
+            p["log"] = (p.get("log") or [])[-(PROGRESS_LINES - 1):] + [{"at": time.time(), "text": line[:2000]}]
         a["progress"] = p
     try:
         _change(pid, aid, fn)
