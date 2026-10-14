@@ -151,3 +151,60 @@ def test_the_message_of_a_waiting_run(monkeypatch):
     assert 'href="https://studio.example/#/p/p1/pipe/j1"' in text
     off = p | {"notify": {"events": {"job_waiting": False}}}
     assert notify.message(off, "job_waiting", job={"id": "j1", "status": "awaiting_model"}) is None
+
+
+def test_a_run_waits_in_the_inbox_however_many_newer_runs_there_are(client, open_studio):
+    pid = _project()["id"]
+    old = "c3" * 5
+    fs.write_json(pipeline._jobs_dir(pid) / f"{old}.json",
+                  {"id": old, "project_id": pid, "status": "awaiting_selection", "created": 1, "waiting_since": 2,
+                   "items": []})
+    for i in range(inbox.JOBS + 5):           # newer runs, saved after it
+        fs.write_json(pipeline._jobs_dir(pid) / f"n{i:09d}.json",
+                      {"id": f"n{i:09d}", "project_id": pid, "status": "done", "created": 10 + i, "items": []})
+    owner = pipeline._job_elsewhere
+    try:
+        pipeline._job_elsewhere = lambda jid: jid == old     # another instance works on it: it really waits
+        [job] = _kinds(client.get(f"/api/projects/{pid}/inbox").json())["job"]
+    finally:
+        pipeline._job_elsewhere = owner
+    assert job["route"] == f"/p/{pid}/pipe/{old}" and job["since"] == 2
+
+
+def test_the_inbox_reads_again_only_what_changed(open_studio, monkeypatch):
+    p = _project(confirm=True)
+    pid = p["id"]
+    knowledge.save(pid, {"entities": [{"name": f"Сущность {i}", "lifecycle": "новая → готова", "group": f"Группа {i % 20}"}
+                                      for i in range(600)],
+                         "roles": [{"name": "Гость", "capabilities": "смотрит"}]})
+    for i in range(30):
+        a = analyses.create(pid, f"Требования {i}")
+        analyses.finish(pid, a["id"])
+    first = inbox.project_inbox(pid)
+    counted = []
+    monkeypatch.setattr(knowledge, "duplicates", lambda doc: counted.append(1) or [])
+    start = time.perf_counter()
+    assert inbox.project_inbox(pid) == first
+    assert time.perf_counter() - start < 0.2 and not counted     # the model did not change: not counted again
+    knowledge.confirm(pid, "ann")
+    counted.clear()
+    assert "model" not in _kinds({"items": inbox.project_inbox(pid)}) and counted == [1]   # changed: counted again
+
+
+def test_the_waits_of_runs_are_kept_for_the_dashboard(monkeypatch):
+    from testgen import metrics
+    p = _project()
+    monkeypatch.setattr(notify, "event", lambda *a, **kw: None)
+    job = pipeline.Job(p, [], "текст", "", {})
+    job._waiting("awaiting_model")
+    job.waiting_since -= 600                     # 10 minutes for the model
+    job._waiting("awaiting_selection")
+    job.waiting_since -= 1800                    # then 30 minutes for the choice
+    job.status = "running"
+    assert [(w["status"], round((w["until"] - w["since"]) / 60)) for w in job.waits] ==         [("awaiting_model", 10), ("awaiting_selection", 30)]
+    assert job.waiting_since is None and job.state()["waits"] == job.waits
+    job.save()
+    w = metrics.project_metrics(p["id"])["waits"]
+    assert w == {"count": 2, "median_minutes": 20.0, "model_count": 1, "model_median_minutes": 10.0, "now": 0}
+    resumed = pipeline.Job.resumed(projects.get(p["id"]), pipeline.get_job(job.id), {})
+    assert resumed.waits == job.waits                # a restart keeps them

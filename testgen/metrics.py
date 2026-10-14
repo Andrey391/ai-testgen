@@ -7,6 +7,8 @@
     regression   duration of the last suite runs (the main effect of automation for most companies)
     saved hours  automatic runs in the period x the time of a manual run of a case (run.manual_minutes)
     spending     language models this month and the average cost of generating a test
+    waits        how long pipeline runs waited for a person's decision (median; the confirmation of the model
+                 apart) and how many runs wait now
 """
 from __future__ import annotations
 
@@ -25,11 +27,13 @@ def project_metrics(pid: str, days: int = 30) -> dict:
 
     linked = sum(1 for t in tests if any((e or {}).get("case_id") or (e or {}).get("work_item_id")
                                          for e in (t.get("external") or {}).values()))
-    imported = 0
+    imported, waits, waiting_now = 0, [], 0
     for j in pipeline.list_jobs(pid, limit=200):
         full = pipeline.get_job(j["id"]) or {}
         if full.get("cases"):
             imported += len(full.get("scenarios") or [])
+        waits += [w for w in full.get("waits") or [] if (w.get("until") or 0) >= since]
+        waiting_now += full.get("status") in pipeline.WAITING
 
     flaky, quarantined, run_count, passed_runs, per_day = 0, 0, 0, 0, {}
     threshold = cfg["flaky_threshold"] / 100
@@ -65,6 +69,7 @@ def project_metrics(pid: str, days: int = 30) -> dict:
                        "last_id": durations[-1]["id"] if durations else None},
         "saved": {"runs": run_count, "manual_minutes": minutes, "hours": round(run_count * minutes / 60, 1),
                   "per_day": [{"day": d, "runs": c} for d, c in sorted(per_day.items())]},
+        "waits": _waits(waits, waiting_now),
         "spending": {"month": month["month"], "usd": month["total_usd"], "rub": month["total_rub"],
                      "test_generation_usd": round(statistics.mean(costs), 3) if costs else None},
     }
@@ -76,3 +81,12 @@ def _by_status(tests: list[dict]) -> dict:
         s = t.get("status") or "ready"
         out[s] = out.get(s, 0) + 1
     return out
+
+
+def _waits(waits: list[dict], now: int) -> dict:
+    """Ended waits of the period -> their count and median in minutes, all and the confirmation of the model."""
+    def median(ws: list[dict]) -> float | None:
+        return round(statistics.median((w["until"] - w["since"]) / 60 for w in ws), 1) if ws else None
+    model = [w for w in waits if w.get("status") == "awaiting_model"]
+    return {"count": len(waits), "median_minutes": median(waits), "model_count": len(model),
+            "model_median_minutes": median(model), "now": now}

@@ -147,7 +147,10 @@ def test_the_status_the_tests_of_a_task_suggest(studio):
     assert tasks.suggest("in_progress", []) == ""
     assert tasks.suggest("in_progress", [row("draft", "passed"), row("ready", "passed")]) == "review"
     assert tasks.suggest("in_progress", [row("draft", "passed"), row("ready", "failed")]) == ""
-    assert tasks.suggest("in_progress", [row("ready", "failed"), row("ready", None)]) == "done"
+    assert tasks.suggest("in_progress", [row("ready", "passed"), row("ready", "passed")]) == "done"
+    # In the suite, but failing or never run: neither «Готово» nor «На проверке».
+    assert tasks.suggest("in_progress", [row("ready", "failed"), row("ready", "passed")]) == ""
+    assert tasks.suggest("in_progress", [row("ready", "passed"), row("ready", None)]) == ""
     assert tasks.suggest("review", [row("draft", "passed")]) == ""        # not further than the task
     assert tasks.suggest("done", [row("ready", "passed")]) == ""
     pid = studio.a["id"]
