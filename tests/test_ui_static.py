@@ -5,9 +5,10 @@ from pathlib import Path
 PAGE = Path(__file__).resolve().parent.parent / "static" / "index.html"
 
 
-def test_no_alert_and_confirm():
-    # messages go through toast / notice / ask: a browser alert blocks the page and cannot name its action
+def test_no_alert_confirm_prompt():
+    # messages go through toast / notice / ask (with field - instead of prompt): a browser dialog blocks the page
+    # and cannot name its action
     page = PAGE.read_text(encoding="utf-8")
     found = [f"{n}: {line.strip()[:120]}" for n, line in enumerate(page.splitlines(), 1)
-             if re.search(r"(?<![\w.$])(window\.)?(alert|confirm)\(", line)]
-    assert not found, "alert/confirm в static/index.html — используйте toast, notice или ask:\n" + "\n".join(found)
+             if re.search(r"(?<![\w.$])(window\.)?(alert|confirm|prompt)\(", line)]
+    assert not found, "alert/confirm/prompt в static/index.html — используйте toast, notice или ask (field — для ввода):\n" + "\n".join(found)

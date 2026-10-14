@@ -106,6 +106,8 @@ button:disabled{opacity:.5;cursor:default}
 #askDlg h3{margin:0 0 8px;font-size:16px}
 #askDlg .ask-text{white-space:pre-wrap;overflow-wrap:anywhere}
 #askDlg .ask-subject{margin-top:8px;padding:6px 10px;background:var(--bg);border:1px solid var(--line);border-radius:6px;font-weight:600;overflow-wrap:anywhere}
+#askDlg .ask-field{margin-top:10px}
+#askDlg .ask-field label{display:block;margin:0 0 4px}
 #askDlg .ask-acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
 button.btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 #toasts{position:fixed;right:16px;bottom:16px;z-index:1000;display:flex;flex-direction:column;gap:8px;max-width:min(420px,calc(100vw - 32px));pointer-events:none}
@@ -1723,6 +1725,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <h3 id="askTitle"></h3>
   <div class="ask-text" id="askText"></div>
   <div class="ask-subject hidden" id="askSubject"></div>
+  <div class="ask-field hidden" id="askField"><label id="askFieldLabel"></label><input id="askInput" autocomplete="off"><select id="askSelect"></select></div>
   <div class="ask-acts" id="askActs"></div>
 </dialog>
 <div id="toasts" role="status" aria-live="polite"></div>
@@ -1783,8 +1786,12 @@ function notice(el, text, kind = 'bad') {
 // ask({title, text, subject, actions, cancel}) - a modal question. actions: [{label, value, kind: 'primary' | 'danger'}],
 // buttons name the action ("Удалить тест"); subject - what it is about, shown highlighted. Resolves with the value
 // of the chosen action, or null for "Отмена", Esc and a click beside the dialog.
+// field: {label, value, placeholder, options, match} - the question asks for a value instead of window.prompt: any action
+// resolves with the entered text (options - a list to choose from instead of a text field; match - the actions stay
+// disabled until the text is exactly this, for the confirmation of a deletion by its name). Enter in the field - the
+// first action.
 let ASK = null;
-function ask({title = '', text = '', subject = '', actions = [{label: 'OK', value: true, kind: 'primary'}], cancel = 'Отмена'} = {}) {
+function ask({title = '', text = '', subject = '', actions = [{label: 'OK', value: true, kind: 'primary'}], cancel = 'Отмена', field = null} = {}) {
   const dlg = $('#askDlg');
   if (ASK) ASK(null);
   $('#askTitle').textContent = title;
@@ -1794,6 +1801,16 @@ function ask({title = '', text = '', subject = '', actions = [{label: 'OK', valu
   $('#askSubject').classList.toggle('hidden', !subject);
   const acts = $('#askActs');
   acts.innerHTML = '';
+  const inp = $('#askInput'), sel = $('#askSelect'), pick = !!field?.options;
+  const control = field ? (pick ? sel : inp) : null;
+  $('#askField').classList.toggle('hidden', !field);
+  if (field) {
+    $('#askFieldLabel').textContent = field.label || '';
+    $('#askFieldLabel').htmlFor = control.id;
+    inp.classList.toggle('hidden', pick); sel.classList.toggle('hidden', !pick);
+    if (pick) { sel.innerHTML = field.options.map(o => `<option>${esc(o)}</option>`).join(''); sel.value = field.value ?? field.options[0]; }
+    else { inp.value = field.value ?? ''; inp.placeholder = field.placeholder || ''; }
+  }
   return new Promise(resolve => {
     const done = v => {
       if (ASK !== done) return;
@@ -1811,6 +1828,12 @@ function ask({title = '', text = '', subject = '', actions = [{label: 'OK', valu
     };
     const no = cancel ? button(cancel, '', null) : null;
     const made = actions.map(a => button(a.label, a.kind || '', a.value === undefined ? a.label : a.value));
+    if (field) {
+      made.forEach(b => b.onclick = () => done(control.value));
+      const check = () => made.forEach(b => b.disabled = field.match !== undefined && control.value.trim() !== field.match);
+      control.oninput = check; check();
+      control.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing && !made[0]?.disabled) { e.preventDefault(); made[0]?.click(); } };
+    }
     dlg.onclose = () => { if (!dlg.open) done(null); };   // Esc; a late close event of the previous question is ignored
     dlg.onclick = e => {      // a click on the backdrop, not on the dialog's own padding
       const r = dlg.getBoundingClientRect();
@@ -1820,7 +1843,8 @@ function ask({title = '', text = '', subject = '', actions = [{label: 'OK', valu
     // focus: the primary action; when the choice is irreversible, "Отмена" - Enter must not delete by accident
     const primary = made.find((b, i) => actions[i].kind === 'primary');
     const danger = actions.some(a => a.kind === 'danger');
-    (primary || (danger ? no : made.at(-1)) || no)?.focus();
+    if (control) { control.focus(); if (!pick) inp.select(); }
+    else (primary || (danger ? no : made.at(-1)) || no)?.focus();
   });
 }
 // sure(title, action, text, subject) - ask() about an irreversible action: one red button named by the action.
@@ -2774,23 +2798,24 @@ $('#shot').onclick = async e => {
   }
   try {
     let a = action;
-    if (a !== 'auto') { value = askPickValue(a); if (value === null) return; }
+    if (a !== 'auto') { value = await askPickValue(a); if (value === null) return; }
     let r = await api('POST', `/api/sessions/${SID}/pick`, {x, y, action: a, value, source: mode, ...extra});
     if (r?.need) {         // Record & Play clicked a field or a list: the value first, then the step
-      value = askPickValue(r.need, r.name);
+      value = await askPickValue(r.need, r.name);
       if (value === null) return;
       await api('POST', `/api/sessions/${SID}/pick`, {x, y, action: r.need, value, source: mode});
     }
   } catch (err) { toast(err.message, 'bad'); }
   poll();
 };
-function askPickValue(action, name) {    // '' - the action needs no value, null - the person cancelled
-  const of = name ? ` («${name}»)` : '';
-  if (action === 'fill') return prompt(`Текст для ввода${of}:`);
-  if (action === 'select_option') return prompt(`Пункт списка${of}:`);
+async function askPickValue(action, name) {    // '' - the action needs no value, null - the person cancelled
+  const step = (title, label, field) => ask({title, subject: name || '', field: {label, ...field},
+                                             actions: [{label: 'Добавить шаг', kind: 'primary'}]});
+  if (action === 'fill') return step('Что ввести в поле?', 'Текст', {placeholder: 'Текст или {{faker.email}}, {{unique}}…'});
+  if (action === 'select_option') return step('Какой пункт выбрать?', 'Пункт списка', {placeholder: 'Текст пункта'});
   if (action === 'upload_file') {
     if (!PROJ.files?.length) { toast('Загрузите файлы для тестов: Проект → Общие → Файлы для тестов', 'warn'); return null; }
-    return prompt(`Имя файла проекта${of} (${PROJ.files.join(', ')}):`, PROJ.files[0]);
+    return step('Какой файл загрузить?', 'Файл проекта', {options: PROJ.files});
   }
   return '';
 }
@@ -3075,9 +3100,11 @@ async function dismissBlock(key) {
 document.addEventListener('click', e => $$('details.menu[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
 async function editTags(id) {
   const t = TESTS.find(x => x.id === id);
-  const v = prompt('Теги через пробел или запятую (например: smoke regression):', (t?.tags || []).join(' '));
+  const v = await ask({title: 'Теги теста', subject: t?.name || '', text: 'По тегам запускаются наборы: «Запустить набор», python -m testgen.run --tag.',
+                       field: {label: 'Теги через пробел или запятую', value: (t?.tags || []).join(' '), placeholder: 'smoke regression'},
+                       actions: [{label: 'Сохранить теги', kind: 'primary'}]});
   if (v === null) return;
-  await api('PATCH', `/api/tests/${id}/meta`, {tags: v.split(/[\s,]+/).filter(Boolean)});
+  try { await api('PATCH', `/api/tests/${id}/meta`, {tags: v.split(/[\s,]+/).filter(Boolean)}); } catch (e) { toast(e.message, 'bad'); }
   loadTests();
 }
 async function setStatus(id, status) {
@@ -3090,8 +3117,13 @@ async function setRole(id, role) {
 }
 async function toggleQuarantine(id, on) {
   let reason = '';
-  if (on) { reason = prompt('Почему в карантин? (тест будет запускаться, но не валить набор)', 'Нестабильный тест'); if (reason === null) return; }
-  await api('PATCH', `/api/tests/${id}/meta`, {quarantine: on, reason});
+  if (on) {
+    reason = await ask({title: 'Отправить тест в карантин?', subject: TESTS.find(x => x.id === id)?.name || '',
+                        text: 'Тест будет запускаться, но его падение не провалит набор.',
+                        field: {label: 'Причина', value: 'Нестабильный тест'}, actions: [{label: 'В карантин', kind: 'primary'}]});
+    if (reason === null) return;
+  }
+  try { await api('PATCH', `/api/tests/${id}/meta`, {quarantine: on, reason}); } catch (e) { toast(e.message, 'bad'); }
   loadTests();
 }
 async function publishTest(id, btn) {
@@ -3173,11 +3205,14 @@ async function runTest(id, browser) {
 }
 // the screen chosen for this run: "" = the project's (run.devices; desktop 1920x1080), "1366x768", a device
 function runScreen() { return $('#runScreen').value === 'custom' ? ($('#runScreen').dataset.custom || '') : $('#runScreen').value; }
-$('#runScreen').onchange = e => {
-  if (e.target.value !== 'custom') return;
-  const v = prompt('Размер окна (ширина×высота, например 1680x1050) или устройство Playwright (iPad Mini):', e.target.dataset.custom || '');
-  if (v && v.trim()) { e.target.dataset.custom = v.trim(); e.target.selectedOptions[0].textContent = `Другой: ${v.trim()}`; }
-  else e.target.value = '';
+$('#runScreen').onchange = async e => {
+  const box = e.target;
+  if (box.value !== 'custom') return;
+  const v = (await ask({title: 'Другой экран', text: 'Размер окна браузера для «Запустить» и «Запустить набор» или устройство Playwright.',
+                        field: {label: 'Ширина×высота или устройство', value: box.dataset.custom || '', placeholder: '1680x1050 или iPad Mini'},
+                        actions: [{label: 'Выбрать экран', kind: 'primary'}]}))?.trim();
+  if (v) { box.dataset.custom = v; box.selectedOptions[0].textContent = `Другой: ${v}`; }
+  else if (!box.dataset.custom) box.value = '';
 };
 const RETRYABLE = ['failed', 'error', 'flaky'];
 async function retryRun(rid, btn) {
@@ -5763,8 +5798,11 @@ $('#fileUp').onchange = async e => {
   e.target.value = ''; await refreshProject(); loadFiles();
 };
 $('#pDelete').onclick = async () => {
-  const name = prompt(`Удалить проект со всеми тестами? Введите его название для подтверждения: ${PROJ.name}`);
-  if (name !== PROJ.name) return;
+  const name = await ask({title: 'Удалить проект?', subject: PROJ.name,
+                          text: 'Удалятся все тесты, скиллы, история запусков и секреты подключений проекта. Это нельзя отменить.',
+                          field: {label: 'Введите название проекта для подтверждения', match: PROJ.name},
+                          actions: [{label: 'Удалить проект', kind: 'danger'}]});
+  if (name === null) return;
   try {
     await api('DELETE', `/api/projects/${PID}`); await loadProjects();
     showTab('home'); if (!PID) openWizard(null);
