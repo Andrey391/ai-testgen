@@ -97,6 +97,11 @@ button:disabled{opacity:.5;cursor:default}
 .badge.bad{background:none;border:1px solid var(--bad);color:var(--bad)}
 .badge.warn{background:none;border:1px solid var(--warn);color:var(--warn)}
 .badge.off{background:none;border:1px solid var(--line);color:var(--muted)}
+.badge.info{background:none;border:1px solid var(--accent);color:var(--accent)}
+.theme-no{font-weight:600;color:var(--muted);margin-right:2px;white-space:nowrap}
+.theme-answered{border-left:3px solid var(--accent)}
+.theme-answer{white-space:pre-wrap;overflow-wrap:anywhere;max-height:9em;overflow:auto;margin:4px 0 0;font-size:13px}
+textarea.big{min-height:14em;resize:vertical}
 .acc-param{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;gap:6px;align-items:center;margin-top:6px}
 .acc-param input[type=text],.acc-param input[type=password]{margin:0}
 #credDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:520px;width:calc(100% - 32px)}
@@ -3969,11 +3974,20 @@ const STEP_BADGE = {review: ['шаг 1: проверка требований', 
 const LC_CHECK = 'жизненный цикл';      // the check against the lifecycle in the errors of a report
 let AN_TAB = '';         // the step shown in the analysis in work
 const lcTheme = t => t.ids.every(i => i.startsWith('l'));      // conflicts with the lifecycle and its questions
-const WORK_LABEL = {review: 'проверка ревьюером…', design: 'проектирование сценариев…', fix: 'агент исправляет ТЗ…'};   // analyses: work
+// analyses.WORK: one work on an analysis at a time - the others wait for it (409); its progress is in the analysis
+const WORK_LABEL = {review: 'проверка ревьюером…', design: 'проектирование сценариев…', fix: 'агент исправляет ТЗ…',
+  answers: 'разбор ответов аналитика…', group: 'сведение замечаний в темы…', lifecycle: 'сверка с жизненным циклом…',
+  learn: 'модель учится на требованиях…'};
+const WORK_NAME = {review: 'Проверка требований ревьюером', design: 'Проектирование сценариев в конвейере',
+  fix: 'Исправление ТЗ агентом', answers: 'Разбор ответов аналитика по замечаниям', group: 'Сведение замечаний в темы',
+  lifecycle: 'Сверка с жизненным циклом системы', learn: 'Обучение модели приложения на требованиях'};
 async function loadAnalyses() {
   if (!PID) return;
   try { ANALYSES = await api('GET', `/api/projects/${PID}/analyses`); } catch { return; }
   if (AN && AN.project_id !== PID) AN = null;
+  // the analysis open changed meanwhile (a work started or ended elsewhere, F5): as the server has it now
+  const now = AN && ANALYSES.find(x => x.id === AN.id);
+  if (now && !LIVE_OWN && (now.status !== AN.status || now.work !== AN.work)) await reloadAnalysis().catch(() => {});
   renderAnalyses();
 }
 function anStepBadge(a, step) {
@@ -4026,7 +4040,11 @@ $('#anList').addEventListener('click', e => {
   $('#anActive').scrollIntoView({behavior: 'smooth', block: 'start'});
 });
 function openAnalysis(a) {
-  if (AN?.id !== a.id) { FIX_MSG = ''; AN_TAB = ''; }
+  if (AN?.id !== a.id) {      // another analysis: what was typed for the previous one stays with it no more
+    FIX_MSG = ''; AN_TAB = '';
+    for (const k in DRAFTS) delete DRAFTS[k];
+    THEME_EDIT.clear(); ANS_DRAFT = ''; ANS_OPEN = false; VER_DRAFT = ''; VER_OPEN = false;
+  }
   AN = a; SCEN = a.scenarios.map(s => ({...s, sel: true})); SCEN_OPEN = new Set();
   if (!AN_TAB) AN_TAB = a.readiness?.step || 'review';     // opened: the step to work on
   renderAnalysis(); refreshSummary();
@@ -4040,10 +4058,14 @@ function renderAnalysis() {
   const box = $('#anActive');
   if (!box) return;
   if (!AN) { box.innerHTML = ''; return; }
-  const busy = AN.status === 'running' || !!REQ_ABORT || LEARN_AID === AN.id;
+  const busy = reviewBusy();
   const r = AN.readiness || {done: {}, blocked: [], parts: [], missing: [], step: 'review'};
   const tab = AN_TAB || r.step;
-  const [st, cls] = busy ? [LEARN_AID === AN.id ? 'модель учится на требованиях…' : WORK_LABEL[AN.work] || 'проверка ревьюером…', 'warn'] : anStepBadge(AN, r.step);
+  const [st, cls] = busy ? [WORK_LABEL[AN.work] || 'в работе…', 'warn'] : anStepBadge(AN, r.step);
+  // what goes now blocks what would break it: the person sees why the actions wait
+  const lock = AN.status === 'running' ? `<div class="box lock" style="margin-top:8px">🔒 Сейчас идёт: <b>${esc((WORK_NAME[AN.work] || 'работа с требованиями').toLowerCase())}</b>${AN.by ? ` (запустил ${esc(AN.by)})` : ''}.
+      Действия, которые могут помешать этой работе, станут доступны после её окончания${AN.work === 'design' ? ' — ход проектирования во вкладке <a href="#" onclick="showTab(\'pipe\');return false">«Конвейер»</a>' : ' — ход работы в карточке выше'}.</div>` : '';
+  const werr = !busy && (AN.work_error || AN.fix_error);
   box.innerHTML = `<div class="card an-work" id="an-body-${AN.id}">
     <div class="row" style="gap:10px;align-items:baseline">
       <h3 class="grow" style="margin:0">${esc(AN.feature || AN.title || 'Требования')}</h3>
@@ -4051,22 +4073,23 @@ function renderAnalysis() {
       <span class="badge ${cls}" title="${busy ? 'Пока идёт работа, действия с этими требованиями недоступны' : 'Шаг, на котором сейчас требования'}">${esc(st)}</span>
       <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''} title="Удалить анализ из истории: тесты по его сценариям останутся">Удалить</button></div>
     <div class="hint" style="margin-top:2px">${fmtTime(AN.created)}${AN.user ? ` · ${esc(AN.user)}` : ''}${AN.feature && AN.title && AN.feature !== AN.title ? ` · ${esc(AN.title)}` : ''}</div>
-    ${stepTabs(r, tab, busy)}
+    ${stepTabs(r, tab, busy)}${lock}
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
-    ${AN.fix_error && !busy ? `<div class="err">${esc(AN.fix_error)}</div>` : ''}
+    ${werr ? `<div class="err">${esc(werr)}</div>` : ''}
     ${tab === 'review' ? reqTabHtml(r, busy) : tab === 'findings' ? findTabHtml(r, busy) : tab === 'lifecycle' ? lcTabHtml(r, busy) : scenTabHtml(r, busy)}</div>`;
   $('#anDelete').onclick = deleteAnalysis;
   applyFindFilter();
   renderScenarios();
+  syncLive();
 }
 function stepTabs(r, tab, busy) {
   const rv = AN.review, ts = rv?.themes || [];
   const block = ts.filter(t => !lcTheme(t) && t.blocking), blockLeft = block.filter(themeLeft);
   const tests = SCEN.reduce((k, s) => k + (s.tests || []).length, 0);
   const cap = {
-    review: busy && AN.work === 'fix' ? 'исправляется агентом…' : busy && AN.work !== 'design' ? 'проверка идёт…' : !rv ? 'не проверены' : !r.done.review ? 'проверка не завершена'
+    review: busy && AN.work === 'fix' ? 'исправляется агентом…' : busy && AN.work === 'review' ? 'проверка идёт…' : !rv ? 'не проверены' : !r.done.review ? 'проверка не завершена'
       : `проверены${(AN.revisions || []).length ? `, исправлены: ${AN.revisions.length}` : ''}`,
-    findings: !r.done.review ? '—' : block.length ? `разобрано ${block.length - blockLeft.length} из ${block.length}` : 'блокирующих нет',
+    findings: !r.done.review ? '—' : !block.length ? 'блокирующих нет' : blockLeft.length ? `осталось ${blockLeft.length} из ${block.length}` : `разобраны: ${block.length}`,
     lifecycle: !rv ? '—' : r.done.lifecycle ? 'подтверждён' : rv.errors?.[LC_CHECK] ? 'сверка не выполнена'
       : r.lifecycle_left ? `расхождений: ${r.lifecycle_left}` : !r.done.findings ? 'после разбора замечаний'
       : r.learn && !r.learned ? 'модель не обновлена' : 'ждёт подтверждения',
@@ -4088,7 +4111,7 @@ function reqTabHtml(r, busy) {
   const before = last && rv && last.at > rv.at;
   let head;
   if (busy && AN.work === 'fix') head = '<div class="box next"><b>Агент исправляет ТЗ по ответам на замечания</b><div class="hint">Ход исправления — в карточке выше; текст ниже обновляется после каждого пакета замечаний.</div></div>';
-  else if (busy && AN.work !== 'design') head = '<div class="box next"><b>Ревьюер проверяет требования</b><div class="hint">Ход проверки — в карточке выше; отчёт появится здесь.</div></div>';
+  else if (busy && AN.work === 'review') head = '<div class="box next"><b>Ревьюер проверяет требования</b><div class="hint">Ход проверки — в карточке выше; отчёт появится здесь.</div></div>';
   else if (!rv) head = `<div class="box next"><div class="row"><b class="grow">Требования ещё не проверены ревьюером</b>
       <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить требования</button></div></div>`;
   else if (errs.length) head = `<div class="box bad"><div class="row"><b class="grow">Проверка документа не выполнена</b>
@@ -4096,16 +4119,18 @@ function reqTabHtml(r, busy) {
       ${errs.map(([k, e]) => `<div class="hint">«${esc(k)}»: ${esc(e)}</div>`).join('')}</div>`;
   else head = `<div class="box done"><div class="row" style="gap:8px"><b class="grow">✓ Требования проверены ревьюером${rv.at ? ` ${fmtTime(rv.at)}` : ''}</b>
       <button class="btn small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''} title="Проверить требования заново: решения по прежним замечаниям ревьюер учтёт">Проверить заново</button>
+      <button class="btn small" onclick="openVersion()" ${busy ? 'disabled' : ''} title="Аналитик прислал исправленное ТЗ: оно заменит текст и будет проверено заново с учётом решений и ответов по замечаниям">Новая версия ТЗ</button>
       ${nextBtn('findings', 'Дальше: замечания')}</div>
       <div class="hint">Оценка ревьюера: ${esc(vt)}${v ? `, документ — ${v.score}/100` : ''}${before ? ' (до исправлений агентом — проверьте заново, чтобы увидеть текущую)' : ''}.</div></div>`;
   const std = v?.suggested_standard && PROJ.catalog.standards?.[v.suggested_standard];
   const fit = v && v.standard_fits === false ? `<div class="hint">Документ — ${esc(v.document_kind || 'другого вида')}: стандарт «${esc(v.standard_title || '')}» для него не предназначен, разделы стандарта не считаются дефектами.
       ${std ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
       стандарт проекта — в «Проект → Требования».</div>` : '';
-  return head + fit + `
-    <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${revs.length ? ` · исправлен агентом: ${revs.length}` : ''}</summary>
+  const fixes = revs.filter(x => x.kind !== 'version').length, versions = revs.length - fixes;
+  return versionBox(busy) + head + fit + `
+    <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${fixes ? ` · исправлен агентом: ${fixes}` : ''}${versions ? ` · новых версий: ${versions}` : ''}</summary>
       <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
-      ${last ? `<details class="opt"><summary>Последнее исправление — ${fmtTime(last.at)}${last.by ? `, ${esc(last.by)}` : ''}</summary>
+      ${last ? `<details class="opt"><summary>${last.kind === 'version' ? 'Новая версия ТЗ' : 'Последнее исправление'} — ${fmtTime(last.at)}${last.by ? `, ${esc(last.by)}` : ''}</summary>
         <div class="hint">${esc(last.summary || '')}</div>
         ${(last.edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
           <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}</details>` : ''}
@@ -4141,9 +4166,9 @@ function lcTabHtml(r, busy) {
       <button class="btn primary small" onclick="recheckLifecycle(this)" ${busy ? 'disabled' : ''}>Повторить сверку</button></div>
       <div class="hint">${esc(err)}. Замечания к документу и решения по ним сохранятся.</div></div>`;
   else if (rv.lifecycle) html += lifecycleHtml(rv.lifecycle, true);
-  if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: не разобрано ${left.length} из ${ts.length}</b>
+  if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: без ответа ${left.filter(t => t.status === 'open').length} из ${ts.length}${todo.length ? `, ждут исправления в ТЗ: ${todo.length}` : ''}</b>
       ${todo.length ? `<button class="btn primary small" onclick="fixFindings(this)" ${busy ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом (${todo.length})</button>` : ''}</div>
-      <div class="hint">Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным.</div>${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
+      <div class="hint">Ответьте, как должно быть, и сохраните ответ — агент исправит ТЗ; или отметьте неактуальным.</div>${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
     ${left.map(t => themeCard(rv, t, true)).join('')}`;
   else if (!err && !ts.length && rv.lifecycle) html += '<div class="hint">Расхождений с жизненным циклом нет.</div>';
   const settled = ts.filter(t => !themeLeft(t));
@@ -4181,13 +4206,13 @@ function scenTabHtml(r, busy) {
       <button class="btn primary small" onclick="toPipeline()" ${busy ? 'disabled' : ''} title="Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты">Генерировать тест-кейсы в конвейере →</button></div>
       <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div></div>` + scen;
 }
-async function recheckLifecycle(btn) {
-  btn.disabled = true; btn.textContent = 'Сверка идёт…';
-  try {
+function recheckLifecycle() {
+  runWork('lifecycle', 'Сверка требований с жизненным циклом системы…', async () => {
     const r = await api('POST', `/api/analyses/${AN.id}/review/lifecycle`);
     FIX_MSG = r.model || '';
-    openAnalysis(r.analysis);
-  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Повторить сверку'; }
+    const bad = (r.analysis.review?.lifecycle?.conflicts || []).filter(c => c.kind !== 'new').length;
+    return [r.analysis, `Сверка завершена: расхождений ${bad}`];
+  });
 }
 async function confirmLifecycle(btn) {
   btn.disabled = true; btn.textContent = 'Подтверждение…';
@@ -4267,11 +4292,18 @@ function lifecycleHtml(lc, brief) {
 // ---- what a person settles: themes (review.themes) - the findings of both checks on the same thing, one answer
 // for all of them, or a finding of its own. Blocking ones hold back test design and the application model; the
 // others are the quality of the document (its form, minor findings): worth fixing, not required.
-const FINDING_STATE = {open: ['не разобрано', 'warn'], todo: ['ждёт исправления агентом', 'off'], fixed: ['исправлено в ТЗ', 'ok'], dismissed: ['не актуально', 'off']};
+// An answer saved waits for the editor: «ждёт исправления в ТЗ» until «Исправить ТЗ агентом» applies it.
+const FINDING_STATE = {open: ['не разобрано', 'warn'], todo: ['ждёт исправления в ТЗ', 'info'], fixed: ['исправлено в ТЗ', 'ok'], dismissed: ['не актуально', 'off']};
 let FIX_MSG = '';               // what the last fix or decision did, under the progress of the findings
 let FIND_SHOW = 'blocking', FIND_LEFT = true;     // the filter of the list: blocking | quality | all; only unsettled
 const themeLeft = t => t.status === 'open' || t.status === 'todo';
-const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running' || (!!AN && LEARN_AID === AN.id);
+const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running';
+// What a person types survives a render (another step, another tab, the progress of a work): answers by theme,
+// the answers of an analyst, a new version of the requirements; THEME_EDIT - answered themes opened to change.
+const DRAFTS = {}, THEME_EDIT = new Set();
+let ANS_DRAFT = '', ANS_OPEN = false, VER_DRAFT = '', VER_OPEN = false;
+const ANSWER_MAX = 20000, ANSWERS_MAX = 200000;      // review.ANSWER_MAX, review.ANSWERS_MAX
+const themeNo = t => t.no ? `<span class="theme-no" title="Номер замечания: по нему отвечает аналитик">№ ${esc(t.no)}</span>` : '';
 function themeItem(it, many) {
   const tag = it.kind === 'question' ? '<span class="badge">вопрос авторам</span>'
     : `<span class="badge ${SEVERITY[it.severity]?.[1] || ''}">${esc(SEVERITY[it.severity]?.[0] || it.severity)}</span>
@@ -4285,31 +4317,46 @@ function themeItem(it, many) {
 function themeCtl(t) {
   const busy = reviewBusy(), [label, cls] = FINDING_STATE[t.status] || [t.status, 'off'];
   const badge = `<span class="badge ${cls}">${esc(label)}</span>`;
+  const dis = busy ? 'disabled' : '';
   if (!themeLeft(t))
     return `<div class="row" style="margin-top:6px;gap:6px">${badge}
       <span class="hint grow" style="margin:0">${t.answer ? `Ответ: ${esc(t.answer)}` : t.status === 'fixed' ? 'По предложению ревьюера' : ''}${t.note ? `Почему: ${esc(t.note)}` : ''}</span>
-      <button class="btn small" onclick="decideTheme('${t.id}', 'open')" ${busy ? 'disabled' : ''} title="Снова считать неразобранным">Вернуть</button></div>`;
+      <button class="btn small" onclick="decideTheme('${t.id}', 'open')" ${dis} title="Снова считать неразобранным">Вернуть</button></div>`;
+  const notRelevant = `<div class="row hidden" id="fdis-${t.id}" style="gap:6px;margin-top:4px">
+      <input id="fdn-${t.id}" class="grow" maxlength="5000" placeholder="Почему не актуально (необязательно) — ревьюер учтёт при повторной проверке" onkeydown="if (event.key === 'Enter') decideTheme('${t.id}', 'dismissed')">
+      <button class="btn small" onclick="decideTheme('${t.id}', 'dismissed')" ${dis}>Отметить неактуальным</button></div>`;
+  const disBtn = `<button class="btn small" onclick="$('#fdis-${t.id}').classList.toggle('hidden');$('#fdn-${t.id}').focus()" ${dis} title="ТЗ не меняется, при повторной проверке ревьюер это не повторит">Не актуально</button>`;
+  // answered: the answer is kept, the theme waits for «Исправить ТЗ агентом» - shown so, not as a form again
+  if (t.status === 'todo' && !THEME_EDIT.has(t.id))
+    return `<div style="margin-top:6px">
+      <div class="row" style="gap:6px">${badge}${t.error ? `<span class="err" style="margin:0">Агент не исправил: ${esc(t.error)} — уточните ответ</span>` : ''}</div>
+      <div class="theme-answer">${t.answer ? `<b>Ответ:</b> ${esc(t.answer)}` : '<span class="muted">Исправить по предложению ревьюера</span>'}</div>
+      <div class="row" style="gap:6px;margin-top:4px"><span class="hint grow" style="margin:0">Агент внесёт это в ТЗ по «Исправить ТЗ агентом»</span>
+        <button class="btn small" onclick="editTheme('${t.id}')" ${dis}>Изменить ответ</button>${disBtn}
+        <button class="btn small" onclick="decideTheme('${t.id}', 'open')" ${dis} title="Снова считать неразобранным: ответ не сохранится">Вернуть</button></div>${notRelevant}</div>`;
+  const value = DRAFTS[t.id] ?? t.answer ?? '';
   return `<div style="margin-top:6px">
     <div class="row" style="gap:6px">${badge}${t.error ? `<span class="err" style="margin:0">Агент не исправил: ${esc(t.error)} — уточните ответ</span>` : ''}</div>
-    <textarea id="fd-${t.id}" rows="2" style="width:100%;margin-top:4px" placeholder="${t.question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(t.answer || '')}</textarea>
+    <textarea id="fd-${t.id}" rows="3" maxlength="${ANSWER_MAX}" style="width:100%;margin-top:4px;resize:vertical" oninput="DRAFTS['${t.id}']=this.value" placeholder="${t.question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(value)}</textarea>
     <div class="row" style="gap:6px;margin-top:4px"><span class="grow"></span>
-      <button class="btn small" onclick="decideTheme('${t.id}', 'todo')" ${busy ? 'disabled' : ''} title="Агент исправит ТЗ по ответу при «Исправить ТЗ агентом»">${t.status === 'todo' ? 'Сохранить ответ' : 'Ответить'}</button>
-      <button class="btn small" onclick="$('#fdis-${t.id}').classList.toggle('hidden');$('#fdn-${t.id}').focus()" ${busy ? 'disabled' : ''} title="ТЗ не меняется, при повторной проверке ревьюер это не повторит">Не актуально</button></div>
-    <div class="row hidden" id="fdis-${t.id}" style="gap:6px;margin-top:4px">
-      <input id="fdn-${t.id}" class="grow" placeholder="Почему не актуально (необязательно) — ревьюер учтёт при повторной проверке" onkeydown="if (event.key === 'Enter') decideTheme('${t.id}', 'dismissed')">
-      <button class="btn small" onclick="decideTheme('${t.id}', 'dismissed')">Отметить неактуальным</button></div></div>`;
+      ${t.status === 'todo' ? `<button class="btn small" onclick="THEME_EDIT.delete('${t.id}');delete DRAFTS['${t.id}'];renderAnalysis()">Отмена</button>` : ''}
+      <button class="btn small primary" onclick="decideTheme('${t.id}', 'todo')" ${dis} title="Ответ сохранится, замечание будет ждать исправления в ТЗ — «Исправить ТЗ агентом»">Сохранить ответ</button>
+      ${disBtn}</div>${notRelevant}</div>`;
 }
+function editTheme(tid) { THEME_EDIT.add(tid); renderAnalysis(); $(`#fd-${tid}`)?.focus(); }
 function themeCard(rv, t, editable) {
   const by = Object.fromEntries(rv.items.map(x => [x.id, x])), ms = t.ids.map(i => by[i]).filter(Boolean);
   const many = ms.length > 1;
   const quality = t.blocking ? '' : '<span class="badge off" title="Не мешает тест-дизайну и обновлению модели приложения: исправлять не обязательно">качество документа</span>';
-  const head = many ? `<div class="row" style="gap:6px"><b class="grow">${esc(t.title || 'Об одном и том же')}</b>
+  const head = many ? `<div class="row" style="gap:6px">${themeNo(t)}<b class="grow">${esc(t.title || 'Об одном и том же')}</b>
       ${t.severity ? `<span class="badge ${SEVERITY[t.severity]?.[1] || ''}">${esc(SEVERITY[t.severity]?.[0] || t.severity)}</span>` : ''}
       <span class="badge" title="Замечания обеих проверок об одном и том же: один ответ на все">замечаний: ${ms.length}</span>${quality}</div>`
-    : quality ? `<div class="row">${quality}</div>` : '';
-  return `<div class="card" data-theme="${t.id}" data-blocking="${t.blocking ? 1 : 0}" data-left="${themeLeft(t) ? 1 : 0}" style="margin-top:6px;background:var(--bg);padding:8px">
+    : `<div class="row" style="gap:6px">${themeNo(t)}<span class="grow"></span>${quality}</div>`;
+  return `<div class="card${t.status === 'todo' ? ' theme-answered' : ''}" id="theme-${t.id}" data-theme="${t.id}" data-blocking="${t.blocking ? 1 : 0}" data-left="${themeLeft(t) ? 1 : 0}" style="margin-top:6px;background:var(--bg);padding:8px">
     ${head}${ms.map(it => themeItem(it, many)).join('')}${editable ? themeCtl(t) : ''}</div>`;
 }
+// The filter of the list: the counts of its choices are of what the list would show - the unsettled ones while
+// «только неразобранные» is on, all of them otherwise.
 function applyFindFilter() {
   const cards = $$('#findList [data-theme]');
   let shown = 0;
@@ -4317,8 +4364,11 @@ function applyFindFilter() {
     const on = (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === (c.dataset.blocking === '1')) && (!FIND_LEFT || c.dataset.left === '1');
     c.classList.toggle('hidden', !on); shown += on;
   });
+  const n = kind => cards.filter(c => (kind === 'all' || (kind === 'blocking') === (c.dataset.blocking === '1')) && (!FIND_LEFT || c.dataset.left === '1')).length;
+  $$('#findShow option').forEach(o => o.textContent = `${FIND_LABEL[o.value]} (${n(o.value)})`);
   $('#findEmpty')?.classList.toggle('hidden', !!shown || !cards.length);
 }
+const FIND_LABEL = {blocking: 'Блокируют тест-дизайн', quality: 'Качество документа', all: 'Все'};
 // The reviewer's report as a run of the pipeline keeps it: read only (the findings are settled in «Требования»).
 function reviewHtml(rv) {
   const [vt, vcls] = REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'];
@@ -4336,108 +4386,149 @@ function reviewHtml(rv) {
 // Step 2 at work: what is left to settle on the document, the tools to settle it, the list of themes `ts`.
 function findingsWork(rv, ts, busy) {
   const block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
-  const blockLeft = block.filter(themeLeft), todo = rv.themes.filter(t => t.status === 'todo');
+  const blockOpen = block.filter(t => t.status === 'open'), todo = rv.themes.filter(t => t.status === 'todo');
   const accept = rv.themes.filter(t => t.blocking && t.status === 'open' && !t.question);
-  return `<div class="box next">
-      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: разобрано ${block.length - blockLeft.length} из ${block.length}${todo.length ? `, ждут исправления агентом: ${todo.length}` : ''}</b>
+  const dis = busy ? 'disabled' : '';
+  return versionBox(busy) + `<div class="box next">
+      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: без ответа ${blockOpen.length} из ${block.length}${todo.length ? `, ждут исправления в ТЗ: ${todo.length}` : ''}</b>
         <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="${todo.length ? 'Агент внесёт ответы в ТЗ; прежний текст сохранится' : 'Сначала ответьте на замечания ниже'}">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
-      <div class="hint">Ответьте, как должно быть, — агент исправит ТЗ; или отметьте неактуальным. Похожие замечания собраны в темы: один ответ на тему.${quality.length ? ` Качество документа (${quality.length}) — не обязательно.` : ''}</div>
+      <div class="hint">Ответьте, как должно быть, и сохраните ответ — замечание будет ждать исправления в ТЗ; или отметьте неактуальным. Похожие замечания собраны в темы: один ответ на тему.${quality.length ? ` Качество документа (${quality.length}) — не обязательно.` : ''}</div>
       <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
-        <button class="btn small" onclick="copyFindings(this)" title="Неразобранные замечания и вопросы показанного списка — одним текстом для аналитика или автора ТЗ">Скопировать для аналитика</button>
-        <button class="btn small" onclick="$('#ansBox').classList.toggle('hidden');$('#ansText').focus()" ${busy ? 'disabled' : ''} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям">Вставить ответы аналитика</button>
-        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${busy ? 'disabled' : ''} title="Исправить неразобранные блокирующие замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
-        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings(this)" ${busy ? 'disabled' : ''} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}</div>
-      <div id="ansBox" class="hidden" style="margin-top:6px">
-        <textarea id="ansText" rows="6" style="width:100%" placeholder="Ответы аналитика — списком, письмом, в любом порядке. Номера и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным."></textarea>
-        <div class="row" style="margin-top:4px"><span class="grow"></span><button class="btn small primary" onclick="pasteAnswers(this)">Разнести по замечаниям</button></div></div>
+        <button class="btn small" onclick="copyFindings(this)" title="Неразобранные замечания и вопросы показанного списка — одним текстом для аналитика или автора ТЗ, с их номерами">Скопировать для аналитика</button>
+        <button class="btn small" onclick="ANS_OPEN=!ANS_OPEN;renderAnalysis();ANS_OPEN&&$('#ansText').focus()" ${dis} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям">Вставить ответы аналитика</button>
+        <button class="btn small" onclick="openVersion()" ${dis} title="Аналитик прислал исправленное ТЗ целиком: оно будет проверено заново с учётом решений и ответов по замечаниям">Новая версия ТЗ</button>
+        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${dis} title="Исправить неразобранные блокирующие замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
+        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings()" ${dis} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}</div>
+      ${ANS_OPEN ? `<div id="ansBox" style="margin-top:6px">
+        <textarea id="ansText" class="big" maxlength="${ANSWERS_MAX}" style="width:100%" oninput="ANS_DRAFT=this.value;textCount(this, 'ansCount')" placeholder="Ответы аналитика — списком, письмом, в любом порядке, любого объёма (до 200 000 символов). Номера (№ 3, № Ж1) и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным.">${esc(ANS_DRAFT)}</textarea>
+        <div class="row" style="margin-top:4px;gap:6px"><span class="muted grow" id="ansCount">${countText(ANS_DRAFT, ANSWERS_MAX)}</span>
+          <span class="hint" style="margin:0">Прислали исправленное ТЗ целиком? — <a href="#" onclick="openVersion(ANS_DRAFT);return false">проверить как новую версию</a></span>
+          <button class="btn small primary" onclick="pasteAnswers()" ${dis}>Разнести по замечаниям</button></div></div>` : ''}
       ${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
     <div class="row" style="gap:10px;margin-top:8px;align-items:center">
-      <select style="width:auto" onchange="FIND_SHOW=this.value;applyFindFilter()">
-        ${[['blocking', `Блокируют тест-дизайн (${block.length})`], ['quality', `Качество документа (${quality.length})`], ['all', `Все (${ts.length})`]]
-          .map(([k, t]) => `<option value="${k}" ${FIND_SHOW === k ? 'selected' : ''}>${t}</option>`).join('')}</select>
-      <label class="inline"><input type="checkbox" ${FIND_LEFT ? 'checked' : ''} onchange="FIND_LEFT=this.checked;applyFindFilter()"> только неразобранные</label></div>
+      <select id="findShow" style="width:auto" onchange="FIND_SHOW=this.value;applyFindFilter()">
+        ${['blocking', 'quality', 'all'].map(k => `<option value="${k}" ${FIND_SHOW === k ? 'selected' : ''}>${FIND_LABEL[k]}</option>`).join('')}</select>
+      <label class="inline" title="Неразобранные: без ответа или с ответом, который ещё не внесён в ТЗ"><input type="checkbox" ${FIND_LEFT ? 'checked' : ''} onchange="FIND_LEFT=this.checked;applyFindFilter()"> только неразобранные</label></div>
     <div id="findList">${ts.map(t => themeCard(rv, t, true)).join('')}</div>
     <div class="hint hidden" id="findEmpty">В этом списке ничего не осталось — смените фильтр, чтобы увидеть остальное.</div>`;
 }
+const countText = (text, max) => `${(text || '').length.toLocaleString('ru-RU')} из ${max.toLocaleString('ru-RU')} символов`;
+function textCount(el, id) { const c = $('#' + id); if (c) c.textContent = countText(el.value, +el.maxLength); }
 function decideTheme(tid, status) {
   const rv = AN.review, t = rv.themes.find(x => x.id === tid);
   if (!t) return;
   const left = new Set(rv.items.filter(x => x.status === 'open' || x.status === 'todo').map(x => x.id));
   const ids = status === 'open' ? t.ids : t.ids.filter(i => left.has(i));
-  const answer = status === 'todo' ? ($(`#fd-${tid}`)?.value ?? '') : undefined;
+  const answer = status === 'todo' ? ($(`#fd-${tid}`)?.value ?? DRAFTS[tid] ?? '') : undefined;
   const note = status === 'dismissed' ? ($(`#fdn-${tid}`)?.value ?? '') : undefined;
-  settleFindings(ids, status, answer, note);
+  settleFindings(ids, status, answer, note, t);
 }
 function acceptSuggestions() {
   const left = new Set(AN.review.items.filter(x => x.status === 'open').map(x => x.id));
   const ids = AN.review.themes.filter(t => t.blocking && t.status === 'open' && !t.question).flatMap(t => t.ids.filter(i => left.has(i)));
   if (ids.length) settleFindings(ids, 'todo', '');
 }
-async function settleFindings(ids, status, answer, note) {
+// A decision on a theme: the theme shows its new state at once and says so (toast).
+async function settleFindings(ids, status, answer, note, theme) {
   try {
-    if (status === 'dismissed') FIX_MSG = 'Сохраняем…';
     const r = await api('PUT', `/api/analyses/${AN.id}/review/findings`, {ids, status, answer, note});
+    if (theme) { delete DRAFTS[theme.id]; THEME_EDIT.delete(theme.id); }
     FIX_MSG = r.model || '';
+    const no = theme?.no ? `№ ${theme.no}: ` : '';
+    toast(status === 'todo' ? `${no}ответ сохранён — замечание ждёт исправления в ТЗ («Исправить ТЗ агентом»)`
+      : status === 'dismissed' ? `${no}отмечено неактуальным` : `${no}замечание снова не разобрано`);
     openAnalysis(r.analysis);
-  } catch (e) { FIX_MSG = ''; toast(e.message, 'bad'); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
-// The unsettled findings of the list as shown, one text for an analyst: numbers and [codes] to answer by.
+// The unsettled findings of the list as shown, one text for an analyst: the numbers they have in the studio and
+// [codes] to answer by.
 function findingsText() {
   const rv = AN.review, by = Object.fromEntries(rv.items.map(x => [x.id, x]));
   const ts = rv.themes.filter(t => themeLeft(t) && (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === t.blocking));
   const line = (it, pad) => `${it.problem}${it.location ? ` (${it.location})` : ''}${it.suggestion ? `\n${pad}Предложение ревьюера: ${it.suggestion}` : ''}`;
   return [`Замечания ревьюера к требованиям «${AN.feature || AN.title || 'Требования'}»`,
-    'Ответьте, как должно быть, на каждый пункт (можно кратко) или напишите «не актуально» и почему.', '',
-    ...ts.map((t, n) => {
+    'Ответьте, как должно быть, на каждый пункт (можно кратко) или напишите «не актуально» и почему. Номер пункта или код в [скобках] — чтобы ответ попал к своему замечанию.', '',
+    ...ts.map(t => {
       const ms = t.ids.map(i => by[i]).filter(Boolean);
-      return ms.length > 1 ? `${n + 1}. [${t.id}] ${t.title || 'Об одном и том же'}\n${ms.map(it => `   - ${line(it, '     ')}`).join('\n')}`
-        : `${n + 1}. [${t.id}] ${line(ms[0], '   ')}`;
+      return ms.length > 1 ? `${t.no}. [${t.id}] ${t.title || 'Об одном и том же'}\n${ms.map(it => `   - ${line(it, '     ')}`).join('\n')}`
+        : `${t.no}. [${t.id}] ${line(ms[0], '   ')}`;
     })].join('\n');
 }
 async function copyFindings(btn) {
-  const text = findingsText(), n = (text.match(/^\d+\. \[/gm) || []).length, was = btn.textContent;
+  const text = findingsText(), n = (text.match(/^Ж?\d+\. \[/gm) || []).length, was = btn.textContent;
   if (!n) return notice(btn, 'В показанном списке нет неразобранных замечаний.', 'warn');
   await copyText(text);
   btn.textContent = `Скопировано: ${n}`;
   setTimeout(() => btn.textContent = was, 2500);
 }
-async function groupFindings(btn) {
-  btn.disabled = true; btn.textContent = 'Сводим в темы…';
-  try {
+function groupFindings() {
+  runWork('group', 'Свожу замечания в темы…', async () => {
     const r = await api('POST', `/api/analyses/${AN.id}/review/group`);
     FIX_MSG = r.groups ? `Замечания сведены в темы: ${r.analysis.review.themes.length} вместо ${r.analysis.review.items.length}.` : 'Похожих замечаний не нашлось.';
-    openAnalysis(r.analysis);
-  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Свести в темы'; }
+    return [r.analysis, FIX_MSG];
+  });
 }
-async function pasteAnswers(btn) {
-  const text = $('#ansText').value.trim();
-  if (!text) return $('#ansText').focus();
-  btn.disabled = true; btn.textContent = 'Агент разносит ответы…';
-  try {
+function pasteAnswers() {
+  const text = ($('#ansText')?.value ?? ANS_DRAFT).trim();
+  if (!text) return $('#ansText')?.focus();
+  runWork('answers', 'Агент разносит ответы аналитика по замечаниям…', async () => {
     const r = await api('POST', `/api/analyses/${AN.id}/review/answers`, {text});
-    FIX_MSG = [`Ответы разнесены: к исправлению ${r.answered}, не актуально ${r.dismissed}.`,
+    ANS_DRAFT = ''; ANS_OPEN = false;
+    FIX_MSG = [`Ответы разнесены: ждут исправления в ТЗ ${r.answered}, не актуально ${r.dismissed}.`,
       r.answered ? 'Проверьте ответы и нажмите «Исправить ТЗ агентом».' : '', r.model].filter(Boolean).join(' ');
-    openAnalysis(r.analysis);
-  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Разнести по замечаниям'; }
+    return [r.analysis, `Ответы разнесены: ждут исправления в ТЗ ${r.answered}, не актуально ${r.dismissed}`];
+  });
+}
+// ---- a new version of the requirements: the analyst sent the corrected document - it replaces the text and is
+// reviewed again, the reviewer knowing the decisions and the answers on the earlier findings.
+function versionBox(busy) {
+  if (!VER_OPEN) return '';
+  return `<div class="box next" id="verBox" style="margin-bottom:8px"><div class="row"><b class="grow">Новая версия ТЗ от аналитика</b>
+      <button class="btn small" onclick="VER_OPEN=false;renderAnalysis()">Закрыть</button></div>
+    <div class="hint">Исправленное ТЗ заменит текущий текст (он сохранится в истории изменений) и будет проверено заново. Ревьюер учтёт, что уже сделано: неактуальные замечания не повторит, по ответам проверит, что новый текст их отражает; новые замечания — к новому тексту.</div>
+    <textarea id="verText" class="big" maxlength="200000" style="width:100%;margin-top:6px" oninput="VER_DRAFT=this.value;textCount(this, 'verCount')" placeholder="Вставьте исправленное ТЗ целиком">${esc(VER_DRAFT)}</textarea>
+    <div class="row" style="gap:6px;margin-top:4px"><span class="muted grow" id="verCount">${countText(VER_DRAFT, 200000)}</span>
+      <button class="btn small" onclick="$('#verFile').click()" title="Word, PDF, Markdown или текст">Из файла</button>
+      <input type="file" id="verFile" class="hidden" accept=".md,.markdown,.txt,.docx,.pdf,text/markdown,text/plain" onchange="verFromFile(this)">
+      <button class="btn small" onclick="VER_DRAFT=AN.requirements;renderAnalysis();$('#verText').focus()" title="Править текущий текст здесь">Взять текущий текст</button>
+      <button class="btn primary small" onclick="checkVersion(this)" ${busy ? 'disabled' : ''}>Проверить новую версию</button></div></div>`;
+}
+function openVersion(text) {
+  if (typeof text === 'string' && text.trim()) VER_DRAFT = text;
+  VER_OPEN = true; renderAnalysis();
+  $('#verBox')?.scrollIntoView({behavior: 'smooth', block: 'start'}); $('#verText')?.focus();
+}
+async function verFromFile(input) {
+  const f = input.files[0];
+  if (!f) return;
+  try { const d = await readSpec(f); VER_DRAFT = d.text; renderAnalysis(); if (d.truncated) toast('Файл обрезан до 200 000 символов', 'warn'); }
+  catch (e) { toast(e.message, 'bad'); }
+}
+function checkVersion(btn) {
+  const text = ($('#verText')?.value ?? VER_DRAFT).trim();
+  if (!text) return $('#verText')?.focus();
+  if (text.replace(/\s+/g, ' ') === AN.requirements.trim().replace(/\s+/g, ' '))
+    return notice(btn, 'Текст не изменился — чтобы проверить его ещё раз, нажмите «Проверить заново» на шаге «Требования».', 'warn');
+  VER_OPEN = false; VER_DRAFT = '';
+  AN_TAB = 'review';
+  runReview({analysis_id: AN.id, requirements: text});
 }
 // The editor fixes the requirements a few themes at a time (review.revise): the live card above shows the batches,
 // each batch done is kept at once - «Остановить» or a failure loses only the batch in work. Every finding settled,
-// the application model learns from the corrected text: a request of its own (learnAfterFix).
+// the application model learns from the corrected text: a work of its own (learnAfterFix).
 async function fixFindings() {
   if (!AN || REQ_ABORT) return;
   const aid = AN.id, mine = () => AN?.id === aid;
-  liveStart('Агент исправляет ТЗ по ответам на замечания…');
+  liveStart('Агент исправляет ТЗ по ответам на замечания…', aid);
   FIX_MSG = ''; renderAnalysis();
   let done = null;
   try {
     const finished = await readNdjson(`/api/analyses/${aid}/review/fix`, {}, ev => {
       if (ev.type === 'log') {
-        reqLog(ev.text); $('#reqStage').textContent = ev.text.slice(0, 160);
-        const m = ev.text.match(/^Пакет (\d+) из (\d+)( готов)?/);
-        if (m) $('#reqBar').style.width = `${Math.round(5 + 90 * (m[1] - (m[3] ? 0 : 1)) / m[2])}%`;
+        reqLog(ev.text); $('#reqStage').textContent = ev.text.slice(0, 160); liveBar(ev.text);
       } else if (ev.type === 'analysis' || ev.type === 'batch') { if (mine()) openAnalysis(ev.analysis); }
       else if (ev.type === 'done') { done = ev; if (mine()) openAnalysis(ev.analysis); }
-      else if (ev.type === 'error') { if (ev.analysis && mine()) openAnalysis(ev.analysis); throw new Error(ev.text); }
+      else if (ev.type === 'error') { if (ev.analysis && mine()) openAnalysis(ev.analysis); throw liveError(ev); }
     });
     if (!finished) throw new Error('Соединение прервано до окончания исправления: готовые правки сохранены');
     const failed = Object.keys(done.failed || {}).length;
@@ -4445,27 +4536,132 @@ async function fixFindings() {
       done.summary].filter(Boolean).join(' ');
     liveEnd(`Исправление завершено: исправлено ${done.fixed.length}${failed ? `, не удалось ${failed}` : ''}`, failed ? 'var(--warn)' : 'var(--ok)', true);
   } catch (e) {
-    const msg = e.name === 'AbortError' ? 'Исправление остановлено: готовые правки сохранены' : e.message;
-    liveEnd(msg, e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)', true);
+    const stopped = e.name === 'AbortError' || e.stopped;
+    liveEnd(stopped ? 'Исправление остановлено: готовые правки сохранены' : e.message, stopped ? 'var(--muted)' : 'var(--bad)', true);
   } finally {
     if (mine()) await reloadAnalysis().catch(() => {});
     setTimeout(loadAnalyses, 500);
   }
   if (done && !done.unresolved && mine() && AN.readiness?.learn && !AN.readiness.learned) await learnAfterFix();
 }
-let LEARN_AID = '';         // the analysis whose requirements the application model learns from now
-async function learnAfterFix() {
+function learnAfterFix() {
   const base = FIX_MSG;
-  LEARN_AID = AN.id;
-  FIX_MSG = `${base} Модель приложения учится на исправленных требованиях…`.trim(); renderAnalysis();
+  return runWork('learn', 'Модель приложения учится на исправленных требованиях…', async () => {
+    try {
+      const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: AN.id});
+      FIX_MSG = `${base} Модель приложения: сущностей ${k.entities.length}, ролей ${k.roles.length}.`.trim();
+    } catch (e) {
+      FIX_MSG = `${base} Модель приложения не обновлена: ${e.message} — «Обновить модель приложения» на шаге «Жизненный цикл».`.trim();
+      throw e;
+    }
+    return [null, 'Модель приложения обновлена по требованиям'];
+  });
+}
+
+// ---- the work on an analysis (analyses.WORK) and its live card: one work at a time - what would break it waits
+// (the server answers 409). The work goes on on the server when the page goes away: the card follows it from the
+// analysis (`progress`) after another tab, F5, on another computer (watchWork); «Остановить» asks the server.
+let LIVE_AID = '', LIVE_OWN = false, LIVE_TIMER = null, WATCH = null;
+// A short work started from this page (the answers of an analyst, themes, the lifecycle, the model): fn() returns
+// [the analysis or null, what it did]. The analysis reads as busy at once - nothing that would break it starts.
+async function runWork(work, stage, fn) {
+  if (!AN || REQ_ABORT) return;
+  const aid = AN.id, mine = () => AN?.id === aid;
+  liveStart(stage, aid);
+  Object.assign(AN, {status: 'running', work, by: ME?.user || ''}); renderAnalysis(); refreshSummary();
   try {
-    const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: LEARN_AID});
-    FIX_MSG = `${base} Модель приложения: сущностей ${k.entities.length}, ролей ${k.roles.length}.`.trim();
+    const [a, text] = await fn();
+    if (a && mine()) openAnalysis(a);
+    liveEnd(text || 'Готово', 'var(--ok)', true);
   } catch (e) {
-    FIX_MSG = `${base} Модель приложения не обновлена: ${e.message} — «Обновить модель приложения» на шаге «Жизненный цикл».`.trim();
+    const stopped = /^Остановлено/.test(e.message);
+    liveEnd(e.message, stopped ? 'var(--muted)' : 'var(--bad)', true);
+  } finally {
+    if (mine()) await reloadAnalysis().catch(() => {});
+    setTimeout(loadAnalyses, 500);
   }
-  LEARN_AID = '';
-  await reloadAnalysis().catch(() => {});
+}
+function liveStart(stage, aid = '', own = true, started = Date.now()) {
+  stopWatch();
+  LIVE_AID = aid; LIVE_OWN = own;
+  $('#reqBtn').disabled = true; $('#reqStatus').textContent = '';
+  $('#reqLog').innerHTML = '';
+  $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
+  $('#reqStage').textContent = stage; $('#reqBar').style.width = '10%'; $('#reqBar').style.background = '';
+  clearInterval(LIVE_TIMER);
+  const tick = () => $('#reqTimer').textContent = elapsed(Date.now() - started);
+  LIVE_TIMER = setInterval(tick, 1000); tick();
+  if (own) REQ_ABORT = new AbortController();
+}
+const elapsed = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} с` : `${Math.floor(s / 60)} мин ${s % 60} с`; };
+function liveEnd(text, colour, log = false) {        // colour: of the dot and the bar; log - the line goes to the log too
+  $('#reqStage').textContent = text;
+  if (log) reqLog(text);
+  $('#reqDot').className = 'dot'; $('#reqDot').style.background = colour;
+  if (colour !== 'var(--muted)' && colour !== 'var(--bad)') { $('#reqBar').style.width = '100%'; $('#reqBar').style.background = colour; }
+  clearInterval(LIVE_TIMER); REQ_ABORT = null; LIVE_OWN = false;
+  $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
+}
+function liveBar(text) {         // «Пакет 2 из 5 (готов)» of a fix -> the bar
+  const m = String(text).match(/^Пакет (\d+) из (\d+)( готов)?/);
+  if (m) $('#reqBar').style.width = `${Math.round(5 + 90 * (m[1] - (m[3] ? 0 : 1)) / m[2])}%`;
+}
+function liveError(ev) { const e = new Error(ev.text); e.stopped = !!ev.stopped; return e; }
+$('#reqStop').onclick = async () => {
+  const aid = LIVE_AID;
+  $('#reqStop').disabled = true;
+  try { if (aid) await api('POST', `/api/analyses/${aid}/stop`); }
+  catch (e) { toast(e.message, 'bad'); }
+  finally { $('#reqStop').disabled = false; }
+  REQ_ABORT?.abort();
+};
+// The analysis open is in work this page did not start (or started before F5): the card follows its progress.
+function syncLive() {
+  if (!AN || LIVE_OWN) return;
+  if (AN.status === 'running') { if (WATCH?.aid !== AN.id) watchWork(AN); }
+  else if (WATCH && WATCH.aid !== AN.id) { stopWatch(); $('#reqLive').classList.add('hidden'); }
+}
+function stopWatch() { if (WATCH) clearTimeout(WATCH.timer); WATCH = null; }
+function watchWork(a) {
+  liveStart(a.progress?.stage || WORK_NAME[a.work] || 'Работа с требованиями…', a.id, false, (a.started || a.beat || Date.now() / 1000) * 1000);
+  $('#reqStop').classList.toggle('hidden', a.work === 'design');
+  WATCH = {aid: a.id, shown: 0, sig: watchSig(a)};
+  watchShow(a);
+  const poll = async () => {
+    if (!WATCH || WATCH.aid !== a.id) return;
+    let fresh;
+    try { fresh = await api('GET', `/api/analyses/${a.id}`); } catch { fresh = null; }
+    if (!WATCH || WATCH.aid !== a.id || LIVE_OWN) return;
+    if (fresh) {
+      watchShow(fresh);
+      if (fresh.status !== 'running') {
+        stopWatch();
+        const err = fresh.work_error || (fresh.status === 'error' ? fresh.error : '');
+        liveEnd(err || fresh.work_result || (fresh.status === 'cancelled' ? 'Остановлено' : 'Готово'), err ? 'var(--bad)' : 'var(--ok)', true);
+        if (AN?.id === fresh.id) openAnalysis(fresh);
+        loadAnalyses();
+        return;
+      }
+      // what the work changed by now (a batch of the fix, the report): shown; the rest of the page stays as it is
+      const sig = watchSig(fresh);
+      if (sig !== WATCH.sig && AN?.id === fresh.id) { WATCH.sig = sig; openAnalysis(fresh); }
+    }
+    WATCH.timer = setTimeout(poll, 2500);
+  };
+  WATCH.timer = setTimeout(poll, 2500);
+}
+const watchSig = a => JSON.stringify([a.work, (a.revisions || []).length, a.review?.at, Object.keys(a.review?.resolutions || {}).length, a.learned]);
+function watchShow(a) {       // the lines of the log of the work not shown yet
+  const lines = a.progress?.log || [];
+  const box = $('#reqLog');
+  lines.filter(l => l.at > WATCH.shown).forEach(l => {
+    const d = document.createElement('div');
+    d.innerHTML = `<span class="t">${new Date(l.at * 1000).toLocaleTimeString('ru-RU')}</span>${esc(l.text)}`;
+    box.appendChild(d);
+  });
+  if (lines.length) WATCH.shown = Math.max(WATCH.shown, lines[lines.length - 1].at);
+  box.scrollTop = box.scrollHeight;
+  if (a.progress?.stage) { $('#reqStage').textContent = a.progress.stage.slice(0, 160); liveBar(a.progress.stage); }
 }
 async function showAnalysis(aid, tab = '') {      // an analysis in work in the Requirements tab (a run's, the pipeline's choice)
   setRoute(projPath('req', aid)); AN_WANT = aid;
@@ -4476,14 +4672,12 @@ async function showAnalysis(aid, tab = '') {      // an analysis in work in the 
   renderAnalysis();
   $('#anActive').scrollIntoView({block: 'start'});
 }
-async function learnFromAnalysis(btn) {
-  const was = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Модель учится на требованиях…';
-  try {
+function learnFromAnalysis() {
+  runWork('learn', 'Модель приложения учится на требованиях…', async () => {
     const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: AN.id});
     FIX_MSG = `Модель приложения: сущностей ${k.entities.length}, ролей ${k.roles.length}.`;
-    await reloadAnalysis();
-  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = was; }
+    return [null, FIX_MSG];
+  });
 }
 
 function reuseRequirements() {
@@ -4641,6 +4835,7 @@ function reqEvent(ev) {
     const a = ev.analysis;
     ANALYSES = [{id: a.id, created: a.created, user: a.user, title: a.title, feature: a.feature || '', status: 'running',
                  scenarios: a.scenarios.length, tests: 0, review: a.review || null}, ...ANALYSES.filter(x => x.id !== a.id)];
+    LIVE_AID = a.id;        // «Остановить» stops the review of this analysis on the server
     openAnalysis(a); renderAnalyses();
   } else if (ev.type === 'review') {
     if (AN) { AN.review = ev.review; renderAnalysis(); refreshSummary(); }
@@ -4648,28 +4843,7 @@ function reqEvent(ev) {
   } else if (ev.type === 'done') {
     AN_TAB = ev.analysis.readiness?.step || AN_TAB;      // the review is done: on to the step to work on
     openAnalysis(ev.analysis); REQ_ABORT = null; renderAnalysis(); refreshSummary();
-  } else if (ev.type === 'error') throw new Error(ev.text);
-}
-// The live card above the analysis in work: one job of the tab at a time (the review, the fix), «Остановить» - REQ_ABORT.
-let LIVE_TIMER = null;
-function liveStart(stage) {
-  $('#reqBtn').disabled = true; $('#reqStatus').textContent = '';
-  $('#reqLog').innerHTML = '';
-  $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
-  $('#reqStage').textContent = stage; $('#reqBar').style.width = '10%'; $('#reqBar').style.background = '';
-  const started = Date.now();
-  clearInterval(LIVE_TIMER);
-  LIVE_TIMER = setInterval(() => $('#reqTimer').textContent = `${Math.round((Date.now() - started) / 1000)} с`, 1000);
-  $('#reqTimer').textContent = '0 с';
-  REQ_ABORT = new AbortController();
-}
-function liveEnd(text, colour, log = false) {        // colour: of the dot and the bar; log - the line goes to the log too
-  $('#reqStage').textContent = text;
-  if (log) reqLog(text);
-  $('#reqDot').className = 'dot'; $('#reqDot').style.background = colour;
-  if (colour !== 'var(--muted)' && colour !== 'var(--bad)') { $('#reqBar').style.width = '100%'; $('#reqBar').style.background = colour; }
-  clearInterval(LIVE_TIMER); REQ_ABORT = null;
-  $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
+  } else if (ev.type === 'error') throw liveError(ev);
 }
 // An NDJSON stream of the studio: every event to onEvent (it may throw to stop); true - the stream came to «done».
 async function readNdjson(url, body, onEvent) {
@@ -4696,7 +4870,8 @@ async function readNdjson(url, body, onEvent) {
 }
 // One review at a time: of the text above (a new analysis) or again of an analysis of the history.
 async function runReview(body) {
-  liveStart('Ревьюер требований: дефекты ТЗ и соответствие жизненному циклу системы…');
+  liveStart(body.requirements && body.analysis_id ? 'Ревьюер проверяет новую версию ТЗ с учётом решений по прежним замечаниям…'
+    : 'Ревьюер требований: дефекты ТЗ и соответствие жизненному циклу системы…', body.analysis_id || '');
   try {
     if (!await readNdjson('/api/requirements/review', {project_id: PID, ...body}, reqEvent))
       throw new Error('Соединение прервано до окончания проверки');
@@ -4704,12 +4879,12 @@ async function runReview(body) {
     // The stage line states the verdict, and the dot and bar take its colour: a green «done» next to «not ready» reads as both.
     liveEnd(vt ? `Проверка завершена: ${vt}` : 'Проверка завершена, отчёт сохранён', {ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)'}[vcls] || 'var(--muted)');
   } catch (e) {
-    const msg = e.name === 'AbortError' ? 'Проверка остановлена' : e.message;
+    const stopped = e.name === 'AbortError' || e.stopped, msg = stopped ? 'Проверка остановлена' : e.message;
     $('#reqStatus').textContent = msg;
-    liveEnd(msg, e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)', true);
-    if (AN) AN.status = e.name === 'AbortError' ? 'cancelled' : 'error';
+    liveEnd(msg, stopped ? 'var(--muted)' : 'var(--bad)', true);
   } finally {
-    if (AN) renderAnalysis();
+    // the analysis as the server has it now (a review stopped keeps its previous report)
+    if (AN) await reloadAnalysis().catch(() => renderAnalysis());
     setTimeout(loadAnalyses, 500);
   }
 }
@@ -4719,7 +4894,6 @@ $('#reqBtn').onclick = () => {
   if (!REQ_ABORT) runReview({requirements});
 };
 function reviewAnalysis(standard = '') { if (AN && !REQ_ABORT) runReview({analysis_id: AN.id, standard}); }
-$('#reqStop').onclick = () => REQ_ABORT?.abort();
 function setStudioScen(v) {
   STUDIO_SCEN = v;
   $('#fScen').classList.toggle('hidden', !v);

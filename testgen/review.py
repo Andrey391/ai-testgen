@@ -22,10 +22,12 @@ or marks a finding as not relevant; revise() - an editor on a clean context appl
 the document as edits of exact fragments, a few themes per request (FIX_BATCH), each batch kept as it is done.
 A finding either blocks test design (a question, a defect of the content) or is the quality of the document (its form, minor findings: worth fixing, not required). The findings
 of both checks on the same thing are grouped into themes (group()) and settled with one answer; the answers of an
-analyst pasted as one text are matched to them by a model (distribute()). The application model learns from the
-requirements only when every finding that blocks test design is fixed or marked not relevant (resolved()): the
-lifecycle of the system does not take in what the authors have not settled. Reviewed again, the reviewer is told
-what the authors decided (notes()).
+analyst pasted as one text are matched to them by a model (distribute(), up to ANSWERS_MAX characters, the themes
+in batches). Each theme has a number a person and an analyst answer by (`no`: the document's 1, 2…, the lifecycle's
+Ж1, Ж2…). The application model learns from the requirements only when every finding that blocks test design is
+fixed or marked not relevant (resolved()): the lifecycle of the system does not take in what the authors have not
+settled. Reviewed again - the same text or a new version the analyst sent - the reviewer is told what the authors
+decided and answered (notes()).
 """
 from __future__ import annotations
 
@@ -264,6 +266,9 @@ def blocking(report: dict | None) -> bool:
 # ---------- a person works through the findings ----------
 
 OPEN, TODO, FIXED, DISMISSED = "open", "todo", "fixed", "dismissed"
+ANSWER_MAX = 20_000     # characters of a person's answer to a finding
+NOTE_MAX = 5_000        # of why a finding is not relevant
+ANSWERS_MAX = 200_000   # of the answers of an analyst pasted as one text (as long as a specification)
 
 
 # The form of the document, not its content: a test is designed without them, so they do not block it.
@@ -365,6 +370,11 @@ async def group(project: dict, report: dict) -> list[dict]:
 SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2, "": 3}
 
 
+def lc_only(findings: list[dict]) -> bool:
+    """Findings of the lifecycle alone (its conflicts and questions, l<i>/lq<i>): settled with the lifecycle."""
+    return all(m["id"].startswith("l") for m in findings)
+
+
 def themes(report: dict | None) -> list[dict]:
     """What a person settles: a theme of findings (groups) or a finding of its own, in the order of the findings.
     With what it takes from its findings: blocking (any), the worst severity, question (one of them asks the
@@ -377,13 +387,17 @@ def themes(report: dict | None) -> list[dict]:
         if it["theme"] not in members:
             order.append(it["theme"])
         members.setdefault(it["theme"], []).append(it)
-    out = []
+    out, count = [], {"doc": 0, "lc": 0}
     for tid in order:
         ms = members[tid]
         sts = {m["status"] for m in ms}
         status = OPEN if OPEN in sts else TODO if TODO in sts else DISMISSED if sts == {DISMISSED} else FIXED
         first = next((m for m in ms if m["answer"] or m["note"]), ms[0])
-        out.append({"id": tid, "title": titles.get(tid, ""), "ids": [m["id"] for m in ms],
+        # the number a person and an analyst answer by: the document's 1, 2…, the lifecycle's Ж1, Ж2… (lc_only)
+        side = "lc" if lc_only(ms) else "doc"
+        count[side] += 1
+        out.append({"id": tid, "no": f"{'Ж' if side == 'lc' else ''}{count[side]}", "title": titles.get(tid, ""),
+                    "ids": [m["id"] for m in ms],
                     "blocking": any(m["blocking"] for m in ms),
                     "severity": min((m["severity"] for m in ms), key=lambda s: SEVERITY_ORDER.get(s, 3)),
                     "question": any(m["kind"] == "question" for m in ms), "status": status,
@@ -412,29 +426,48 @@ class Answers(BaseModel):
     answers: list[Answer]
 
 
-DISTRIBUTE = """The authors of a specification answered the reviewer's findings in one text: a list, a letter, notes in any order. Match each answer to its finding by the id in square brackets, by the number of the list or by what it is about, and give it as said - do not invent answers. A finding the text says is not relevant, not needed or out of scope: not_relevant, `note` - why. A finding the text does not answer is left out."""
+DISTRIBUTE = """The authors of a specification answered the reviewer's findings in one text: a list, a letter, notes in any order. Match each answer to its finding by the id in square brackets, by the number of the finding (as the list gives it: 1, 2… or Ж1, Ж2…) or by what it is about, and give it as said, in full - do not shorten or invent answers. A finding the text says is not relevant, not needed or out of scope: not_relevant, `note` - why. A finding the text does not answer is left out. You are given a part of the findings: answer only them, the text may answer others as well."""
+DISTRIBUTE_BATCH = 15       # themes per request: the answers come back whole however long the text is
+DISTRIBUTE_PARALLEL = 3
 
 
-async def distribute(project: dict, report: dict, text: str) -> list[dict]:
-    """The answers in `text` matched to the unsettled themes (themes()): [{id, answer, not_relevant, note}]."""
+async def distribute(project: dict, report: dict, text: str, log=None) -> list[dict]:
+    """The answers in `text` matched to the unsettled themes (themes()): [{id, answer, not_relevant, note}]. The
+    text goes whole (up to ANSWERS_MAX characters) with a batch of themes per request (DISTRIBUTE_BATCH), the
+    requests side by side: a long text answering many findings does not cut the answers off."""
+    say = log or (lambda line: None)
     left = [t for t in themes(report) if t["status"] in (OPEN, TODO)]
     if not left:
         raise ValueError("Все замечания уже разобраны")
     by = {it["id"]: it for it in items(report)}
-    lines = []
-    for n, t in enumerate(left, 1):
-        lines.append(f"{n}. [{t['id']}] {t['title'] or by[t['ids'][0]]['problem'][:300]}"
-                     + "".join(f"\n   - {by[i]['problem'][:300]}" for i in t["ids"] if t["title"] or i != t["ids"][0]))
-    reply = await llm.parse(project["pipeline"]["requirements"], system=DISTRIBUTE + projects.language_rule(project),
-                            context="The findings:\n" + "\n".join(lines),
-                            messages=[{"role": "user", "content": f"The answers of the authors:\n{text[:60_000]}"}],
-                            schema=Answers, max_tokens=8000, project_id=project["id"], stage_name="requirements")
-    if reply.parsed is None:
-        raise RuntimeError("Модель не смогла разобрать ответы")
+    batches = [left[i:i + DISTRIBUTE_BATCH] for i in range(0, len(left), DISTRIBUTE_BATCH)]
+    gate, done = asyncio.Semaphore(DISTRIBUTE_PARALLEL), [0]
+    content = f"The answers of the authors:\n{text[:ANSWERS_MAX]}"
+
+    async def one(batch: list[dict]) -> list[Answer]:
+        lines = [f"{t['no']}. [{t['id']}] {t['title'] or by[t['ids'][0]]['problem'][:300]}"
+                 + "".join(f"\n   - {by[i]['problem'][:300]}" for i in t["ids"] if t["title"] or i != t["ids"][0])
+                 for t in batch]
+        async with gate:
+            reply = await llm.parse(project["pipeline"]["requirements"],
+                                    system=DISTRIBUTE + projects.language_rule(project),
+                                    context="The findings:\n" + "\n".join(lines),
+                                    messages=[{"role": "user", "content": content}], schema=Answers,
+                                    max_tokens=32000, project_id=project["id"], stage_name="requirements",
+                                    stream=True)
+        if reply.parsed is None:
+            raise RuntimeError("Модель не смогла разобрать ответы")
+        done[0] += 1
+        if len(batches) > 1:
+            say(f"Ответы разобраны для {done[0]} из {len(batches)} частей замечаний")
+        return reply.parsed.answers
+
+    say(f"Агент сопоставляет ответы аналитика ({len(text):,} символов) с замечаниями: {len(left)}".replace(",", " "))
     known, out = {t["id"] for t in left}, {}
-    for a in reply.parsed.answers:
-        if a.id in known and (a.not_relevant or a.answer.strip()):
-            out[a.id] = a.model_dump()
+    for answers in await asyncio.gather(*(one(b) for b in batches)):
+        for a in answers:
+            if a.id in known and (a.not_relevant or a.answer.strip()):
+                out[a.id] = a.model_dump()
     return list(out.values())
 
 
@@ -457,14 +490,15 @@ def decide(report: dict, ids: list[str], status: str, answer: str | None = None,
     res = report.setdefault("resolutions", {})
     for i in ids:
         prev = res.get(i, {})
-        ans = (prev.get("answer", "") if answer is None else answer).strip()[:4000]
+        ans = (prev.get("answer", "") if answer is None else answer).strip()[:ANSWER_MAX]
         if status == TODO and known[i]["kind"] == "question" and not ans:
             raise ValueError("На вопрос нужен ответ: по нему агент исправит ТЗ")
         if status == OPEN:
             res.pop(i, None)
             continue
         res[i] = {"status": status, "answer": ans,
-                  "note": (prev.get("note", "") if note is None else note).strip()[:2000], "by": user, "at": time.time()}
+                  "note": (prev.get("note", "") if note is None else note).strip()[:NOTE_MAX], "by": user,
+                  "at": time.time()}
     return report
 
 
@@ -477,8 +511,9 @@ def fixed(report: dict, ids: list[str], user: str = "") -> dict:
 
 
 def notes(report: dict | None) -> str:
-    """For the next review of the same requirements: what the authors decided. Findings marked not relevant are
-    not to be reported again; the answers are what the document now says."""
+    """For the next review of the requirements - the same text or a new version the analyst sent: what the authors
+    decided. Findings marked not relevant are not to be reported again; the answers are what the document now says
+    (one answered but not applied yet - the new version should say it)."""
     lines = []
     for it in items(report):
         if it["status"] == DISMISSED:
@@ -486,6 +521,11 @@ def notes(report: dict | None) -> str:
                          + (f" (why: {it['note']})" if it["note"] else ""))
         elif it["status"] == FIXED and it["answer"]:
             lines.append(f"- settled by the authors: {it['problem']} -> {it['answer']}")
+        elif it["status"] == FIXED:
+            lines.append(f"- fixed in the document by the reviewer's suggestion: {it['problem']}")
+        elif it["status"] == TODO and it["answer"]:
+            lines.append(f"- answered by the authors, the document should say so now (report it only if it does "
+                         f"not): {it['problem']} -> {it['answer'][:2000]}")
     return ("\n\nDecisions of the authors on the findings of the previous review:\n" + "\n".join(lines)) if lines else ""
 
 
