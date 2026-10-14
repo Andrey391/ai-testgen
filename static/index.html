@@ -259,6 +259,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:
 details.opt{margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:6px 10px}
 details.opt summary{cursor:pointer;color:var(--muted);font-size:13px}
 details.how{margin-top:4px}
+kbd{font:12px/1.4 ui-monospace,monospace;padding:0 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;background:var(--panel)}
 details.how>summary{cursor:pointer;color:var(--muted);font-size:12px;width:fit-content}
 details.how>div{margin-top:4px}
 .hint{font-size:12px;color:var(--muted);margin-top:4px}
@@ -698,9 +699,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div id="wsSource" class="hint hidden"></div>
       <div class="row ws-ctl">
         <label class="inline" title="Автопилот: агент выполняет шаги сам, без подтверждения каждого"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
-        <button class="btn small danger hidden" id="stopBtn" title="Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
+        <button class="btn small danger hidden" id="stopBtn" aria-keyshortcuts="Control+." title="Ctrl+. — Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
       </div>
-      <div class="status"><span class="dot" id="stDot"></span><span id="stText"></span></div>
+      <div class="status" role="status" aria-live="polite"><span class="dot" id="stDot" aria-hidden="true"></span><span id="stText"></span></div>
       <div class="genbox" id="genBox"></div>
       <div class="changes" id="changesBox"></div>
       <details class="opt fold"><summary>Цель</summary><div class="goal" id="goalText"></div></details>
@@ -712,14 +713,18 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div id="pendingText" style="margin:4px 0 8px"></div>
         <div id="pendingWhy" class="hint" style="margin:-4px 0 8px"></div>
         <div class="row">
-          <button class="btn primary" id="contBtn">Выполнить шаг</button>
-          <button class="btn" id="rejBtn">Отклонить</button>
+          <button class="btn primary" id="contBtn" aria-keyshortcuts="Enter" title="Enter">Выполнить шаг</button>
+          <button class="btn" id="rejBtn" aria-keyshortcuts="Escape" title="Esc">Отклонить</button>
+        </div>
+        <div class="row hidden" id="rejRow" style="margin-top:6px">
+          <input id="rejText" class="grow" aria-label="Почему отклоняете — подсказка агенту" placeholder="Почему отклоняете? Подсказка агенту, можно пусто">
+          <button class="btn" id="rejSend">Отклонить шаг</button>
         </div>
       </div>
       <button class="btn hidden" id="resumeBtn" style="margin-top:8px">Продолжить с агентом</button>
       <div class="row" style="margin-top:8px">
         <input id="chatIn" placeholder="Подсказка агенту или доп. инструкция…" class="grow">
-        <button class="btn" id="chatBtn">→</button>
+        <button class="btn" id="chatBtn" aria-label="Отправить агенту">→</button>
       </div>
     </div>
 
@@ -765,13 +770,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <li><b>Вы — кнопкой «+ шаг».</b> Для шагов без элемента: открыть URL, нажать клавишу, подождать, проверить текст или URL, модуль проекта.</li>
         </ol>
         <div class="hint">В режиме «Клик по экрану: ничего» экран только показывает браузер — так случайный клик не добавит шаг. Описание шага можно поправить в списке, порядок — ▲▼, удалить — ✕.</div>
+        <div class="hint">Клавиши вне полей ввода: <kbd>Enter</kbd> — «Выполнить шаг», <kbd>Esc</kbd> — «Отклонить», <kbd>Ctrl</kbd>+<kbd>.</kbd> — остановить агента.</div>
       </details>
     </div>
 
     <div class="card col">
       <div class="row" style="margin-bottom:8px">
         <b class="grow">Шаги теста <span class="muted" id="stepCount"></span></b>
-        <button class="btn" id="addStepBtn">+ шаг</button>
+        <button class="btn" id="addStepBtn" aria-label="Добавить шаг">+ шаг</button>
         <button class="btn primary" id="saveBtn">Сохранить</button>
       </div>
       <div id="addStep" class="hidden" style="margin-bottom:8px">
@@ -2521,6 +2527,7 @@ function render() {
 
   const p = s.pending;
   $('#pendingBox').classList.toggle('hidden', !p || s.autopilot);
+  if (!p || s.autopilot) rejClose();
   if (p) $('#pendingText').innerHTML = `<span class="badge">${esc(p.name)}</span>${esc(p.step.description)}` +
       (p.step.value ? ` <span class="muted">(${esc(p.step.value)})</span>` : '');
   const why = [...s.chat].reverse().find(m => m.role === 'agent');
@@ -2669,9 +2676,9 @@ function renderSteps(steps) {
         ${st.replay_error ? `<div class="err">✘ Упал при прогоне: ${esc(st.replay_error)}</div>` : ''}
       </div>
       <div class="acts">
-        <button title="Вверх" data-op="up" data-i="${i}">▲</button>
-        <button title="Вниз" data-op="down" data-i="${i}">▼</button>
-        <button title="Удалить" data-op="del" data-i="${i}">✕</button>
+        <button title="Вверх" aria-label="Шаг ${i + 1} выше" data-op="up" data-i="${i}">▲</button>
+        <button title="Вниз" aria-label="Шаг ${i + 1} ниже" data-op="down" data-i="${i}">▼</button>
+        <button title="Удалить" aria-label="Удалить шаг ${i + 1}" data-op="del" data-i="${i}">✕</button>
       </div>
     </div>`).join('');
 }
@@ -2697,11 +2704,34 @@ $('#steps').addEventListener('click', async e => {
 });
 
 $('#contBtn').onclick = () => api('POST', `/api/sessions/${SID}/continue`).then(poll);
-$('#rejBtn').onclick = () => {
-  const fb = prompt('Почему отклоняете? (подсказка агенту, можно пусто)');
-  if (fb === null) return;
-  api('POST', `/api/sessions/${SID}/reject`, {text: fb}).then(poll);
+// «Отклонить»: a field for the hint opens under the step; Enter in it rejects, Esc closes it
+$('#rejBtn').onclick = () => { $('#rejRow').classList.remove('hidden'); $('#rejText').focus(); };
+const rejClose = () => { $('#rejRow').classList.add('hidden'); $('#rejText').value = ''; };
+$('#rejSend').onclick = () => {
+  const text = $('#rejText').value.trim();
+  rejClose();
+  api('POST', `/api/sessions/${SID}/reject`, {text}).then(poll).catch(e => toast(e.message, 'bad'));
 };
+$('#rejText').onkeydown = e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#rejSend').click(); }
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); rejClose(); $('#rejBtn').focus(); }
+};
+// Studio keys outside text fields: Enter - «Выполнить шаг», Esc - «Отклонить», Ctrl+. - «Остановить»
+document.addEventListener('keydown', e => {
+  if (curTab() !== 'studio' || !SID || e.altKey || e.metaKey || document.querySelector('dialog[open]')
+      || !$('#lightbox').classList.contains('hidden') || !$('#bellMenu').classList.contains('hidden')) return;
+  const t = e.target;
+  if (t.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+  const ready = b => b && !b.disabled && b.offsetParent !== null;    // a visible, enabled button
+  let b = null;
+  if (e.ctrlKey && e.key === '.') b = $('#stopBtn');
+  else if (e.ctrlKey || e.shiftKey) return;
+  else if (e.key === 'Enter' && !t.closest?.('button, a, summary')) b = $('#contBtn');   // Enter on a focused button presses that button
+  else if (e.key === 'Escape') b = $('#rejBtn');
+  if (!ready(b)) return;
+  e.preventDefault();
+  b.click();
+});
 $('#resumeBtn').onclick = () => api('POST', `/api/sessions/${SID}/resume`).then(poll);
 $('#autoToggle').onchange = e => api('POST', `/api/sessions/${SID}/autopilot`, {on: e.target.checked});
 const sendChat = () => {
