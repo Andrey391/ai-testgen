@@ -19,8 +19,8 @@ kept as soon as it is finished (`keep`): a review cut off by a restart of the st
 
 A person works through the findings (items()): answers how it should be (or takes the reviewer's suggestion)
 or marks a finding as not relevant; revise() - an editor on a clean context applies the answered findings to
-the document as edits of exact fragments. A finding either blocks test design (a question, a defect of the
-content) or is the quality of the document (its form, minor findings: worth fixing, not required). The findings
+the document as edits of exact fragments, a few themes per request (FIX_BATCH), each batch kept as it is done.
+A finding either blocks test design (a question, a defect of the content) or is the quality of the document (its form, minor findings: worth fixing, not required). The findings
 of both checks on the same thing are grouped into themes (group()) and settled with one answer; the answers of an
 analyst pasted as one text are matched to them by a model (distribute()). The application model learns from the
 requirements only when every finding that blocks test design is fixed or marked not relevant (resolved()): the
@@ -502,11 +502,14 @@ class Revision(BaseModel):
 
 REVISE = """You are the editor of a specification (ТЗ, SRS, user stories). A reviewer found defects in it and the authors answered how it should be. Apply each finding you are given to the document as edits.
 
-Every edit replaces an exact fragment of the document: `find` - a fragment copied verbatim from the document, long enough to occur once (a sentence, a list item, a requirement); `replace` - the new text of that fragment. To add text, find the fragment it goes after and replace it with that fragment followed by the new text. `item` - the id of the finding the edit settles; a finding may need several edits.
+Every edit replaces an exact fragment of the document: `find` - the shortest fragment copied verbatim from the document that occurs in it once (a sentence, a list item, a requirement - never a whole section); `replace` - the new text of that fragment. To add text, find the fragment it goes after (the end of the previous item) and replace it with that fragment followed by the new text. `item` - the id of the finding the edit settles; a finding may need several edits.
 
-The answer of the authors is how it must be: follow it over the reviewer's suggestion; with no answer, apply the suggestion. Change only what the findings need; keep the numbering, the language and the style of the document; do not invent requirements beyond the answers. Every finding gets at least one edit. `summary` - one or two sentences on what changed."""
+The answer of the authors is how it must be: follow it over the reviewer's suggestion; with no answer, apply the suggestion. Change only what the findings need; keep the numbering, the language and the style of the document; do not invent requirements beyond the answers. Every finding gets at least one edit; give the edits finding by finding, in the order the findings are listed. `summary` - one or two sentences on what changed."""
 
 ATTEMPTS = 2        # a finding whose fragment was not found is asked once more
+FIX_BATCH = 3       # themes (or findings of their own) per request of the editor: short answers, each batch kept
+FIX_WAIT = 300      # seconds of silence in the editor's streamed answer before the request is given up
+FIX_BATCH_TIME = 900    # seconds for a batch, its attempts included
 
 
 def _locate(document: str, fragment: str) -> tuple[int, int] | None:
@@ -546,10 +549,63 @@ def _revise_task(units: list[tuple[str, list[dict]]], titles: dict | None = None
     return "Apply these findings to the document:\n\n" + "\n\n".join(out)
 
 
-async def revise(project: dict, document: str, report: dict) -> dict:
+def _edits(reply) -> tuple[list[Edit], str, str]:
+    """The edits of an answer and its summary; an answer cut off by the output limit (or broken) - its complete
+    edits, but those of the finding it was cut on (it may need more of them). The third - why edits are missing."""
+    if reply.parsed is not None:
+        return reply.parsed.edits, reply.parsed.summary.strip(), ""
+    edits, cut = llm.salvage(reply.text, "edits", Edit), reply.stop == "max_tokens"
+    if cut and edits:
+        edits = [e for e in edits if e.item != edits[-1].item]
+    return edits, "", "ответ агента оборван на лимите длины" if cut else "ответ агента не разобран"
+
+
+async def _revise_batch(project: dict, system: str, doc: str, units: dict[str, list[dict]],
+                        titles: dict) -> tuple[str, list[dict], str, dict[str, str]]:
+    """One batch of themes applied to the document: (the new text, the edits, the summary, {theme: why not})."""
+    edits, summaries, failed, pending = [], [], {}, list(units)
+    for _ in range(ATTEMPTS):
+        reply = await llm.parse(project["pipeline"]["requirements"], system=system,
+                                context=f"The document:\n{doc[:150_000]}",
+                                messages=[{"role": "user", "content": _revise_task([(u, units[u]) for u in pending],
+                                                                                   titles)}],
+                                schema=Revision, max_tokens=16000, project_id=project["id"], stage_name="requirements",
+                                stream=True, timeout=FIX_WAIT)
+        got, summary, why = _edits(reply)
+        if summary:
+            summaries.append(summary)
+        asked, done, reasons = set(pending), set(), {}
+        for e in got:
+            if e.item not in asked:
+                continue
+            at = _locate(doc, e.find)
+            if not at:
+                reasons[e.item] = f"не найден фрагмент «{e.find[:120]}»"
+                continue
+            doc = doc[:at[0]] + e.replace + doc[at[1]:]
+            edits.append(e.model_dump())
+            done.add(e.item)
+        failed = {u: why_not for u, why_not in failed.items() if u not in asked}
+        failed |= {u: reasons.get(u) or why or "агент не предложил правку" for u in pending if u not in done}
+        pending = [u for u in pending if u in failed]
+        if not pending:
+            break
+    return doc, edits, " ".join(summaries), failed
+
+
+def _unit_name(uid: str, ms: list[dict], titles: dict) -> str:
+    name = titles.get(uid) or ms[0]["problem"]
+    return f"«{name[:70]}{'…' if len(name) > 70 else ''}»"
+
+
+async def revise(project: dict, document: str, report: dict, log=None, keep=None) -> dict:
     """The findings a person sent to be fixed (status todo) applied to the document by an editor on a clean
-    context; the findings of a theme are given and fixed together. {requirements: the new text, fixed: [ids],
-    failed: {id: why}, edits: [{item, find, replace}], summary}."""
+    context; the findings of a theme are given and fixed together, FIX_BATCH themes per request - the answers stay
+    short. keep(part) - every batch as it is done ({requirements: the whole text so far, fixed, failed, edits,
+    summary} of the batch): a fix cut off loses only the batch in work. An error of the model (no answer in time
+    among them) stops the fix, the batches done stay. {requirements: the new text, fixed: [ids], failed: {id: why},
+    edits: [{item, find, replace}], summary}."""
+    say = log or (lambda line: None)
     todo = [it for it in items(report) if it["status"] == TODO]
     if not todo:
         raise ValueError("Нет замечаний для исправления: ответьте на замечания или примите предложения ревьюера")
@@ -557,36 +613,27 @@ async def revise(project: dict, document: str, report: dict) -> dict:
     for it in todo:
         units.setdefault(it["theme"], []).append(it)
     titles = {g["id"]: g["title"] for g in report.get("groups") or []}
-    cfg = project["pipeline"]["requirements"]
     system = REVISE + projects.language_rule(project)
-    doc, edits, summaries, failed, pending = document, [], [], {}, list(units)
-    for _ in range(ATTEMPTS):
-        reply = await llm.parse(cfg, system=system, context=f"The document:\n{doc[:150_000]}",
-                                messages=[{"role": "user", "content": _revise_task([(u, units[u]) for u in pending],
-                                                                                   titles)}],
-                                schema=Revision, max_tokens=16000, project_id=project["id"], stage_name="requirements")
-        if reply.parsed is None:
-            raise RuntimeError("Модель не смогла исправить документ")
-        summaries.append(reply.parsed.summary.strip())
-        asked, done = set(pending), set()
-        for e in reply.parsed.edits:
-            if e.item not in asked:
-                continue
-            at = _locate(doc, e.find)
-            if not at:
-                failed[e.item] = f"не найден фрагмент «{e.find[:120]}»"
-                continue
-            doc = doc[:at[0]] + e.replace + doc[at[1]:]
-            edits.append(e.model_dump())
-            done.add(e.item)
-        for u in asked:
-            if u in done:
-                failed.pop(u, None)
-            else:
-                failed.setdefault(u, "агент не предложил правку")
-        pending = [u for u in pending if u in failed]
-        if not pending:
-            break
-    return {"requirements": doc, "fixed": [it["id"] for it in todo if it["theme"] not in failed],
-            "failed": {m["id"]: why for u, why in failed.items() for m in units[u]},
-            "edits": edits, "summary": " ".join(s for s in summaries if s)}
+    order = list(units)
+    batches = [order[i:i + FIX_BATCH] for i in range(0, len(order), FIX_BATCH)]
+    doc, fixed, failed, edits, summaries = document, [], {}, [], []
+    for n, batch in enumerate(batches, 1):
+        say(f"Пакет {n} из {len(batches)}: " + ", ".join(_unit_name(u, units[u], titles) for u in batch))
+        try:
+            doc, got, summary, missed = await asyncio.wait_for(
+                _revise_batch(project, system, doc, {u: units[u] for u in batch}, titles), FIX_BATCH_TIME)
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"агент не исправил пакет {n} из {len(batches)} за {FIX_BATCH_TIME // 60} мин") from None
+        part = {"requirements": doc, "fixed": [m["id"] for u in batch if u not in missed for m in units[u]],
+                "failed": {m["id"]: why for u, why in missed.items() for m in units[u]}, "edits": got,
+                "summary": summary}
+        if keep:
+            keep(part)
+        fixed += part["fixed"]
+        failed |= part["failed"]
+        edits += got
+        summaries.append(summary)
+        done = len(batch) - len(missed)
+        say(f"Пакет {n} из {len(batches)} готов: исправлено {done}" + (f", не удалось {len(missed)}" if missed else ""))
+    return {"requirements": doc, "fixed": fixed, "failed": failed, "edits": edits,
+            "summary": " ".join(s for s in summaries if s)}

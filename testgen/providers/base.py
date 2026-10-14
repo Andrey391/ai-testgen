@@ -50,6 +50,8 @@ class Request:
     context: str = ""                # static text after the system prompt, cached separately
     keep_images: int = 0             # >0: keep only the last N screenshots / page states
     stage: dict = field(default_factory=dict)
+    stream: bool = False             # the answer comes as a stream: a long one is not cut by a quiet connection
+    timeout: float = 0               # seconds: the wait for an answer (streamed - a pause in it); 0 - the SDK's
 
 
 @dataclass

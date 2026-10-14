@@ -3969,6 +3969,7 @@ const STEP_BADGE = {review: ['шаг 1: проверка требований', 
 const LC_CHECK = 'жизненный цикл';      // the check against the lifecycle in the errors of a report
 let AN_TAB = '';         // the step shown in the analysis in work
 const lcTheme = t => t.ids.every(i => i.startsWith('l'));      // conflicts with the lifecycle and its questions
+const WORK_LABEL = {review: 'проверка ревьюером…', design: 'проектирование сценариев…', fix: 'агент исправляет ТЗ…'};   // analyses: work
 async function loadAnalyses() {
   if (!PID) return;
   try { ANALYSES = await api('GET', `/api/projects/${PID}/analyses`); } catch { return; }
@@ -4039,10 +4040,10 @@ function renderAnalysis() {
   const box = $('#anActive');
   if (!box) return;
   if (!AN) { box.innerHTML = ''; return; }
-  const busy = AN.status === 'running' || !!REQ_ABORT;
+  const busy = AN.status === 'running' || !!REQ_ABORT || LEARN_AID === AN.id;
   const r = AN.readiness || {done: {}, blocked: [], parts: [], missing: [], step: 'review'};
   const tab = AN_TAB || r.step;
-  const [st, cls] = busy ? [AN.work === 'design' ? 'проектирование сценариев…' : 'проверка ревьюером…', 'warn'] : anStepBadge(AN, r.step);
+  const [st, cls] = busy ? [LEARN_AID === AN.id ? 'модель учится на требованиях…' : WORK_LABEL[AN.work] || 'проверка ревьюером…', 'warn'] : anStepBadge(AN, r.step);
   box.innerHTML = `<div class="card an-work" id="an-body-${AN.id}">
     <div class="row" style="gap:10px;align-items:baseline">
       <h3 class="grow" style="margin:0">${esc(AN.feature || AN.title || 'Требования')}</h3>
@@ -4052,6 +4053,7 @@ function renderAnalysis() {
     <div class="hint" style="margin-top:2px">${fmtTime(AN.created)}${AN.user ? ` · ${esc(AN.user)}` : ''}${AN.feature && AN.title && AN.feature !== AN.title ? ` · ${esc(AN.title)}` : ''}</div>
     ${stepTabs(r, tab, busy)}
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
+    ${AN.fix_error && !busy ? `<div class="err">${esc(AN.fix_error)}</div>` : ''}
     ${tab === 'review' ? reqTabHtml(r, busy) : tab === 'findings' ? findTabHtml(r, busy) : tab === 'lifecycle' ? lcTabHtml(r, busy) : scenTabHtml(r, busy)}</div>`;
   $('#anDelete').onclick = deleteAnalysis;
   applyFindFilter();
@@ -4062,7 +4064,7 @@ function stepTabs(r, tab, busy) {
   const block = ts.filter(t => !lcTheme(t) && t.blocking), blockLeft = block.filter(themeLeft);
   const tests = SCEN.reduce((k, s) => k + (s.tests || []).length, 0);
   const cap = {
-    review: busy && AN.work !== 'design' ? 'проверка идёт…' : !rv ? 'не проверены' : !r.done.review ? 'проверка не завершена'
+    review: busy && AN.work === 'fix' ? 'исправляется агентом…' : busy && AN.work !== 'design' ? 'проверка идёт…' : !rv ? 'не проверены' : !r.done.review ? 'проверка не завершена'
       : `проверены${(AN.revisions || []).length ? `, исправлены: ${AN.revisions.length}` : ''}`,
     findings: !r.done.review ? '—' : block.length ? `разобрано ${block.length - blockLeft.length} из ${block.length}` : 'блокирующих нет',
     lifecycle: !rv ? '—' : r.done.lifecycle ? 'подтверждён' : rv.errors?.[LC_CHECK] ? 'сверка не выполнена'
@@ -4085,7 +4087,8 @@ function reqTabHtml(r, busy) {
   const [vt] = rv ? REVIEW_VERDICT[rv.verdict] || [rv.verdict] : [''];
   const before = last && rv && last.at > rv.at;
   let head;
-  if (busy && AN.work !== 'design') head = '<div class="box next"><b>Ревьюер проверяет требования</b><div class="hint">Ход проверки — в карточке выше; отчёт появится здесь.</div></div>';
+  if (busy && AN.work === 'fix') head = '<div class="box next"><b>Агент исправляет ТЗ по ответам на замечания</b><div class="hint">Ход исправления — в карточке выше; текст ниже обновляется после каждого пакета замечаний.</div></div>';
+  else if (busy && AN.work !== 'design') head = '<div class="box next"><b>Ревьюер проверяет требования</b><div class="hint">Ход проверки — в карточке выше; отчёт появится здесь.</div></div>';
   else if (!rv) head = `<div class="box next"><div class="row"><b class="grow">Требования ещё не проверены ревьюером</b>
       <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить требования</button></div></div>`;
   else if (errs.length) head = `<div class="box bad"><div class="row"><b class="grow">Проверка документа не выполнена</b>
@@ -4268,7 +4271,7 @@ const FINDING_STATE = {open: ['не разобрано', 'warn'], todo: ['ждё
 let FIX_MSG = '';               // what the last fix or decision did, under the progress of the findings
 let FIND_SHOW = 'blocking', FIND_LEFT = true;     // the filter of the list: blocking | quality | all; only unsettled
 const themeLeft = t => t.status === 'open' || t.status === 'todo';
-const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running';
+const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running' || (!!AN && LEARN_AID === AN.id);
 function themeItem(it, many) {
   const tag = it.kind === 'question' ? '<span class="badge">вопрос авторам</span>'
     : `<span class="badge ${SEVERITY[it.severity]?.[1] || ''}">${esc(SEVERITY[it.severity]?.[0] || it.severity)}</span>
@@ -4417,15 +4420,52 @@ async function pasteAnswers(btn) {
     openAnalysis(r.analysis);
   } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Разнести по замечаниям'; }
 }
-async function fixFindings(btn) {
-  btn.disabled = true; btn.textContent = 'Агент исправляет ТЗ…';
+// The editor fixes the requirements a few themes at a time (review.revise): the live card above shows the batches,
+// each batch done is kept at once - «Остановить» or a failure loses only the batch in work. Every finding settled,
+// the application model learns from the corrected text: a request of its own (learnAfterFix).
+async function fixFindings() {
+  if (!AN || REQ_ABORT) return;
+  const aid = AN.id, mine = () => AN?.id === aid;
+  liveStart('Агент исправляет ТЗ по ответам на замечания…');
+  FIX_MSG = ''; renderAnalysis();
+  let done = null;
   try {
-    const r = await api('POST', `/api/analyses/${AN.id}/review/fix`);
-    const failed = Object.keys(r.failed || {}).length;
-    FIX_MSG = [`Исправлено в ТЗ: ${r.fixed.length}.`, failed ? `Не удалось: ${failed} — уточните ответ и исправьте снова.` : '',
-      r.summary, r.model].filter(Boolean).join(' ');
-    openAnalysis(r.analysis);
-  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Исправить ТЗ агентом'; }
+    const finished = await readNdjson(`/api/analyses/${aid}/review/fix`, {}, ev => {
+      if (ev.type === 'log') {
+        reqLog(ev.text); $('#reqStage').textContent = ev.text.slice(0, 160);
+        const m = ev.text.match(/^Пакет (\d+) из (\d+)( готов)?/);
+        if (m) $('#reqBar').style.width = `${Math.round(5 + 90 * (m[1] - (m[3] ? 0 : 1)) / m[2])}%`;
+      } else if (ev.type === 'analysis' || ev.type === 'batch') { if (mine()) openAnalysis(ev.analysis); }
+      else if (ev.type === 'done') { done = ev; if (mine()) openAnalysis(ev.analysis); }
+      else if (ev.type === 'error') { if (ev.analysis && mine()) openAnalysis(ev.analysis); throw new Error(ev.text); }
+    });
+    if (!finished) throw new Error('Соединение прервано до окончания исправления: готовые правки сохранены');
+    const failed = Object.keys(done.failed || {}).length;
+    FIX_MSG = [`Исправлено в ТЗ: ${done.fixed.length}.`, failed ? `Не удалось: ${failed} — уточните ответ и исправьте снова.` : '',
+      done.summary].filter(Boolean).join(' ');
+    liveEnd(`Исправление завершено: исправлено ${done.fixed.length}${failed ? `, не удалось ${failed}` : ''}`, failed ? 'var(--warn)' : 'var(--ok)', true);
+  } catch (e) {
+    const msg = e.name === 'AbortError' ? 'Исправление остановлено: готовые правки сохранены' : e.message;
+    liveEnd(msg, e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)', true);
+  } finally {
+    if (mine()) await reloadAnalysis().catch(() => {});
+    setTimeout(loadAnalyses, 500);
+  }
+  if (done && !done.unresolved && mine() && AN.readiness?.learn && !AN.readiness.learned) await learnAfterFix();
+}
+let LEARN_AID = '';         // the analysis whose requirements the application model learns from now
+async function learnAfterFix() {
+  const base = FIX_MSG;
+  LEARN_AID = AN.id;
+  FIX_MSG = `${base} Модель приложения учится на исправленных требованиях…`.trim(); renderAnalysis();
+  try {
+    const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: LEARN_AID});
+    FIX_MSG = `${base} Модель приложения: сущностей ${k.entities.length}, ролей ${k.roles.length}.`.trim();
+  } catch (e) {
+    FIX_MSG = `${base} Модель приложения не обновлена: ${e.message} — «Обновить модель приложения» на шаге «Жизненный цикл».`.trim();
+  }
+  LEARN_AID = '';
+  await reloadAnalysis().catch(() => {});
 }
 async function showAnalysis(aid, tab = '') {      // an analysis in work in the Requirements tab (a run's, the pipeline's choice)
   setRoute(projPath('req', aid)); AN_WANT = aid;
@@ -4610,53 +4650,65 @@ function reqEvent(ev) {
     openAnalysis(ev.analysis); REQ_ABORT = null; renderAnalysis(); refreshSummary();
   } else if (ev.type === 'error') throw new Error(ev.text);
 }
-// One review at a time: of the text above (a new analysis) or again of an analysis of the history.
-async function runReview(body) {
+// The live card above the analysis in work: one job of the tab at a time (the review, the fix), «Остановить» - REQ_ABORT.
+let LIVE_TIMER = null;
+function liveStart(stage) {
   $('#reqBtn').disabled = true; $('#reqStatus').textContent = '';
   $('#reqLog').innerHTML = '';
   $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
-  $('#reqStage').textContent = 'Ревьюер требований: дефекты ТЗ и соответствие жизненному циклу системы…'; $('#reqBar').style.width = '10%'; $('#reqBar').style.background = '';
+  $('#reqStage').textContent = stage; $('#reqBar').style.width = '10%'; $('#reqBar').style.background = '';
   const started = Date.now();
-  const timer = setInterval(() => $('#reqTimer').textContent = `${Math.round((Date.now() - started) / 1000)} с`, 1000);
+  clearInterval(LIVE_TIMER);
+  LIVE_TIMER = setInterval(() => $('#reqTimer').textContent = `${Math.round((Date.now() - started) / 1000)} с`, 1000);
   $('#reqTimer').textContent = '0 с';
   REQ_ABORT = new AbortController();
-  let finished = false;
-  try {
-    const r = await fetch('/api/requirements/review', {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: REQ_ABORT.signal,
-      body: JSON.stringify({project_id: PID, ...body})});
-    if (r.status === 401) { showLogin(); throw new Error('Требуется вход'); }
-    if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
-    const reader = r.body.getReader(), dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const {value, done} = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, {stream: true});
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const ev = JSON.parse(line);
-        reqEvent(ev);
-        if (ev.type === 'done') finished = true;
-      }
+}
+function liveEnd(text, colour, log = false) {        // colour: of the dot and the bar; log - the line goes to the log too
+  $('#reqStage').textContent = text;
+  if (log) reqLog(text);
+  $('#reqDot').className = 'dot'; $('#reqDot').style.background = colour;
+  if (colour !== 'var(--muted)' && colour !== 'var(--bad)') { $('#reqBar').style.width = '100%'; $('#reqBar').style.background = colour; }
+  clearInterval(LIVE_TIMER); REQ_ABORT = null;
+  $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
+}
+// An NDJSON stream of the studio: every event to onEvent (it may throw to stop); true - the stream came to «done».
+async function readNdjson(url, body, onEvent) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, signal: REQ_ABORT.signal,
+    body: JSON.stringify(body)});
+  if (r.status === 401) { showLogin(); throw new Error('Требуется вход'); }
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '', finished = false;
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream: true});
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (!line) continue;
+      const ev = JSON.parse(line);
+      onEvent(ev);
+      if (ev.type === 'done') finished = true;
     }
-    if (!finished) throw new Error('Соединение прервано до окончания проверки');
+  }
+  return finished;
+}
+// One review at a time: of the text above (a new analysis) or again of an analysis of the history.
+async function runReview(body) {
+  liveStart('Ревьюер требований: дефекты ТЗ и соответствие жизненному циклу системы…');
+  try {
+    if (!await readNdjson('/api/requirements/review', {project_id: PID, ...body}, reqEvent))
+      throw new Error('Соединение прервано до окончания проверки');
     const [vt, vcls] = REVIEW_VERDICT[AN?.review?.verdict] || [];
     // The stage line states the verdict, and the dot and bar take its colour: a green «done» next to «not ready» reads as both.
-    const colour = {ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)'}[vcls] || 'var(--muted)';
-    $('#reqStage').textContent = vt ? `Проверка завершена: ${vt}` : 'Проверка завершена, отчёт сохранён';
-    $('#reqDot').className = 'dot'; $('#reqDot').style.background = colour;
-    $('#reqBar').style.width = '100%'; $('#reqBar').style.background = colour;
+    liveEnd(vt ? `Проверка завершена: ${vt}` : 'Проверка завершена, отчёт сохранён', {ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)'}[vcls] || 'var(--muted)');
   } catch (e) {
     const msg = e.name === 'AbortError' ? 'Проверка остановлена' : e.message;
-    $('#reqStatus').textContent = msg; reqLog(msg); $('#reqStage').textContent = msg;
-    $('#reqDot').className = 'dot'; $('#reqDot').style.background = e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)';
-    REQ_ABORT = null;
-    if (AN) { AN.status = e.name === 'AbortError' ? 'cancelled' : 'error'; renderAnalysis(); }
+    $('#reqStatus').textContent = msg;
+    liveEnd(msg, e.name === 'AbortError' ? 'var(--muted)' : 'var(--bad)', true);
+    if (AN) AN.status = e.name === 'AbortError' ? 'cancelled' : 'error';
   } finally {
-    clearInterval(timer); REQ_ABORT = null;
-    $('#reqBtn').disabled = false; $('#reqStop').classList.add('hidden');
     if (AN) renderAnalysis();
     setTimeout(loadAnalyses, 500);
   }
@@ -4771,7 +4823,7 @@ async function loadPipeReviews() {
 const PIPE_LEFT_SHOWN = 5;
 function pipeAnRow(a) {        // requirements on their way to test design: the step, why, where to go on
   const [st, cls] = anStepBadge(a, a.step);
-  const why = a.status === 'running' ? 'ревьюер проверяет требования'
+  const why = a.status === 'running' ? (a.work === 'fix' ? 'агент исправляет ТЗ' : 'ревьюер проверяет требования')
     : a.status === 'error' && !a.review ? 'проверка не удалась — запустите её заново' : (a.blocked || []).slice(0, 2).join('; ');
   return `<div class="row pipe-an"><span class="badge ${cls}">${esc(st)}</span>
     <span class="grow"><b>${esc(a.feature || a.title || 'Требования')}</b> <span class="muted" style="font-size:12px">— ${fmtTime(a.created)}</span>

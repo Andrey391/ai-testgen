@@ -177,18 +177,7 @@ async def _parse(cfg: dict, system: str, context: str, task: str, fmt: type[Base
 
 def _salvage(text: str, item: type[BaseModel]) -> list:
     """The complete scenarios of an answer cut off by the output limit: they are kept, not asked again."""
-    m = re.search(r'"scenarios"\s*:\s*\[', text or "")
-    if not m:
-        return []
-    decoder, pos, out = json.JSONDecoder(), m.end(), []
-    while True:
-        while pos < len(text) and text[pos] in " \t\r\n,":
-            pos += 1
-        try:
-            obj, pos = decoder.raw_decode(text, pos)
-            out.append(item.model_validate(obj))
-        except (ValueError, ValidationError):
-            return out
+    return llm.salvage(text, "scenarios", item)
 
 
 def _field(text: str, key: str, default):
