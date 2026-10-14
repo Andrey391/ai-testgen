@@ -1461,7 +1461,7 @@ class StudioSession:
                 self.unanswered = self.messages.pop()["content"]
                 self.status, self.autopilot = "idle", False
                 self._say("system", "Генерация остановлена. Можно поправить шаги, подсказать агенту в чате или "
-                                    "нажать «Продолжить с AI».")
+                                    "нажать «Продолжить с агентом».")
                 raise
             finally:
                 self._llm_task = None
@@ -1500,7 +1500,7 @@ class StudioSession:
                     continue
                 self.autopilot = False
                 self._say("system", "Модель несколько раз подряд вернула пустой ответ. Подскажите ей в чате "
-                                    "или нажмите «Продолжить с AI».")
+                                    "или нажмите «Продолжить с агентом».")
             if tool is None:
                 self.status = "idle"   # the agent is waiting for the user
                 return
