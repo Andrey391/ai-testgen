@@ -182,7 +182,8 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `/api/users`, `/api/sso`, `/api/audit`, `/api/ready`, `/metrics`), MCP-сервер на `/mcp` (смонтирован
   последним) и отдача `static/index.html`. Сообщения в интерфейсе — `toast(text, kind)` (успех, исчезает само),
   `notice(el, text)` (ошибка у кнопки или формы) и `ask({title, text, subject, actions})` (модальный вопрос, Promise),
-  необратимое — `sure(title, action, text, subject)`; не `alert`/`confirm` (`docs/usability-plan.md`, этап 7; проверяет
+  необратимое — `sure(title, action, text, subject)`, ввод значения — `ask({…, field})`; не `alert`/`confirm`/`prompt`
+  (`docs/usability-plan.md`, этап 7; проверяет
   `tests/test_ui_static.py`); смоук-тест интерфейса — `tests/test_ui_nav.py`. **У экранов есть адреса**
   (`#/projects`, `#/p/{pid}/{req|pipe|studio|tests|runs|suites|coverage|tasks|dash|settings|setup}[/{id}[/{sec}]]`): `route()` открывает
   экран из адреса (вход, F5, «Назад», ссылка), открытие сущности пишет свой адрес (`setRoute`, новая запись истории), обновление
