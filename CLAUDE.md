@@ -504,7 +504,9 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   (`base.Reply`) и их отправка в Messages API (`anthropic.py`: точка кэша на tools + system, context
   editing, effort, `fallbacks`, structured output). Чего модели не хватает по последней проверке
   (`Model.features`), заменяется в `base.py`: обрезка старых скриншотов, structured output — JSON-схема в
-  промпте, проверка pydantic и один повтор.
+  промпте, проверка pydantic и один повтор. Подключение, у которого ответ со structured output ушёл целиком в
+  рассуждения (`max_tokens` без текста или поток замолчал в рассуждениях — GLM за шлюзом), дальше получает схему в промпте (`NO_STRUCTURED`, тот же
+  запрос повторяется так сразу). Таймаут запроса — `anthropic.Timeout` (SDK на `httpx2`, не `httpx`).
 - `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256), группы
   каталога и настройки «группа → роль» (`data/sso.json`); `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
   таблице `tests` (`repo/tests.py`; теги, карантин, `heal_proposals`, `verify`), `update()` —

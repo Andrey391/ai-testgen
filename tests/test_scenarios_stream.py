@@ -277,3 +277,54 @@ def test_a_thinking_block_without_signature_does_not_break_structured_output():
     reply = arun(AnthropicProvider(client, {"structured"}).parse(
         Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}]), ScenarioPlan))
     assert reply.stop == "end" and reply.parsed.feature == "Вход"
+
+
+def test_a_stream_that_goes_quiet_while_thinking_turns_structured_output_off(monkeypatch):
+    """GLM behind a gateway thinks under output_config.format and the stream goes quiet: what came is a thinking-only
+    answer cut off - the connection gets the schema in the prompt from now on, not a raw ReadTimeout."""
+    import json
+    import anthropic
+    import httpx2
+    from helpers import arun
+    from testgen.providers import anthropic as provider
+    from testgen.providers.base import ProviderError, Request
+    monkeypatch.setattr(provider, "NO_STRUCTURED", set())
+
+    def sse(kind, data):
+        return f"event: {kind}\ndata: {json.dumps(data | {'type': kind})}\n\n".encode()
+
+    class Quiet(httpx2.AsyncByteStream):
+        def __init__(self, request, thinking=True):
+            self.request, self.thinking = request, thinking
+
+        async def __aiter__(self):
+            yield sse("message_start", {"message": {
+                "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model", "content": [],
+                "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 0}}})
+            block = {"type": "thinking", "thinking": "", "signature": ""} if self.thinking else {"type": "text", "text": ""}
+            yield sse("content_block_start", {"index": 0, "content_block": block})
+            delta = {"type": "thinking_delta", "thinking": "Думаю…"} if self.thinking else {"type": "text_delta", "text": '{"fe'}
+            yield sse("content_block_delta", {"index": 0, "delta": delta})
+            raise httpx2.ReadTimeout("quiet", request=self.request)
+
+    thinking = True
+
+    def handler(request):
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=Quiet(request, thinking))
+    client = anthropic.AsyncAnthropic(api_key="x", max_retries=0,
+                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+    prov = provider.AnthropicProvider(client, {"structured"})
+    req = Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}], stream=True, timeout=5)
+    reply = arun(prov.parse(req, ScenarioPlan))
+    assert reply.stop == "max_tokens" and not reply.text and provider.thought_out(reply)
+    assert not prov.structured("test-model")
+
+    # a stream that goes quiet in the answer itself: an error of the model, in words
+    monkeypatch.setattr(provider, "NO_STRUCTURED", set())
+    thinking = False
+    try:
+        arun(prov.parse(req, ScenarioPlan))
+        raise AssertionError("no error")
+    except ProviderError as e:
+        assert "не ответила за отведённое время" in str(e)
+    assert prov.structured("test-model")

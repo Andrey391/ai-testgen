@@ -416,12 +416,13 @@ async def parse(stage: dict | None, *, system: str, messages: list[dict], schema
     prov = m.provider()
     req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
                   max_tokens=max_tokens, cache=PROMPT_CACHE, context=context, stream=stream, timeout=timeout)
-    if prov.structured:
+    if prov.structured(m.name):
         reply = await prov.parse(req, schema)
         track(reply, usage, m.prices, project_id, stage_name)
-        if reply.parsed is None and reply.stop != "refusal":
-            reply.parsed, _ = validate(schema, reply.text)
-        return reply
+        if prov.structured(m.name):         # off now: the model only thought - asked again with the schema in the prompt
+            if reply.parsed is None and reply.stop != "refusal":
+                reply.parsed, _ = validate(schema, reply.text)
+            return reply
     req.system = system + schema_instruction(schema)
     reply = await prov.chat(req)
     track(reply, usage, m.prices, project_id, stage_name)

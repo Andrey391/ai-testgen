@@ -11,7 +11,7 @@ Features (llm.Model.features) a model may lack - the studio then does the same o
 from __future__ import annotations
 
 import anthropic
-import httpx
+import httpx2
 import pydantic
 from anthropic.lib._parse._response import parse_beta_response
 from anthropic.lib._parse._transform import transform_schema
@@ -67,19 +67,19 @@ def error_text(e: Exception) -> str:
         return NO_KEY
     if isinstance(e, anthropic.APIStatusError) and _no_credits(e):
         return NO_CREDITS
-    if isinstance(e, anthropic.APITimeoutError):
+    if isinstance(e, (anthropic.APITimeoutError, httpx2.TimeoutException)):     # the latter: a pause in a stream
         return "API ИИ: модель не ответила за отведённое время — повторите или выберите модель быстрее."
     if isinstance(e, anthropic.RateLimitError):
         return "API ИИ: превышен лимит запросов, повторите чуть позже."
     if isinstance(e, anthropic.APIStatusError):
         return f"Ошибка API ИИ {e.status_code}: {e.message}"
-    if isinstance(e, anthropic.APIConnectionError):
+    if isinstance(e, (anthropic.APIConnectionError, httpx2.TransportError)):
         return "API ИИ: ошибка сети."
     return f"{type(e).__name__}: {e}"
 
 
 def is_error(e: Exception) -> bool:
-    return isinstance(e, anthropic.APIError) or (isinstance(e, TypeError) and "authentication" in str(e))
+    return isinstance(e, (anthropic.APIError, httpx2.TransportError))         or (isinstance(e, TypeError) and "authentication" in str(e))
 
 
 def _context_editing_failed(e: Exception) -> bool:
@@ -96,11 +96,31 @@ NO_CONTEXT_EDITING: set[tuple[str, str]] = set()
 # Connections (a gateway of the project's own) that refused a streamed request: they get plain ones.
 NO_STREAM: set[tuple[str, str]] = set()
 STREAM_REFUSED = {400, 404, 405, 415, 422, 501}
+# Connections (a gateway of the project's own) where structured output spent the whole output on thinking and
+# never got to the answer (GLM behind a gateway): they get the schema in the prompt.
+NO_STRUCTURED: set[tuple[str, str]] = set()
+
+
+def thought_out(reply: Reply) -> bool:
+    """The output limit was spent on thinking before any answer."""
+    return reply.stop == "max_tokens" and not reply.text and any(b.get("type") == "thinking" for b in reply.content)
+
+
+def _stalled_in_thinking(stream) -> BetaMessage | None:
+    """A stream that went quiet while the model was still thinking: what came, as cut off there."""
+    try:
+        msg = stream.current_message_snapshot
+    except Exception:
+        return None
+    blocks = list(getattr(msg, "content", None) or [])
+    if any(getattr(b, "type", "") == "text" and getattr(b, "text", "") for b in blocks)             or not any(getattr(b, "type", "") == "thinking" for b in blocks):
+        return None
+    return msg.model_copy(update={"stop_reason": "max_tokens"})
 
 
 def _timeout(req: Request) -> dict:
     """The request's own wait: for a stream - the longest pause in it, so a long answer still arriving is not cut."""
-    return {"timeout": httpx.Timeout(req.timeout, connect=min(req.timeout, 30.0))} if req.timeout else {}
+    return {"timeout": anthropic.Timeout(req.timeout, connect=min(req.timeout, 30.0))} if req.timeout else {}
 
 
 class AnthropicProvider:
@@ -204,14 +224,20 @@ class AnthropicProvider:
             return await self._streamed(req, streamed, plain)
         return await self._send(req, plain)
 
-    @property
-    def structured(self) -> bool:
-        return "structured" in self.features
+    def structured(self, model: str) -> bool:
+        return "structured" in self.features and self._key(model) not in NO_STRUCTURED
 
     async def parse(self, req: Request, schema) -> Reply:
         """Server-side structured output; the caller falls back to the prompt when it is off.
         The SDK validates the answer itself and raises on one cut off by max_tokens, losing the
-        stop reason and the usage: the raw response is read and validated here instead."""
+        stop reason and the usage: the raw response is read and validated here instead.
+        An answer that never got past thinking turns structured output off for the connection (NO_STRUCTURED)."""
+        reply = await self._parse(req, schema)
+        if thought_out(reply):
+            NO_STRUCTURED.add(self._key(req.model))
+        return reply
+
+    async def _parse(self, req: Request, schema) -> Reply:
         def parsed(msg):
             try:
                 return parse_beta_response(response=msg, output_format=schema)
@@ -234,7 +260,12 @@ class AnthropicProvider:
             kw = {**p, "output_config": {**(p.get("output_config") or {}), "format": fmt},
                   **({"betas": betas} if betas else {}), **_timeout(req)}
             async with self.client().beta.messages.stream(**kw) as s:
-                msg = await s.get_final_message()
+                try:
+                    msg = await s.get_final_message()
+                except httpx2.TimeoutException:
+                    msg = _stalled_in_thinking(s)
+                    if msg is None:
+                        raise
             return parsed(msg) if isinstance(msg, BetaMessage) and getattr(msg, "parsed_output", None) is None else msg
         if self._streams(req):
             return await self._streamed(req, streamed, call)

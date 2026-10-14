@@ -1,4 +1,4 @@
-anthropic>=1.8
+anthropic>=1.11     # on httpx2: the provider catches its timeouts
 playwright>=1.50
 fastapi
 uvicorn[standard]

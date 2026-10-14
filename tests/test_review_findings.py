@@ -353,6 +353,33 @@ FIXES = {"d0": review.Edit(item="d0", find="1. Покупатель оформл
          "vq0": review.Edit(item="vq0", find="отправленный заказ.", replace="отправленный заказ.\n3. Отменяет менеджер.")}
 
 
+def test_a_model_that_only_thinks_under_structured_output_gets_the_schema_in_the_prompt(monkeypatch, fake_llm):
+    """GLM behind a gateway: with output_config.format it thinks until max_tokens and never answers (the fix of the
+    requirements hung for its whole batch time); the same request with the schema in the prompt answers."""
+    from testgen import llm
+    from testgen.providers import anthropic as provider
+    monkeypatch.setattr(provider, "NO_STRUCTURED", set())
+    p = _project("Только думает")
+    answer = review.Revision(summary="Готово", edits=[FIXES["d0"]])
+
+    def script(kind, kw):
+        if kind == "parse":
+            return Resp([SimpleNamespace(type="thinking", thinking="Думаю… " * 50, signature="")],
+                        stop_reason="max_tokens")
+        return Resp([SimpleNamespace(type="text", text=answer.model_dump_json())])
+    fake_llm.script = script
+
+    def ask():
+        return arun(llm.parse(p["pipeline"]["requirements"], system="s", messages=[{"role": "user", "content": "x"}],
+                              schema=review.Revision, project_id=p["id"], stream=True, timeout=60))
+    assert ask().parsed == answer
+    assert [kind for kind, _ in fake_llm.calls] == ["parse", "create"]
+    assert "Answer with ONE JSON object only" in str(fake_llm.calls[1][1]["system"])
+    # the connection keeps the schema in the prompt: no more requests spent on thinking
+    fake_llm.calls.clear()
+    assert ask().parsed == answer and [kind for kind, _ in fake_llm.calls] == ["create"]
+
+
 def test_the_editor_keeps_each_batch_and_a_failure_loses_only_the_batch_in_work(monkeypatch, fake_llm):
     import server
     monkeypatch.setattr(auth, "ENABLED", False)

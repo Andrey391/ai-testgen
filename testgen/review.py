@@ -549,7 +549,7 @@ The answer of the authors is how it must be: follow it over the reviewer's sugge
 ATTEMPTS = 2        # a finding whose fragment was not found is asked once more
 FIX_BATCH = 3       # themes (or findings of their own) per request of the editor: short answers, each batch kept
 FIX_WAIT = 300      # seconds of silence in the editor's streamed answer before the request is given up
-FIX_BATCH_TIME = 900    # seconds for a batch, its attempts included
+FIX_BATCH_TIME = 1200   # seconds for a batch, its attempts included (and a structured answer lost in thinking)
 
 
 def _locate(document: str, fragment: str) -> tuple[int, int] | None:
