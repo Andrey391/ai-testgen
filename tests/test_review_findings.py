@@ -85,7 +85,8 @@ def test_findings_have_ids_and_decisions():
     assert not review.resolved(report)
 
 
-def test_the_editor_fixes_the_requirements_by_the_answers(fake_llm):
+def test_the_editor_fixes_the_requirements_by_the_answers(monkeypatch, fake_llm):
+    monkeypatch.setattr(review, "FIX_BATCH", 3)       # the findings in one request
     p = _project("Редактор")
     report = {"validation": _findings().model_dump(), "lifecycle": {"summary": "", "conflicts": [CONFLICT],
                                                                               "questions": []}}
@@ -380,10 +381,40 @@ def test_a_model_that_only_thinks_under_structured_output_gets_the_schema_in_the
     assert ask().parsed == answer and [kind for kind, _ in fake_llm.calls] == ["create"]
 
 
+def test_an_editor_lost_in_thinking_is_not_asked_the_same_at_once(monkeypatch, fake_llm):
+    """GLM behind a gateway drafts every edit in its thinking until the output limit, 5 minutes a request: a theme
+    is a request of its own (thinking grows with the task), the requests go a few at a time, a request that only
+    thinks is given up at FIX_THINK, and its theme is asked once more - not twice at once by llm.parse."""
+    from testgen.providers import anthropic as provider
+    monkeypatch.setattr(provider, "NO_STRUCTURED", set())
+    p = _project("Рассуждает")
+    report = {"validation": _findings().model_dump(), "lifecycle": {"summary": "", "conflicts": [CONFLICT],
+                                                                              "questions": []}}
+    review.decide(report, ["d0", "l0"], "todo", "")
+    review.decide(report, ["vq0"], "todo", "Отменяет менеджер")
+    thinking = Resp([SimpleNamespace(type="thinking", thinking="Черновик правок… " * 50, signature="")],
+                    stop_reason="max_tokens")
+
+    def script(kind, kw):
+        task = kw["messages"][0]["content"]
+        if "[d0]" in task:
+            return thinking
+        item = "l0" if "[l0]" in task else "vq0"
+        return Resp([SimpleNamespace(type="text", text=review.Revision(summary=item, edits=[FIXES[item]]).model_dump_json())])
+    fake_llm.script = script
+    lines, kept = [], []
+    out = arun(review.revise(p, SPEC, report, log=lines.append, keep=kept.append))
+    assert out["fixed"] == ["l0", "vq0"] and out["failed"] == {"d0": "ответ агента оборван на лимите длины"}
+    asks = [kw["messages"][0]["content"] for _, kw in fake_llm.calls]
+    assert len(asks) == 4 and all(a.count("the answer of the authors") == 1 for a in asks)     # a theme a request
+    assert sum("[d0]" in a for a in asks) == review.ATTEMPTS                                     # asked again once
+    assert all(kw["max_tokens"] == review.FIX_TOKENS for _, kw in fake_llm.calls)
+    assert len(kept) == 3 and lines[-1].startswith("Пакет") and any("не удалось 1: ответ агента оборван" in x for x in lines)
+
+
 def test_the_editor_keeps_each_batch_and_a_failure_loses_only_the_batch_in_work(monkeypatch, fake_llm):
     import server
     monkeypatch.setattr(auth, "ENABLED", False)
-    monkeypatch.setattr(review, "FIX_BATCH", 1)
     p, aid = _answered("Пакеты")
 
     def script(kind, kw):
@@ -397,7 +428,7 @@ def test_the_editor_keeps_each_batch_and_a_failure_loses_only_the_batch_in_work(
     events = _events(client.post(f"/api/analyses/{aid}/review/fix"))
     kinds = [e["type"] for e in events]
     assert kinds[0] == "analysis" and events[0]["analysis"]["status"] == "running" and events[0]["analysis"]["work"] == "fix"
-    assert kinds.count("batch") == 2 and kinds[-1] == "error" and "не отвечает" in events[-1]["text"]
+    assert kinds.count("batch") == 2 and kinds[-1] == "error" and "не отвечает" in events[-1]["text"], events[-1]
     assert any(e["type"] == "log" and e["text"].startswith("Пакет 3 из 3") for e in events)
     # one request per batch, streamed and with a wait of its own
     assert [kind for kind, _ in fake_llm.calls] == ["parse"] * 3
@@ -439,7 +470,8 @@ def test_a_fix_is_one_at_a_time_and_the_findings_wait_for_it(monkeypatch, fake_l
     assert analyses.get(aid)["status"] == "done" and "before_work" not in analyses.get(aid)
 
 
-def test_an_answer_cut_off_keeps_the_complete_edits(fake_llm):
+def test_an_answer_cut_off_keeps_the_complete_edits(monkeypatch, fake_llm):
+    monkeypatch.setattr(review, "FIX_BATCH", 3)
     p = _project("Обрыв")
     report = {"validation": _findings().model_dump(), "lifecycle": {"summary": "", "conflicts": [CONFLICT],
                                                                               "questions": []}}

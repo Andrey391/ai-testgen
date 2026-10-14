@@ -86,13 +86,16 @@ def make_client(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
                                     auth_token=(api_key or None) if base_url else None)
 
 
-_clients: dict[tuple[str, str], anthropic.AsyncAnthropic] = {}
+_clients: dict[tuple, anthropic.AsyncAnthropic] = {}
 
 
 def client_for(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
-    key = (api_key, base_url)
+    """A client per key and address; the factory is a part of the key: a request in work in another thread while
+    tests replace make_client does not leave a client of the other factory in the cache."""
+    make = make_client
+    key = (api_key, base_url, make)
     if key not in _clients:
-        _clients[key] = make_client(api_key, base_url)
+        _clients[key] = make(api_key, base_url)
     return _clients[key]
 
 
@@ -392,14 +395,18 @@ def _check(usage: Usage | None, project_id: str) -> None:
 async def chat(stage: dict | None, *, system: str, messages: list[dict], tools: list[dict] | None = None,
                max_tokens: int = 16000, one_tool: bool = True, cache: bool = True, cache_all: bool = False,
                context: str = "", keep_images: int = 0, usage: Usage | None = None, project_id: str = "",
-               stage_name: str = "", stream: bool = False, timeout: float = 0) -> Reply:
+               stage_name: str = "", stream: bool = False, timeout: float = 0, think_limit: int = 0,
+               progress=None) -> Reply:
     """One answer of the project's model (the stage may override it). stream - a long answer comes as a stream;
-    timeout - seconds of the wait (of a pause in a stream), 0 - the SDK's."""
+    timeout - seconds of the wait (of a pause in a stream), 0 - the SDK's; think_limit - characters of thinking
+    with no answer begun after which a stream is given up as cut off; progress(thinking, answer) - how far a
+    stream is (characters), every few seconds."""
     m = model(project_id, stage)
     _check(usage, project_id)
     req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
                   tools=tools or [], max_tokens=max_tokens, one_tool=one_tool, cache=cache and PROMPT_CACHE,
-                  cache_all=cache_all, context=context, keep_images=keep_images, stream=stream, timeout=timeout)
+                  cache_all=cache_all, context=context, keep_images=keep_images, stream=stream, timeout=timeout,
+                  think_limit=think_limit, progress=progress)
     reply = await m.provider().chat(req)
     track(reply, usage, m.prices, project_id, stage_name)
     return reply
@@ -407,19 +414,23 @@ async def chat(stage: dict | None, *, system: str, messages: list[dict], tools: 
 
 async def parse(stage: dict | None, *, system: str, messages: list[dict], schema, max_tokens: int = 4000,
                 context: str = "", usage: Usage | None = None, project_id: str = "", stage_name: str = "",
-                stream: bool = False, timeout: float = 0) -> Reply:
+                stream: bool = False, timeout: float = 0, think_limit: int = 0, progress=None,
+                again: bool = True) -> Reply:
     """An answer as `schema` (reply.parsed; None if the model declined or the answer was cut off - salvage()
     takes what came). A model without server-side structured output gets the schema in the prompt; an answer
-    that does not validate is sent back with the error once. stream, timeout - as chat()."""
+    that does not validate is sent back with the error once. stream, timeout, think_limit, progress - as chat().
+    again=False - an answer lost in thinking is not asked again at once (the caller makes its task smaller)."""
     m = model(project_id, stage)
     _check(usage, project_id)
     prov = m.provider()
     req = Request(model=m.name, effort=m.effort, stage=stage or {}, system=system, messages=messages,
-                  max_tokens=max_tokens, cache=PROMPT_CACHE, context=context, stream=stream, timeout=timeout)
+                  max_tokens=max_tokens, cache=PROMPT_CACHE, context=context, stream=stream, timeout=timeout,
+                  think_limit=think_limit, progress=progress)
     if prov.structured(m.name):
         reply = await prov.parse(req, schema)
         track(reply, usage, m.prices, project_id, stage_name)
-        if prov.structured(m.name):         # off now: the model only thought - asked again with the schema in the prompt
+        # Off now: the model only thought - asked again with the schema in the prompt (unless the caller retries).
+        if prov.structured(m.name) or not again:
             if reply.parsed is None and reply.stop != "refusal":
                 reply.parsed, _ = validate(schema, reply.text)
             return reply

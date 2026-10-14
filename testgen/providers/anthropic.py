@@ -10,6 +10,8 @@ Features (llm.Model.features) a model may lack - the studio then does the same o
 """
 from __future__ import annotations
 
+import time
+
 import anthropic
 import httpx2
 import pydantic
@@ -118,6 +120,36 @@ def _stalled_in_thinking(stream) -> BetaMessage | None:
     return msg.model_copy(update={"stop_reason": "max_tokens"})
 
 
+PROGRESS_EVERY = 15     # seconds between the progress reports of a stream (Request.progress)
+
+
+async def _final(stream, req: Request) -> BetaMessage:
+    """The answer of a stream. With Request.think_limit or progress it is read event by event: a model that thinks
+    past think_limit characters with no answer begun is given up there - what came, cut off (GLM behind a gateway
+    drafts every edit in its thinking until the output limit, minutes per request); progress hears how far it is."""
+    if not (req.think_limit or req.progress):
+        return await stream.get_final_message()
+    thought = said = 0
+    told = time.monotonic()
+    async for ev in stream:
+        if getattr(ev, "type", "") != "content_block_delta":
+            continue
+        d = ev.delta
+        kind = getattr(d, "type", "")
+        if kind == "thinking_delta":
+            thought += len(d.thinking or "")
+        elif kind in ("text_delta", "input_json_delta"):
+            said += len(getattr(d, "text", "") or getattr(d, "partial_json", "") or "")
+        if req.think_limit and not said and thought > req.think_limit:
+            msg = _stalled_in_thinking(stream)
+            if msg is not None:
+                return msg
+        if req.progress and time.monotonic() - told >= PROGRESS_EVERY:
+            told = time.monotonic()
+            req.progress(thought, said)
+    return await stream.get_final_message()
+
+
 def _timeout(req: Request) -> dict:
     """The request's own wait: for a stream - the longest pause in it, so a long answer still arriving is not cut."""
     return {"timeout": anthropic.Timeout(req.timeout, connect=min(req.timeout, 30.0))} if req.timeout else {}
@@ -219,7 +251,7 @@ class AnthropicProvider:
         async def streamed(p, betas):
             async with self.client().beta.messages.stream(**p, **({"betas": betas} if betas else {}),
                                                           **_timeout(req)) as s:
-                return await s.get_final_message()
+                return await _final(s, req)
         if self._streams(req):
             return await self._streamed(req, streamed, plain)
         return await self._send(req, plain)
@@ -261,7 +293,7 @@ class AnthropicProvider:
                   **({"betas": betas} if betas else {}), **_timeout(req)}
             async with self.client().beta.messages.stream(**kw) as s:
                 try:
-                    msg = await s.get_final_message()
+                    msg = await _final(s, req)
                 except httpx2.TimeoutException:
                     msg = _stalled_in_thinking(s)
                     if msg is None:

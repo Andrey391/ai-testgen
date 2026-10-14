@@ -328,3 +328,46 @@ def test_a_stream_that_goes_quiet_while_thinking_turns_structured_output_off(mon
     except ProviderError as e:
         assert "не ответила за отведённое время" in str(e)
     assert prov.structured("test-model")
+
+
+def test_a_stream_that_only_thinks_past_its_limit_is_given_up_and_tells_how_far_it_is(monkeypatch):
+    """GLM behind a gateway thinks for minutes and spends the whole output limit before an answer: a request with
+    think_limit is given up as soon as that much thinking came with no answer begun (not read to its end), and
+    progress hears how far the model got."""
+    import json
+    import anthropic
+    import httpx2
+    from helpers import arun
+    from testgen.providers import anthropic as provider
+    from testgen.providers.base import Request
+    monkeypatch.setattr(provider, "NO_STRUCTURED", set())
+    monkeypatch.setattr(provider, "PROGRESS_EVERY", 0)
+    sent = []
+
+    def sse(kind, data):
+        return f"event: {kind}\ndata: {json.dumps(data | {'type': kind})}\n\n".encode()
+
+    class Thinking(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            yield sse("message_start", {"message": {
+                "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model", "content": [],
+                "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 0}}})
+            yield sse("content_block_start", {"index": 0, "content_block": {"type": "text", "text": ""}})
+            yield sse("content_block_stop", {"index": 0})       # GLM: an empty text block before its thinking
+            yield sse("content_block_start", {"index": 1, "content_block": {"type": "thinking", "thinking": "",
+                                                                             "signature": ""}})
+            for _ in range(100):
+                sent.append(1)
+                yield sse("content_block_delta", {"index": 1, "delta": {"type": "thinking_delta", "thinking": "x" * 1000}})
+            raise AssertionError("the stream was read to its end")
+
+    client = anthropic.AsyncAnthropic(api_key="x", max_retries=0, http_client=httpx2.AsyncClient(
+        transport=httpx2.MockTransport(lambda r: httpx2.Response(200, headers={"content-type": "text/event-stream"},
+                                                                  stream=Thinking()))))
+    prov = provider.AnthropicProvider(client, {"structured"})
+    seen = []
+    req = Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}], stream=True, timeout=5,
+                  think_limit=5000, progress=lambda thought, said: seen.append((thought, said)))
+    reply = arun(prov.parse(req, ScenarioPlan))
+    assert reply.stop == "max_tokens" and not reply.text and provider.thought_out(reply)
+    assert len(sent) < 10 and seen and seen[-1][0] >= 1000 and seen[-1][1] == 0

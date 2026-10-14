@@ -63,6 +63,12 @@ class FakeMessages:
             async def __aexit__(self, *exc):
                 return False
 
+            def __aiter__(self):        # read event by event (Request.think_limit, progress): no events, the answer whole
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
             async def get_final_message(self):
                 return owner.script(kind, kw)
         return Stream()
