@@ -86,6 +86,10 @@ async def lifespan(_app):
             w = worker_mod.Worker(int(os.environ.get("TESTGEN_WORKER_CONCURRENCY", "2")), name=f"web-{INSTANCE_ID}")
             background.append((w, submit(w.serve())))
         background.append((None, submit(_keep_owners())))
+    # The MCP session manager runs only once: each start of the app (tests start it several times
+    # in one process) gets a new one, and the mounted /mcp routes switch to it.
+    MCP._session_manager = None
+    MCP_APP.router.routes[:] = MCP.streamable_http_app().routes
     async with MCP.session_manager.run():
         yield
     for w, fut in background:
