@@ -64,8 +64,9 @@ def public(run: dict) -> dict:
 
 def save(run: dict) -> None:
     run["saved"] = time.time()
-    repo.Sql.save(public(run))
+    # Files first: whoever sees the record (another instance, the finished status) finds its files in the store.
     fs.push(files_dir(run))           # screenshots of the steps so far, the trace
+    repo.Sql.save(public(run))
 
 def outcomes(run: dict) -> list[bool]:
     """Pass/fail of each attempt, in order."""
