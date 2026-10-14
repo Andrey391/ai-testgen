@@ -1814,6 +1814,8 @@ function ask({title = '', text = '', subject = '', actions = [{label: 'OK', valu
     (primary || (danger ? no : made.at(-1)) || no)?.focus();
   });
 }
+// sure(title, action, text, subject) - ask() about an irreversible action: one red button named by the action.
+const sure = (title, action, text = '', subject = '') => ask({title, text, subject, actions: [{label: action, value: true, kind: 'danger'}]});
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 
 // ---- screenshots open over the page and close with × in the top right corner, Esc or a click beside
@@ -2413,7 +2415,9 @@ async function sessionLost(sid) {
   closeWorkspace();
   const cps = await api('GET', `/api/projects/${PID}/sessions`).catch(() => []);
   const cp = cps.find(c => c.id === sid);
-  if (cp && confirm(`Студия была перезапущена, сессия «${cp.name}» прервалась. Записано шагов: ${cp.steps}.\n\nПродолжить её? Шаги воспроизведутся в новом браузере, затем агент продолжит сценарий. «Отмена» — сессия останется в списке «Прерванные сессии».`))
+  if (cp && await ask({title: 'Сессия прервалась', subject: cp.name,
+                       text: `Студия была перезапущена. Записано шагов: ${cp.steps}. Шаги воспроизведутся в новом браузере, затем агент продолжит сценарий. Если не продолжать, сессия останется в списке «Прерванные сессии».`,
+                       actions: [{label: 'Продолжить сессию', value: true, kind: 'primary'}], cancel: 'Не сейчас'}))
     restoreSession(sid);
 }
 async function loadInterrupted() {
@@ -2430,19 +2434,21 @@ async function loadInterrupted() {
 }
 async function restoreSession(sid) {
   try { if (await startSession(() => api('POST', `/api/projects/${PID}/sessions/${sid}/restore`, {}))) openSession(sid); }
-  catch (e) { alert(e.message); }
+  catch (e) { toast(e.message, 'bad'); }
 }
 async function saveInterrupted(sid, btn) {
   btn.disabled = true;
   try {
     const t = await api('POST', `/api/projects/${PID}/sessions/${sid}/save`, {});
-    alert(`Тест «${t.name}» сохранён как черновик (шагов: ${t.steps.length}).` + (t.warnings?.length ? '\n\n' + t.warnings.join('\n') : ''));
+    toast(`Тест «${t.name}» сохранён как черновик (шагов: ${t.steps.length}).` + (t.warnings?.length ? '\n\n' + t.warnings.join('\n') : ''),
+          t.warnings?.length ? 'warn' : 'ok');
     loadInterrupted();
-  } catch (e) { alert(e.message); } finally { btn.disabled = false; }
+  } catch (e) { toast(e.message, 'bad'); } finally { btn.disabled = false; }
 }
 async function discardInterrupted(sid) {
-  if (!confirm('Удалить прерванную сессию? Несохранённые шаги пропадут.')) return;
-  try { await api('DELETE', `/api/projects/${PID}/sessions/${sid}`); } catch (e) { alert(e.message); }
+  if (!await ask({title: 'Удалить прерванную сессию?', text: 'Несохранённые шаги пропадут.',
+                  actions: [{label: 'Удалить сессию', value: true, kind: 'danger'}]})) return;
+  try { await api('DELETE', `/api/projects/${PID}/sessions/${sid}`); } catch (e) { toast(e.message, 'bad'); }
   loadInterrupted();
 }
 
@@ -2626,7 +2632,7 @@ function renderChanges() {
       || '<div class="muted">Пока изменений нет: здесь появятся добавленные, выполненные и изменённые шаги.</div>');
 }
 $('#stopBtn').onclick = async () => {
-  try { await api('POST', `/api/sessions/${SID}/stop`); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/sessions/${SID}/stop`); } catch (e) { toast(e.message, 'bad'); }
 };
 
 function candText(c) { return c.kind === 'role' ? `role=${c.role}[name="${c.name}"]` : `${c.kind}=${c.value}`; }
@@ -2736,7 +2742,7 @@ $('#shot').onclick = async e => {
       if (value === null) return;
       await api('POST', `/api/sessions/${SID}/pick`, {x, y, action: r.need, value, source: mode});
     }
-  } catch (err) { alert(err.message); }
+  } catch (err) { toast(err.message, 'bad'); }
   poll();
 };
 function askPickValue(action, name) {    // '' - the action needs no value, null - the person cancelled
@@ -2744,7 +2750,7 @@ function askPickValue(action, name) {    // '' - the action needs no value, null
   if (action === 'fill') return prompt(`Текст для ввода${of}:`);
   if (action === 'select_option') return prompt(`Пункт списка${of}:`);
   if (action === 'upload_file') {
-    if (!PROJ.files?.length) { alert('Загрузите файлы для тестов: Проект → Общие → Файлы для тестов'); return null; }
+    if (!PROJ.files?.length) { toast('Загрузите файлы для тестов: Проект → Общие → Файлы для тестов', 'warn'); return null; }
     return prompt(`Имя файла проекта${of} (${PROJ.files.join(', ')}):`, PROJ.files[0]);
   }
   return '';
@@ -2785,7 +2791,7 @@ $('#asGo').onclick = async () => {
     await api('POST', `/api/sessions/${SID}/manual`, {action: a,
       value: manualValue(a, $('#asValue').value), description: $('#asDesc').value});
     $('#asValue').value = $('#asDesc').value = '';
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
   poll();
 };
 
@@ -2813,7 +2819,7 @@ $('#runSavedBtn').onclick = () => { showTab('tests'); runTest(TEST_ID); };
 $('#watchSavedBtn').onclick = e => editInStudio(TEST_ID, e.target, true);
 $('#readyBtn').onclick = async () => {
   try { await api('PATCH', `/api/tests/${TEST_ID}/meta`, {status: 'ready'}); $('#savedText').textContent = 'Сохранено, в наборе'; $('#readyBtn').classList.add('hidden'); }
-  catch (e) { alert(e.message); }
+  catch (e) { toast(e.message, 'bad'); }
 };
 // The session is gone (closed, lost): Studio shows the form; «Назад» does not lead to it.
 function closeWorkspace() {
@@ -3018,12 +3024,12 @@ async function acceptBlock(key, btn) {
   btn.disabled = true;
   try {
     const r = await api('POST', `/api/projects/${PID}/blocks/${key}/accept`, {name: $('#blk-' + key).value, replace: $('#blkr-' + key).checked});
-    alert(`Модуль «${r.module.name}» создан${r.replaced ? `, заменено вхождений: ${r.replaced}` : ''}`);
-  } catch (e) { alert(e.message); }
+    toast(`Модуль «${r.module.name}» создан${r.replaced ? `, заменено вхождений: ${r.replaced}` : ''}`);
+  } catch (e) { toast(e.message, 'bad'); }
   loadBlocks();
 }
 async function dismissBlock(key) {
-  try { await api('POST', `/api/projects/${PID}/blocks/${key}/dismiss`); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/projects/${PID}/blocks/${key}/dismiss`); } catch (e) { toast(e.message, 'bad'); }
   loadBlocks();
 }
 document.addEventListener('click', e => $$('details.menu[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
@@ -3035,11 +3041,11 @@ async function editTags(id) {
   loadTests();
 }
 async function setStatus(id, status) {
-  try { await api('PATCH', `/api/tests/${id}/meta`, {status}); } catch (e) { alert(e.message); }
+  try { await api('PATCH', `/api/tests/${id}/meta`, {status}); } catch (e) { toast(e.message, 'bad'); }
   loadTests();
 }
 async function setRole(id, role) {
-  try { await api('PATCH', `/api/tests/${id}/meta`, {role}); } catch (e) { alert(e.message); }
+  try { await api('PATCH', `/api/tests/${id}/meta`, {role}); } catch (e) { toast(e.message, 'bad'); }
   loadTests();
 }
 async function toggleQuarantine(id, on) {
@@ -3052,8 +3058,8 @@ async function publishTest(id, btn) {
   btn.disabled = true; btn.textContent = 'Публикация…';
   try {
     const r = await api('POST', `/api/tests/${id}/publish`);
-    alert((r.status === 'ok' ? 'Опубликовано: ' : 'Не удалось: ') + (r.key || '') + '\n' + (r.summary || ''));
-  } catch (e) { alert(e.message); }
+    toast((r.status === 'ok' ? 'Опубликовано: ' : 'Не удалось: ') + (r.key || '') + '\n' + (r.summary || ''), r.status === 'ok' ? 'ok' : 'bad');
+  } catch (e) { toast(e.message, 'bad'); }
   loadTests();
 }
 function accountName(id) { return ((PROJ.accounts || []).find(a => a.id === id) || {}).name || 'удалена — по умолчанию'; }
@@ -3101,7 +3107,7 @@ async function delTest(id) {
 }
 async function verifyTest(id, btn) {
   if (btn) btn.disabled = true;
-  try { await api('POST', `/api/tests/${id}/verify`); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/tests/${id}/verify`); } catch (e) { toast(e.message, 'bad'); }
   loadTests();
   const tick = async () => {
     const t = await api('GET', `/api/tests/${id}`).catch(() => null);
@@ -3113,7 +3119,7 @@ async function strengthen(id) {
   try {
     const r = await startSession(() => api('POST', `/api/tests/${id}/strengthen`));
     if (r) openSession(r.id);
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 // run of one test
@@ -3123,7 +3129,7 @@ async function runTest(id, browser) {
       device: runScreen() || null});
     openRun(rid);
     setTimeout(loadTests, 500);
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
 // the screen chosen for this run: "" = the project's (run.devices; desktop 1920x1080), "1366x768", a device
 function runScreen() { return $('#runScreen').value === 'custom' ? ($('#runScreen').dataset.custom || '') : $('#runScreen').value; }
@@ -3137,18 +3143,18 @@ const RETRYABLE = ['failed', 'error', 'flaky'];
 async function retryRun(rid, btn) {
   if (btn) btn.disabled = true;
   try { const {id} = await api('POST', `/api/runs/${rid}/retry`); openRun(id); setTimeout(loadTests, 500); }
-  catch (e) { alert(e.message); if (btn) btn.disabled = false; }
+  catch (e) { notice(btn, e.message); if (btn) btn.disabled = false; }
 }
 async function retrySuite(sid, btn) {
   btn.disabled = true;
   try { const {id} = await api('POST', `/api/suites/${sid}/retry`); openSuite(id); loadSuites(); }
-  catch (e) { alert(e.message); btn.disabled = false; }
+  catch (e) { notice(btn, e.message); btn.disabled = false; }
 }
 async function openRun(rid, quiet) {     // quiet: a refresh of the open run, not opening it
   clearTimeout(runTimer);
   if (!quiet) { setRoute(projPath('runs', rid)); if (curTab() !== 'tests') showTab('tests'); }
   let r;
-  try { r = await api('GET', `/api/runs/${rid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
+  try { r = await api('GET', `/api/runs/${rid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   const t = await api('GET', `/api/tests/${r.test_id}`).catch(() => null);
   renderRun(r, t);
   if (r.status === 'running') runTimer = setTimeout(() => openRun(rid, true), 900);
@@ -3249,7 +3255,7 @@ async function fixWithAgent(rid, stepId, btn) {
   try {
     const r = await startSession(() => api('POST', `/api/runs/${rid}/fix`, {step_id: stepId, headless: true}));
     if (r) openSession(r.id);
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
   btn.disabled = false;
 }
 function renderRun(r, t) {
@@ -3299,7 +3305,7 @@ function renderRun(r, t) {
 async function defectDraft(rid) {
   clearTimeout(runTimer);
   let d;
-  try { d = await api('GET', `/api/runs/${rid}/defect`); } catch (e) { alert(e.message); return; }
+  try { d = await api('GET', `/api/runs/${rid}/defect`); } catch (e) { toast(e.message, 'bad'); return; }
   $('#defectBox').innerHTML = `<div class="card" style="background:var(--bg)"><b>Дефект</b>
     <label>Заголовок</label><input id="dfTitle" value="${esc(d.title)}">
     <label>Описание</label><textarea id="dfText" rows="12" class="code">${esc(d.text)}</textarea>
@@ -3315,10 +3321,11 @@ async function defectDraft(rid) {
   };
 }
 async function acceptBaseline(rid, stepId, btn) {
-  if (!confirm('Сделать этот снимок эталоном для визуальной проверки?')) return;
+  if (!await ask({title: 'Сделать снимок эталоном?', text: 'Следующие прогоны визуальной проверки будут сравниваться с этим снимком.',
+                  actions: [{label: 'Сделать эталоном', value: true, kind: 'primary'}]})) return;
   btn.disabled = true;
   try { await api('POST', `/api/runs/${rid}/baseline/${stepId}`); btn.textContent = 'Эталон обновлён'; }
-  catch (e) { alert(e.message); btn.disabled = false; }
+  catch (e) { notice(btn, e.message); btn.disabled = false; }
 }
 
 // test details: history, heal review, mutation testing, traffic
@@ -3326,7 +3333,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   OPEN_TEST = id;
   if (!quiet) { setRoute(projPath('tests', id)); if (curTab() !== 'tests') showTab('tests'); }
   let t;
-  try { t = await api('GET', `/api/tests/${id}`); } catch (e) { if (ROUTING && !quiet) throw e; if (!quiet) alert(e.message); return; }
+  try { t = await api('GET', `/api/tests/${id}`); } catch (e) { if (ROUTING && !quiet) throw e; if (!quiet) toast(e.message, 'bad'); return; }
   const [history, traffic] = await Promise.all([api('GET', `/api/tests/${id}/runs`),
     TESTS.find(x => x.id === id)?.has_traffic ? api('GET', `/api/tests/${id}/traffic`) : []]);
   const box = $('#testBox'); box.classList.remove('hidden');
@@ -3442,7 +3449,7 @@ async function editSteps(tid) {
     const full = await api('GET', `/api/tests/${tid}`);
     STEP_EDIT = {tid, steps: full.steps.map(s => ({...s, locator_text: locLines(s)}))};
     renderStepEditor();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
 function renderStepEditor() {
   const opts = v => Object.entries(STEP_ACTIONS).map(([k, l]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
@@ -3498,7 +3505,7 @@ async function editInStudio(tid, btn, watch = false) {
   try {
     const r = await startSession(() => api('POST', `/api/tests/${tid}/edit`, {headless: true, watch}));
     if (r) openSession(r.id);
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
   btn.disabled = false;
 }
 // What the test is linked to: its tasks, the scenarios it checks, the pipeline runs that made it.
@@ -3529,15 +3536,16 @@ async function showDiff(tid, n) {
     : '<div class="hint" style="margin-left:12px">Совпадает с текущей.</div>';
 }
 async function restoreVersion(tid, n) {
-  if (!confirm(`Вернуть тест к версии ${n}? Текущее состояние сохранится как новая версия.`)) return;
-  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); openTest(tid, true); loadTests(); } catch (e) { alert(e.message); }
+  if (!await ask({title: `Вернуть тест к версии ${n}?`, text: 'Текущее состояние сохранится как новая версия.',
+                  actions: [{label: 'Вернуть версию', value: true, kind: 'primary'}]})) return;
+  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); openTest(tid, true); loadTests(); } catch (e) { toast(e.message, 'bad'); }
 }
 async function addComment(tid) {
   const text = $('#cmText').value.trim(); if (!text) return;
-  try { await api('POST', `/api/tests/${tid}/comments`, {step_id: $('#cmStep').value, text}); openTest(tid, true); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/tests/${tid}/comments`, {step_id: $('#cmStep').value, text}); openTest(tid, true); } catch (e) { toast(e.message, 'bad'); }
 }
 async function delComment(tid, cid) {
-  try { await api('DELETE', `/api/tests/${tid}/comments/${cid}`); openTest(tid, true); } catch (e) { alert(e.message); }
+  try { await api('DELETE', `/api/tests/${tid}/comments/${cid}`); openTest(tid, true); } catch (e) { toast(e.message, 'bad'); }
 }
 // before / after data preparation (api_request steps written by a person)
 function dataRowHtml(s) {
@@ -3574,16 +3582,17 @@ async function saveData(tid, btn) {
 }
 async function toBefore(tid, index) {
   try { await api('POST', `/api/tests/${tid}/traffic/${index}/before`); openTest(tid, true); }
-  catch (e) { alert(e.message); }
+  catch (e) { toast(e.message, 'bad'); }
 }
 async function healDecision(tid, pid, decision) {
-  try { await api('POST', `/api/tests/${tid}/proposals/${pid}/${decision}`); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/tests/${tid}/proposals/${pid}/${decision}`); } catch (e) { toast(e.message, 'bad'); }
   loadTests(); openTest(tid, true);
 }
 async function mockRequest(tid, index) {
-  if (!confirm('Добавить в начало теста подмену этого запроса записанным ответом?')) return;
-  try { await api('POST', `/api/tests/${tid}/mock`, {index}); alert('Шаг mock_route добавлен в начало теста.'); }
-  catch (e) { alert(e.message); }
+  if (!await ask({title: 'Подменить запрос?', text: 'В начало теста добавится шаг mock_route: запрос будет получать записанный ответ.',
+                  actions: [{label: 'Добавить подмену', value: true, kind: 'primary'}]})) return;
+  try { await api('POST', `/api/tests/${tid}/mock`, {index}); toast('Шаг mock_route добавлен в начало теста.'); }
+  catch (e) { toast(e.message, 'bad'); }
   loadTests();
 }
 
@@ -3595,7 +3604,7 @@ $('#suiteBtn').onclick = async () => {
     const r = await api('POST', `/api/projects/${PID}/runs`, {tags: tag ? [tag] : [], headless: $('#runHeaded').checked ? false : null,
       include_drafts: $('#runDrafts').checked, device: runScreen()});
     openSuite(r.id);
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
   finally { $('#suiteBtn').disabled = false; }
 };
 async function loadSuites() {
@@ -3611,7 +3620,7 @@ async function openSuite(sid, quiet) {
   clearTimeout(suiteTimer);
   if (!quiet) { setRoute(projPath('suites', sid)); if (curTab() !== 'tests') showTab('tests'); }
   let s;
-  try { s = await api('GET', `/api/suites/${sid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
+  try { s = await api('GET', `/api/suites/${sid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   const box = $('#suiteBox'); box.classList.remove('hidden');
   const c = s.summary || {}, total = s.items.length, pct = n => `${(n || 0) / total * 100}%`;
   const doneN = s.items.filter(i => !['queued', 'running'].includes(i.status)).length;
@@ -3718,14 +3727,14 @@ $('#taskStatus').onchange = loadTasks;
 $('#taskWho').onchange = loadTasks;
 
 async function setTaskStatus(id, status) {
-  try { await api('PATCH', `/api/tasks/${id}`, {status}); } catch (e) { alert(e.message); }
+  try { await api('PATCH', `/api/tasks/${id}`, {status}); } catch (e) { toast(e.message, 'bad'); }
   loadTasks();
 }
 async function openTask(id) {
   let t = {};
   if (id) {
     setRoute(projPath('tasks', id));
-    try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { if (ROUTING) throw e; alert(e.message); return; }
+    try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { if (ROUTING) throw e; toast(e.message, 'bad'); return; }
   }
   TASK = t;
   $('#taskHead').textContent = id ? 'Задача' : 'Новая задача';
@@ -3762,8 +3771,9 @@ $('#taskSave').onclick = async () => {
   finally { $('#taskSave').disabled = false; }
 };
 async function delTask(id) {
-  if (!confirm('Удалить задачу? Тесты задачи останутся в проекте.')) return;
-  await api('DELETE', `/api/tasks/${id}`);
+  if (!await ask({title: 'Удалить задачу?', subject: TASKS.find(t => t.id === id)?.title || '', text: 'Тесты задачи останутся в проекте.',
+                  actions: [{label: 'Удалить задачу', value: true, kind: 'danger'}]})) return;
+  try { await api('DELETE', `/api/tasks/${id}`); } catch (e) { toast(e.message, 'bad'); return; }
   if (TASK?.id === id) closeTask();
   loadTasks();
 }
@@ -3778,7 +3788,7 @@ function setStudioTask(t) {
 }
 async function taskToStudio(id) {
   let t;
-  try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { alert(e.message); return; }
+  try { t = await api('GET', `/api/tasks/${id}`); } catch (e) { toast(e.message, 'bad'); return; }
   $('#fName').value = t.title;
   $('#fScenario').value = t.description || t.title;
   if (SID) leaveSession(true);      // the open session stays in «Открытые сессии»
@@ -4093,14 +4103,14 @@ async function recheckLifecycle(btn) {
     const r = await api('POST', `/api/analyses/${AN.id}/review/lifecycle`);
     FIX_MSG = r.model || '';
     openAnalysis(r.analysis);
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Повторить сверку'; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Повторить сверку'; }
 }
 async function confirmLifecycle(btn) {
   btn.disabled = true; btn.textContent = 'Подтверждение…';
   try {
     await api('POST', `/api/projects/${PID}/knowledge/confirm`, {units: AN.readiness.units});
     await reloadAnalysis();
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Подтвердить жизненный цикл'; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Подтвердить жизненный цикл'; }
 }
 // ---- what to design in this generation: layers, kinds of checks, techniques (defaults: Проект → Сценарии)
 function renderDesignChoices() {
@@ -4285,7 +4295,7 @@ async function settleFindings(ids, status, answer, note) {
     const r = await api('PUT', `/api/analyses/${AN.id}/review/findings`, {ids, status, answer, note});
     FIX_MSG = r.model || '';
     openAnalysis(r.analysis);
-  } catch (e) { FIX_MSG = ''; alert(e.message); }
+  } catch (e) { FIX_MSG = ''; toast(e.message, 'bad'); }
 }
 // The unsettled findings of the list as shown, one text for an analyst: numbers and [codes] to answer by.
 function findingsText() {
@@ -4302,7 +4312,7 @@ function findingsText() {
 }
 async function copyFindings(btn) {
   const text = findingsText(), n = (text.match(/^\d+\. \[/gm) || []).length, was = btn.textContent;
-  if (!n) return alert('В показанном списке нет неразобранных замечаний.');
+  if (!n) return notice(btn, 'В показанном списке нет неразобранных замечаний.', 'warn');
   await copyText(text);
   btn.textContent = `Скопировано: ${n}`;
   setTimeout(() => btn.textContent = was, 2500);
@@ -4313,7 +4323,7 @@ async function groupFindings(btn) {
     const r = await api('POST', `/api/analyses/${AN.id}/review/group`);
     FIX_MSG = r.groups ? `Замечания сведены в темы: ${r.analysis.review.themes.length} вместо ${r.analysis.review.items.length}.` : 'Похожих замечаний не нашлось.';
     openAnalysis(r.analysis);
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Свести в темы'; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Свести в темы'; }
 }
 async function pasteAnswers(btn) {
   const text = $('#ansText').value.trim();
@@ -4324,7 +4334,7 @@ async function pasteAnswers(btn) {
     FIX_MSG = [`Ответы разнесены: к исправлению ${r.answered}, не актуально ${r.dismissed}.`,
       r.answered ? 'Проверьте ответы и нажмите «Исправить ТЗ агентом».' : '', r.model].filter(Boolean).join(' ');
     openAnalysis(r.analysis);
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Разнести по замечаниям'; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Разнести по замечаниям'; }
 }
 async function fixFindings(btn) {
   btn.disabled = true; btn.textContent = 'Агент исправляет ТЗ…';
@@ -4334,7 +4344,7 @@ async function fixFindings(btn) {
     FIX_MSG = [`Исправлено в ТЗ: ${r.fixed.length}.`, failed ? `Не удалось: ${failed} — уточните ответ и исправьте снова.` : '',
       r.summary, r.model].filter(Boolean).join(' ');
     openAnalysis(r.analysis);
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Исправить ТЗ агентом'; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = 'Исправить ТЗ агентом'; }
 }
 async function showAnalysis(aid, tab = '') {      // an analysis in work in the Requirements tab (a run's, the pipeline's choice)
   setRoute(projPath('req', aid)); AN_WANT = aid;
@@ -4352,7 +4362,7 @@ async function learnFromAnalysis(btn) {
     const k = await api('POST', `/api/projects/${PID}/knowledge/extract`, {analysis_id: AN.id});
     FIX_MSG = `Модель приложения: сущностей ${k.entities.length}, ролей ${k.roles.length}.`;
     await reloadAnalysis();
-  } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = was; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; btn.textContent = was; }
 }
 
 function reuseRequirements() {
@@ -4361,9 +4371,10 @@ function reuseRequirements() {
   $('#reqText').scrollIntoView({behavior: 'smooth'}); $('#reqText').focus();
 }
 async function deleteAnalysis() {
-  if (!confirm('Удалить анализ из истории? Тесты, созданные по его сценариям, останутся.')) return;
+  if (!await ask({title: 'Удалить анализ из истории?', text: 'Тесты, созданные по его сценариям, останутся.',
+                  actions: [{label: 'Удалить анализ', value: true, kind: 'danger'}]})) return;
   try { await api('DELETE', `/api/analyses/${AN.id}`); AN = null; SCEN = []; loadAnalyses(); }
-  catch (e) { alert(e.message); }
+  catch (e) { toast(e.message, 'bad'); }
 }
 
 // ---- scenarios of the open analysis
@@ -4443,11 +4454,12 @@ $('#anActive').addEventListener('click', async e => {
   if (btn) {
     const id = btn.dataset.id, sc = scenById(id);
     if (btn.dataset.act === 'close') { SCEN_OPEN.delete(id); updateScenRow(id); }
-    if (btn.dataset.act === 'del' && sc && confirm(`Удалить сценарий «${sc.title}»? Тесты по нему останутся.`)) {
+    if (btn.dataset.act === 'del' && sc && await ask({title: 'Удалить сценарий?', subject: sc.title, text: 'Тесты по нему останутся.',
+                                                     actions: [{label: 'Удалить сценарий', value: true, kind: 'danger'}]})) {
       try {
         await api('DELETE', `/api/analyses/${AN.id}/scenarios/${id}`);
         SCEN = SCEN.filter(x => x.id !== id); SCEN_OPEN.delete(id); renderScenarios();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toast(err.message, 'bad'); }
     }
     return;
   }
@@ -4472,7 +4484,7 @@ $('#anActive').addEventListener('change', async e => {
       if (fresh) Object.assign(old, {tests: fresh.tests, match: fresh.match});
     }
     updateScenRow(old.id);
-  } catch (err) { alert(err.message); }
+  } catch (err) { toast(err.message, 'bad'); }
 });
 $('#anActive').addEventListener('input', e => {
   const el = e.target, sc = el.dataset.id && scenById(el.dataset.id);
@@ -4581,15 +4593,17 @@ function setStudioScen(v) {
   $('#fScen').innerHTML = v ? `Тест будет показан под сценарием «${esc(v.title)}» в истории анализа <button class="linkbtn" onclick="setStudioScen(null)">отвязать</button>` : '';
 }
 // A scenario of the pipeline's common list (with its analysis_id) -> a test written in the Studio.
-function toStudio(sc, url = '') {
+async function toStudio(sc, url = '', btn = null) {     // btn: the clicked button, the reason it does nothing goes under it
   if (!sc) return;
   const m = sc.match;
-  if (m && !m.decision) return alert(`Сценарий похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${m.title}». Сначала решите в строке сценария (вкладка «Требования», под его требованиями): создать новый тест, переиспользовать или доработать прежний.`);
-  if (m?.decision === 'reuse' && m.kind === 'test') return alert(`Используется прежний тест «${m.title}» — новый не создаётся.`);
-  if (m?.decision === 'reuse' && m.automated !== false) return alert(`Сценарий уже есть и автоматизирован: «${m.title}» — новый тест не создаётся.`);
+  if (m && !m.decision) return notice(btn, `Сценарий похож на ${m.kind === 'test' ? 'тест' : 'сценарий'} «${m.title}». Сначала решите в строке сценария (вкладка «Требования», под его требованиями): создать новый тест, переиспользовать или доработать прежний.`, 'warn');
+  if (m?.decision === 'reuse' && m.kind === 'test') return notice(btn, `Используется прежний тест «${m.title}» — новый не создаётся.`, 'warn');
+  if (m?.decision === 'reuse' && m.automated !== false) return notice(btn, `Сценарий уже есть и автоматизирован: «${m.title}» — новый тест не создаётся.`, 'warn');
   // "Не дублировать" a scenario without a test: it is automated once, the test shows under both scenarios
   if (m?.decision === 'refine' && m.kind === 'test') {
-    if (!confirm(`Открыть тест «${m.title}» в Studio для доработки под этот сценарий? Тест воспроизведётся, дальше — вы и агент.`)) return;
+    if (!await ask({title: 'Доработать прежний тест?', subject: m.title,
+                    text: 'Тест откроется в Studio и воспроизведётся, дальше его дорабатываете вы и агент под этот сценарий.',
+                    actions: [{label: 'Открыть в Studio', value: true, kind: 'primary'}]})) return;
     showTab('studio');
     return editInStudio(m.id, {disabled: false});
   }
@@ -4771,7 +4785,7 @@ $('#pipeScenShow').onchange = renderPipeScen;
 $('#pipeScenAll').onchange = e => { pipeScenShown().forEach(s => e.target.checked ? PIPE_SEL.add(scenKey(s)) : PIPE_SEL.delete(scenKey(s))); renderPipeScen(); };
 $('#pipeScenBody').addEventListener('click', e => {
   const btn = e.target.closest('[data-studio]');
-  if (btn) toStudio(PIPE_SCEN.find(s => scenKey(s) === btn.dataset.studio), $('#pipeUrl').value.trim());
+  if (btn) toStudio(PIPE_SCEN.find(s => scenKey(s) === btn.dataset.studio), $('#pipeUrl').value.trim(), btn);
 });
 $('#pipeScenBody').addEventListener('change', e => {
   const el = e.target;
@@ -4821,7 +4835,7 @@ async function startPicked() {
 async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
   clearTimeout(jobTimer);
   if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); }
-  try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; alert(e.message); return; }
+  try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   renderJob();
   if (JOB.status === 'awaiting_model') loadJobModel(jid);
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
@@ -4992,13 +5006,17 @@ const failedItems = j => j.items.filter(it => !it.test_id && ['error', 'needs_at
 const unautomatedItems = j => j.items.map((it, i) => [it, i]).filter(([it]) => it.status === 'done' && !it.test_id && it.match?.kind === 'scenario' && it.match.decision === 'reuse').map(([, i]) => i);
 async function automateDuplicates() {
   const indices = unautomatedItems(JOB);
-  if (!confirm(`Автоматизировать ${indices.length} сценариев «Не дублировать» без теста? Если прежний сценарий уже автоматизирован, используется его тест, иначе агент сгенерирует тест (расход модели).`)) return;
-  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices}); openJob(JOB.id); } catch (e) { alert(e.message); }
+  if (!await ask({title: `Автоматизировать сценарии «Не дублировать»: ${indices.length}?`,
+                  text: 'Если прежний сценарий уже автоматизирован, используется его тест, иначе агент сгенерирует тест (расход модели).',
+                  actions: [{label: 'Автоматизировать', value: true, kind: 'primary'}]})) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {indices}); openJob(JOB.id); } catch (e) { toast(e.message, 'bad'); }
 }
 async function retryJob() {
   const n = failedItems(JOB).length;
-  if (!confirm(`Перезапустить генерацию ${n} сценариев с ошибкой? Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.`)) return;
-  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {}); openJob(JOB.id); } catch (e) { alert(e.message); }
+  if (!await ask({title: `Перезапустить сценарии с ошибкой: ${n}?`,
+                  text: 'Каждый начнётся с новой сессии агента (расход модели), их прерванные сессии будут закрыты.',
+                  actions: [{label: 'Перезапустить', value: true, kind: 'primary'}]})) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/retry`, {}); openJob(JOB.id); } catch (e) { toast(e.message, 'bad'); }
 }
 const LIFECYCLE_WHY = 'Проверка по жизненному циклу будет пропущена для этого сценария — сделайте так, если она ошиблась (например, приняла тестовые данные за нарушение правил) или сценарий так и задуман.';
 const LIFECYCLE_ANYWAY = 'Сгенерировать тест всё равно? ' + LIFECYCLE_WHY;
@@ -5010,7 +5028,7 @@ async function runAnyway(i) {    // the lifecycle check stopped the item: a pers
 }
 async function applyReuse() {
   const decisions = Object.fromEntries($$('#jobBox select[data-reuse]').map(el => [el.dataset.reuse, el.value]).filter(([, v]) => v));
-  try { await api('POST', `/api/jobs/${JOB.id}/reuse`, {decisions}); JOB_REUSE = {}; setTimeout(() => openJob(JOB.id), 400); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/jobs/${JOB.id}/reuse`, {decisions}); JOB_REUSE = {}; setTimeout(() => openJob(JOB.id), 400); } catch (e) { toast(e.message, 'bad'); }
 }
 // The parts of the model the run waits for, with what is confirmed: statuses and transitions, roles.
 let JOB_MODEL = {id: null, at: 0, data: null, msg: ''};
@@ -5065,21 +5083,24 @@ function knGoBack() {
 }
 async function selectScenarios() {
   const indices = [...JOB_PICK.sel];
-  if (!indices.length) return alert('Выберите хотя бы один сценарий');
-  await api('POST', `/api/jobs/${JOB.id}/select`, {indices});
+  if (!indices.length) return toast('Выберите хотя бы один сценарий', 'warn');
+  try { await api('POST', `/api/jobs/${JOB.id}/select`, {indices}); } catch (e) { toast(e.message, 'bad'); return; }
   openJob(JOB.id);
 }
 async function resumeJob() {
-  try { await api('POST', `/api/jobs/${JOB.id}/resume`); openJob(JOB.id); } catch (e) { alert(e.message); }
+  try { await api('POST', `/api/jobs/${JOB.id}/resume`); openJob(JOB.id); } catch (e) { toast(e.message, 'bad'); }
 }
 async function cancelJob() {
-  if (!confirm('Остановить конвейер? Текущий этап прерывается; спроектированные сценарии остаются в истории анализа требований, запуск можно продолжить.')) return;
-  try { await api('POST', `/api/jobs/${JOB.id}/cancel`); } catch (e) { alert(e.message); }
+  if (!await ask({title: 'Остановить конвейер?',
+                  text: 'Текущий этап прерывается; спроектированные сценарии остаются в истории анализа требований, запуск можно продолжить.',
+                  actions: [{label: 'Остановить конвейер', value: true, kind: 'danger'}], cancel: 'Не останавливать'})) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/cancel`); } catch (e) { toast(e.message, 'bad'); }
   openJob(JOB.id);
 }
 async function cancelJobItem(i) {
-  if (!confirm(`Отменить «${JOB.items[i].title}» в этом запуске? Сценарий остаётся в истории анализа требований.`)) return;
-  try { await api('POST', `/api/jobs/${JOB.id}/items/${i}/cancel`); } catch (e) { alert(e.message); }
+  if (!await ask({title: 'Отменить сценарий в этом запуске?', subject: JOB.items[i].title, text: 'Сценарий остаётся в истории анализа требований.',
+                  actions: [{label: 'Отменить сценарий', value: true, kind: 'danger'}], cancel: 'Не отменять'})) return;
+  try { await api('POST', `/api/jobs/${JOB.id}/items/${i}/cancel`); } catch (e) { toast(e.message, 'bad'); }
   openJob(JOB.id);
 }
 
@@ -5220,7 +5241,7 @@ async function wzAdd(preset, btn) {
     await addConn(preset);
     const cards = document.querySelectorAll(`[data-slot="${preset}"] [data-conn-id]`);
     cards[cards.length - 1]?.querySelector('[data-f]')?.focus();
-  } catch (e) { alert(e.message); btn.disabled = false; }
+  } catch (e) { notice(btn, e.message); btn.disabled = false; }
 }
 
 function fillWizardProcess() {
@@ -5393,9 +5414,10 @@ function apiEpEdit(key) {
 }
 async function apiEpDelete(key) {
   const e = API_EPS.find(x => `${x.method} ${x.path}` === key);
-  if (!confirm(`Удалить ${key} из каталога?` + (e?.source !== 'manual' ? ' Найденный в трафике эндпоинт не вернётся при новой записи.' : ''))) return;
+  if (!await sure('Удалить эндпоинт из каталога?', 'Удалить эндпоинт',
+                  e?.source !== 'manual' ? 'Найденный в трафике эндпоинт не вернётся при новой записи.' : '', key)) return;
   try { API_EPS = await api('DELETE', `/api/projects/${PID}/api/endpoints?key=${encodeURIComponent(key)}`); renderApiEndpoints(); }
-  catch (err) { alert(err.message); }
+  catch (err) { toast(err.message, 'bad'); }
 }
 $('#apiFilter').oninput = $('#apiFilterMethod').onchange = $('#apiFilterStatus').onchange = renderApiEndpoints;
 function apiBody() {
@@ -5408,7 +5430,7 @@ $('#apiSave').onclick = async () => {
   catch (e) { $('#apiMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 };
 $('#apiTokenClear').onclick = async () => {
-  if (!confirm('Удалить сохранённый токен API?')) return;
+  if (!await sure('Удалить сохранённый токен API?', 'Удалить токен', 'API-тесты, которым нужен токен, не смогут войти, пока его не зададут снова.')) return;
   try { PROJ = await api('PUT', `/api/projects/${PID}/api`, {clear_token: true}); await loadApi(); $('#apiMsg').textContent = 'Токен удалён'; }
   catch (e) { $('#apiMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 };
@@ -5617,7 +5639,7 @@ async function saveAccount(extra = {}) {
 }
 async function deleteAccount(id) {
   const a = (PROJ.accounts || []).find(x => x.id === id);
-  if (!a || !confirm(`Удалить учётную запись «${a.name}»? Её тесты будут входить под учётной записью по умолчанию.`)) return;
+  if (!a || !await sure('Удалить учётную запись?', 'Удалить учётную запись', 'Её тесты будут входить под учётной записью по умолчанию.', a.name)) return;
   try {
     await api('DELETE', `/api/projects/${PID}/accounts/${id}`);
     if (ACC_EDIT === id) ACC_EDIT = null;
@@ -5641,7 +5663,7 @@ $('#pcSave').onclick = async () => {
   } catch (e) { $('#pcMsg').textContent = e.message; }
 };
 $('#pcTotpClear').onclick = async () => {
-  if (!confirm('Удалить секрет 2FA учётной записи?')) return;
+  if (!await sure('Удалить секрет 2FA учётной записи?', 'Удалить секрет', 'Тесты не смогут ввести одноразовый код, пока секрет не зададут снова.')) return;
   try {
     const id = ACC_EDIT;
     await saveAccount({totp_secret: ''});
@@ -5687,8 +5709,9 @@ async function loadFiles() {
     <button class="btn small danger" onclick="delFile('${encodeURIComponent(f.name)}')">Удалить</button></div>`).join('') || '<span class="muted">Файлов нет.</span>';
 }
 async function delFile(name) {
-  if (!confirm('Удалить файл? Тесты, которые его загружают, упадут.')) return;
-  await api('DELETE', `/api/projects/${PID}/files/${name}`); await refreshProject(); loadFiles();
+  if (!await sure('Удалить файл?', 'Удалить файл', 'Тесты, которые его загружают, упадут.', decodeURIComponent(name))) return;
+  try { await api('DELETE', `/api/projects/${PID}/files/${name}`); } catch (e) { toast(e.message, 'bad'); return; }
+  await refreshProject(); loadFiles();
 }
 $('#fileUp').onchange = async e => {
   for (const f of e.target.files) {
@@ -5704,7 +5727,7 @@ $('#pDelete').onclick = async () => {
   try {
     await api('DELETE', `/api/projects/${PID}`); await loadProjects();
     showTab('home'); if (!PID) openWizard(null);
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 };
 
 // model connection (the same card in the settings and in the wizard; the studio has no built-in model)
@@ -5825,8 +5848,8 @@ async function saveModel(btn) {
     : `<span class="ok">Сохранено, подключение работает</span> · моделей доступно: ${L.models.length}`;
 }
 async function clearLlmKey() {
-  if (!confirm('Удалить сохранённый API-ключ?')) return;
-  await api('DELETE', `/api/projects/${PID}/llm/key`);
+  if (!await sure('Удалить сохранённый API-ключ?', 'Удалить ключ', 'Без ключа проекта запросы к модели пойдут с ключом студии ANTHROPIC_API_KEY, если он задан.')) return;
+  try { await api('DELETE', `/api/projects/${PID}/llm/key`); } catch (e) { toast(e.message, 'bad'); return; }
   await refreshProject(); renderModel();
 }
 
@@ -5893,7 +5916,7 @@ async function addConn(preset) {
   await api('POST', `/api/projects/${PID}/connections`, {preset});
   await refreshProject(); connsChanged();
 }
-$('#connAdd').onclick = () => addConn($('#connPreset').value).catch(e => alert(e.message));
+$('#connAdd').onclick = () => addConn($('#connPreset').value).catch(e => toast(e.message, 'bad'));
 async function saveConn(cid, btn, verify) {
   const card = btn.closest('[data-conn-id]');
   const body = {name: card.querySelector('[data-name]').value, enabled: card.querySelector('[data-enabled]').checked, fields: {}};
@@ -5914,13 +5937,13 @@ async function saveConn(cid, btn, verify) {
   } catch (e) { card.querySelector('[data-msg]').textContent = e.message; }
 }
 async function clearSecret(cid, key) {
-  if (!confirm('Удалить сохранённое значение?')) return;
-  await api('DELETE', `/api/projects/${PID}/connections/${cid}/secrets/${key}`);
+  if (!await sure('Удалить сохранённое значение?', 'Удалить значение', '', key)) return;
+  try { await api('DELETE', `/api/projects/${PID}/connections/${cid}/secrets/${key}`); } catch (e) { toast(e.message, 'bad'); return; }
   await refreshProject(); connsChanged();
 }
 async function delConn(cid) {
-  if (!confirm('Удалить подключение и его токены?')) return;
-  await api('DELETE', `/api/projects/${PID}/connections/${cid}`);
+  if (!await sure('Удалить подключение и его токены?', 'Удалить подключение')) return;
+  try { await api('DELETE', `/api/projects/${PID}/connections/${cid}`); } catch (e) { toast(e.message, 'bad'); return; }
   await refreshProject(); connsChanged();
 }
 async function testConn(cid, btn) {
@@ -6245,9 +6268,10 @@ $('#skSave').onclick = async () => {
   } catch (e) { $('#skMsg').textContent = e.message; }
 };
 $('#skDelete').onclick = async () => {
-  if (!SKILL?.name || !confirm(SKILL.builtin ? 'Удалить локальную копию? Проект будет использовать встроенную версию.'
-                                             : 'Удалить скилл? Он будет убран из всех этапов.')) return;
-  await api('DELETE', `/api/projects/${PID}/skills/${SKILL.name}`);
+  if (!SKILL?.name || !await (SKILL.builtin
+      ? sure('Удалить локальную копию?', 'Удалить копию', 'Проект будет использовать встроенную версию.', SKILL.name)
+      : sure('Удалить скилл?', 'Удалить скилл', 'Он будет убран из всех этапов.', SKILL.name))) return;
+  try { await api('DELETE', `/api/projects/${PID}/skills/${SKILL.name}`); } catch (e) { $('#skMsg').textContent = e.message; return; }
   PROJ = await api('GET', `/api/projects/${PID}`);
   SKILLS = await api('GET', `/api/projects/${PID}/skills`);
   const keep = SKILLS.find(s => s.name === SKILL.name);
@@ -6963,14 +6987,16 @@ async function knResolve(action, ids) {
   const verb = {accept: 'Обновить', reject: 'Отклонить', separate: 'Добавить отдельно'}[action];
   const lifecycle = action !== 'reject' && KN.confirmation?.state === 'confirmed' &&
     KN.pending.some(p => (!ids || ids.includes(p.id)) && p.kind !== 'data');
-  if ((n > 1 || lifecycle) && !confirm(`${verb}: ${n}?` + (lifecycle ? '\n\nИзменятся сущности или роли — жизненный цикл нужно будет подтвердить заново.' : ''))) return;
+  if ((n > 1 || lifecycle) && !await ask({title: `${verb}: ${n}?`,
+      text: lifecycle ? 'Изменятся сущности или роли — жизненный цикл нужно будет подтвердить заново.' : '',
+      actions: [{label: verb, value: true, kind: action === 'reject' ? 'danger' : 'primary'}]})) return;
   try {
     await knSaveFirst();
     KN = await api('POST', `/api/projects/${PID}/knowledge/pending`, ids ? {action, ids} : {action, all: true});
     await refreshProject();      // a user moved from the stand data is a project account now
     renderKnowledge();
     $('#knMsg').textContent = `${{accept: 'Обновлено', reject: 'Отклонено', separate: 'Добавлено отдельно'}[action]}: ${n}`;
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 // the duplicate check: groups of similar records, the record to keep, merge one group or all of them
@@ -7029,21 +7055,22 @@ async function knMergeDups(gids) {
   const chosen = (gids ? KN_DUPS.filter(g => gids.includes(g.id)) : KN_DUPS);
   const groups = chosen.map(g => ({kind: g.kind, ids: g.items.map(x => x.id), keep: sel[g.id] || g.keep}));
   const lifecycle = KN.confirmation?.state === 'confirmed' && groups.some(g => g.kind !== 'data');
-  if (!confirm(`Объединить групп дублей: ${groups.length}? Записей будет удалено: ${groups.reduce((n, g) => n + g.ids.length - 1, 0)}.` +
-               (lifecycle ? '\n\nИзменятся сущности или роли — жизненный цикл нужно будет подтвердить заново.' : ''))) return;
+  if (!await sure(`Объединить групп дублей: ${groups.length}?`, 'Объединить',
+                  `Записей будет удалено: ${groups.reduce((n, g) => n + g.ids.length - 1, 0)}.` +
+                  (lifecycle ? ' Изменятся сущности или роли — жизненный цикл нужно будет подтвердить заново.' : ''))) return;
   try {
     await knSaveFirst();
     const r = await api('POST', `/api/projects/${PID}/knowledge/duplicates`, {groups});
     KN = r; KN_DUPS = null; renderKnowledge(); await knCheckDups();
     $('#knDupsMsg').textContent = `Объединено групп: ${r.merged}. ` + $('#knDupsMsg').textContent;
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
 async function knDismissDup(id) {
   try {
     KN = await api('POST', `/api/projects/${PID}/knowledge/duplicates`, {dismiss: [id]});
     KN_DUPS = KN_DUPS.filter(g => g.id !== id); KN.duplicates = KN_DUPS.length;
     renderKnowledge();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 async function knConfirmUnits(units) {      // null - the whole model
@@ -7116,11 +7143,12 @@ $('#tokCreate').onclick = async () => {
     $('#tokNew').innerHTML = `<div class="ok">Токен создан. Скопируйте его сейчас — больше он показан не будет:</div><pre>${esc(r.token)}</pre>`;
     ideSnippets(r.token);
     loadTokens();
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message, 'bad'); }
 };
 async function delToken(id) {
-  if (!confirm('Отозвать токен? Подключённые с ним IDE потеряют доступ.')) return;
-  await api('DELETE', `/api/auth/tokens/${id}`); loadTokens();
+  if (!await sure('Отозвать токен?', 'Отозвать токен', 'Подключённые с ним IDE потеряют доступ.')) return;
+  try { await api('DELETE', `/api/auth/tokens/${id}`); } catch (e) { toast(e.message, 'bad'); return; }
+  loadTokens();
 }
 
 api('GET', '/api/auth/me').then(me => me.user ? loggedIn(me) : showLogin()).catch(showLogin);
