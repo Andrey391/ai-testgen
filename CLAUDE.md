@@ -182,7 +182,8 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `/api/users`, `/api/sso`, `/api/audit`, `/api/ready`, `/metrics`), MCP-сервер на `/mcp` (смонтирован
   последним) и отдача `static/index.html`. Сообщения в интерфейсе — `toast(text, kind)` (успех, исчезает само),
   `notice(el, text)` (ошибка у кнопки или формы) и `ask({title, text, subject, actions})` (модальный вопрос, Promise),
-  не `alert`/`confirm` (`docs/usability-plan.md`, этап 7); смоук-тест интерфейса — `tests/test_ui_nav.py`. **У экранов есть адреса**
+  необратимое — `sure(title, action, text, subject)`; не `alert`/`confirm` (`docs/usability-plan.md`, этап 7; проверяет
+  `tests/test_ui_static.py`); смоук-тест интерфейса — `tests/test_ui_nav.py`. **У экранов есть адреса**
   (`#/projects`, `#/p/{pid}/{req|pipe|studio|tests|runs|suites|coverage|tasks|dash|settings|setup}[/{id}[/{sec}]]`): `route()` открывает
   экран из адреса (вход, F5, «Назад», ссылка), открытие сущности пишет свой адрес (`setRoute`, новая запись истории), обновление
   по таймеру — нет (`quiet`); чужое или удалённое — «Не найдено или нет доступа» (`showMissing`); новый экран — в `VIEW_TAB`/`openRoute`. Middleware `require_login` пускает без входа только пути из
