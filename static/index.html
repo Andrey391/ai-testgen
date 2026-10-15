@@ -2031,8 +2031,10 @@ async function loadProjects(select) {
   $('#projSel').classList.toggle('hidden', !PID);
 }
 async function switchProject(pid) {
+  const prev = PID;
   PID = pid; store.set('tg_project', pid);
   $('#projSel').value = pid;
+  if (prev && prev !== pid) leaveProject(prev, pid);
   PROJ = await api('GET', `/api/projects/${pid}`);
   SKILLS = await api('GET', `/api/projects/${pid}/skills`);
   $$('.projName').forEach(x => x.textContent = PROJ.name);
@@ -2057,12 +2059,39 @@ async function switchProject(pid) {
   if (tab === 'dash') loadDash();
   if (tab === 'tasks') { closeTask(); loadTasks(); }
   if (tab === 'pipe') loadPipe();
-  if (tab === 'proj') loadSettings();
+  if (tab === 'proj') {
+    loadSettings();
+    // the section open (API, modules, access…) shows this project's data too
+    if (prev !== pid) { $('#tab-proj').dataset.opened = pid; showSub(store.get('tg_settings_sub') || 'general'); }
+  }
   if (tab === 'studio') loadInterrupted();
   setStudioTask(null);
   studioForProject();
   INBOX = null;      // the bell of the previous project is not this one's
   pollInbox();
+}
+// Another project: what is open, polled or typed in the tabs belongs to the previous one. Each tab then loads
+// this project's data (now if it is shown, otherwise when it is opened).
+const REQ_DRAFTS = {};      // new requirements typed and not reviewed yet: each project its own
+function leaveProject(prev, pid) {
+  // Конвейер: the run open and its polling, the banner of a run going on, what was typed for the other application
+  clearTimeout(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null);
+  $('#pipeUrl').value = $('#pipeCaseIds').value = ''; $('#pipeErr').textContent = '';
+  PIPE_REVIEWS = []; PIPE_ANS = []; PIPE_SCEN = []; $('#pipeReview').innerHTML = ''; $('#pipeLeft').innerHTML = '';
+  // Тесты: the run or suite open stops refreshing
+  clearTimeout(runTimer); clearTimeout(suiteTimer);
+  // Требования: the analysis being loaded, the work followed on the live card, the draft of new requirements
+  AN_LOADING = AN_WANT = ''; ANALYSES = []; $('#anActive').innerHTML = '';
+  if (WATCH) { stopWatch(); clearInterval(LIVE_TIMER); $('#reqBtn').disabled = false; }
+  $('#reqLive').classList.toggle('hidden', !(LIVE_OWN && LIVE_PID === pid));     // a review this page runs there
+  REQ_DRAFTS[prev] = $('#reqText').value; $('#reqText').value = REQ_DRAFTS[pid] || '';
+  $('#reqStatus').textContent = $('#srcStatus').textContent = ''; $('#srcLink').value = '';
+  // Задачи: the task open in the editor
+  TASK = null; $('#taskBox').classList.add('hidden');
+  // Studio: the form of a new test - the scenario or task it came from, the URL of the other application
+  if (STUDIO_SCEN || STUDIO_TASK) $('#fName').value = $('#fScenario').value = '';
+  setStudioScen(null); showPreflight(null);
+  $('#fUrl').dataset.auto = '1';
 }
 $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
 // The project chosen on the projects page is entered; on a tab of a project - the same tab of the other one.
@@ -2097,7 +2126,8 @@ function showTab(t, own) {
   if (t === 'pipe') loadPipe();
   if (t === 'proj') {
     loadSettings();
-    if (!$('#tab-proj').dataset.opened) { $('#tab-proj').dataset.opened = '1'; showSub(store.get('tg_settings_sub') || 'general'); }
+    // the section shown first, and after another project was chosen - its data are of the previous one
+    if ($('#tab-proj').dataset.opened !== PID) { $('#tab-proj').dataset.opened = PID; showSub(store.get('tg_settings_sub') || 'general'); }
   }
 }
 
@@ -2179,7 +2209,7 @@ async function openRoute(r) {
     if (id) { store.set('tg_settings_sub', id); if (id === 'data' && r.sec) store.set('tg_kn_sec', r.sec); }
     if (r.back) KN_BACK = {pid: r.pid, path: r.back};
     renderKnBack();
-    $('#tab-proj').dataset.opened = '1';
+    $('#tab-proj').dataset.opened = PID;
     showTab('proj');
     return showSub(store.get('tg_settings_sub') || 'general', r.sec || undefined);
   }
@@ -3236,6 +3266,7 @@ async function openRun(rid, quiet) {     // quiet: a refresh of the open run, no
   let r;
   try { r = await api('GET', `/api/runs/${rid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   const t = await api('GET', `/api/tests/${r.test_id}`).catch(() => null);
+  if (r.project_id !== PID) return;      // a refresh late after another project was chosen
   renderRun(r, t);
   if (r.status === 'running') runTimer = setTimeout(() => openRun(rid, true), 900);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
@@ -3701,6 +3732,7 @@ async function openSuite(sid, quiet) {
   if (!quiet) { setRoute(projPath('suites', sid)); if (curTab() !== 'tests') showTab('tests'); }
   let s;
   try { s = await api('GET', `/api/suites/${sid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
+  if (s.project_id !== PID) return;      // a refresh late after another project was chosen
   const box = $('#suiteBox'); box.classList.remove('hidden');
   const c = s.summary || {}, total = s.items.length, pct = n => `${(n || 0) / total * 100}%`;
   const doneN = s.items.filter(i => !['queued', 'running'].includes(i.status)).length;
@@ -4606,7 +4638,7 @@ function learnAfterFix() {
 // ---- the work on an analysis (analyses.WORK) and its live card: one work at a time - what would break it waits
 // (the server answers 409). The work goes on on the server when the page goes away: the card follows it from the
 // analysis (`progress`) after another tab, F5, on another computer (watchWork); «Остановить» asks the server.
-let LIVE_AID = '', LIVE_OWN = false, LIVE_TIMER = null, WATCH = null;
+let LIVE_AID = '', LIVE_PID = '', LIVE_OWN = false, LIVE_TIMER = null, WATCH = null;
 // A short work started from this page (the answers of an analyst, themes, the lifecycle, the model): fn() returns
 // [the analysis or null, what it did]. The analysis reads as busy at once - nothing that would break it starts.
 async function runWork(work, stage, fn) {
@@ -4628,7 +4660,7 @@ async function runWork(work, stage, fn) {
 }
 function liveStart(stage, aid = '', own = true, started = Date.now()) {
   stopWatch();
-  LIVE_AID = aid; LIVE_OWN = own;
+  LIVE_AID = aid; LIVE_PID = PID; LIVE_OWN = own;
   $('#reqBtn').disabled = true; $('#reqStatus').textContent = '';
   $('#reqLog').innerHTML = '';
   $('#reqLive').classList.remove('hidden'); $('#reqDot').className = 'dot run'; $('#reqDot').style.background = ''; $('#reqStop').classList.remove('hidden');
@@ -4802,12 +4834,13 @@ const scenById = id => SCEN.find(x => x.id === id);
 const SAVE_TIMERS = {};
 function saveScenario(id) {
   clearTimeout(SAVE_TIMERS[id]);
+  const sc = scenById(id), aid = AN?.id;      // the edit is saved even if another project is chosen meanwhile
+  if (!sc || !aid) return;
   SAVE_TIMERS[id] = setTimeout(async () => {
     delete SAVE_TIMERS[id];
-    const sc = scenById(id), msg = $('#sc-msg-' + id);
-    if (!sc) return;
+    const msg = $('#sc-msg-' + id);
     try {
-      await api('PUT', `/api/analyses/${AN.id}/scenarios/${id}`, Object.fromEntries(SC_FIELDS.map(k => [k, sc[k] ?? ''])));
+      await api('PUT', `/api/analyses/${aid}/scenarios/${id}`, Object.fromEntries(SC_FIELDS.map(k => [k, sc[k] ?? ''])));
       if (msg) msg.textContent = 'Сохранено';
     } catch (e) { if (msg) msg.textContent = e.message; }
   }, 500);
@@ -5009,7 +5042,8 @@ async function loadPipe() {
   if (!tms.length && PIPE_SRC === 'cases') setPipeSrc('review');
   $('#pipeCaseConn').innerHTML = tms.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   loadPipeScen(); loadPipeReviews();
-  const jobs = await api('GET', `/api/projects/${PID}/jobs`);
+  const pid = PID, jobs = await api('GET', `/api/projects/${pid}/jobs`);
+  if (pid !== PID) return;      // another project was chosen meanwhile
   $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
     <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
     <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
@@ -5033,7 +5067,11 @@ function pipeBusy(job) {
 let PIPE_REVIEWS = [], PIPE_ANS = [];
 const pipeReady = () => PIPE_REVIEWS.find(a => a.id === $('#pipeReview').value && a.step === 'scenarios');
 async function loadPipeReviews() {
-  try { PIPE_ANS = await api('GET', `/api/projects/${PID}/analyses`); } catch { PIPE_ANS = []; }
+  const pid = PID;
+  let ans;
+  try { ans = await api('GET', `/api/projects/${pid}/analyses`); } catch { ans = []; }
+  if (pid !== PID) return;
+  PIPE_ANS = ans;
   PIPE_REVIEWS = PIPE_ANS.filter(a => a.review);
   const cur = $('#pipeReview').value;
   // Only the requirements that went through their steps (settled, the lifecycle confirmed) can be chosen;
@@ -5104,7 +5142,11 @@ $('#pipeSrc').addEventListener('keydown', e => {       // a radio group: arrows 
 let PIPE_SCEN = [], PIPE_SEL = new Set(), PIPE_SCEN_PID = null;
 const scenKey = s => s.analysis_id + ':' + s.id;
 async function loadPipeScen() {
-  try { PIPE_SCEN = await api('GET', `/api/projects/${PID}/scenarios`); } catch { PIPE_SCEN = []; }
+  const pid = PID;
+  let list;
+  try { list = await api('GET', `/api/projects/${pid}/scenarios`); } catch { list = []; }
+  if (pid !== PID) return;
+  PIPE_SCEN = list;
   if (PIPE_SCEN_PID !== PID) { PIPE_SEL = new Set(); PIPE_SCEN_PID = PID; }
   const keys = new Set(PIPE_SCEN.map(scenKey));
   PIPE_SEL = new Set([...PIPE_SEL].filter(k => keys.has(k)));
@@ -5192,7 +5234,10 @@ async function startPicked() {
 async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
   clearTimeout(jobTimer);
   if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); }
-  try { JOB = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
+  let j;
+  try { j = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
+  if (j.project_id !== PID) return;      // a refresh late after another project was chosen
+  JOB = j;
   renderJob();
   if (JOB.status === 'awaiting_model') loadJobModel(jid);
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
