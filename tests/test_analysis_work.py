@@ -107,7 +107,7 @@ def test_the_progress_of_a_work_is_in_the_analysis_and_it_is_stopped_on_purpose(
     client = _client(monkeypatch)
     started = threading.Event()
 
-    async def slow(project, report, text, log=None):
+    async def slow(project, report, text, log=None, missed=None):
         log("Агент сопоставляет ответы аналитика")
         started.set()
         await asyncio.sleep(30)
@@ -198,6 +198,52 @@ def test_long_answers_of_an_analyst_are_matched_in_batches(monkeypatch, fake_llm
     assert a["status"] == "done" and "ждут исправления в ТЗ 3" in a["work_result"]
     r = client.post(f"/api/analyses/{aid}/review/answers", json={"text": "x" * (review.ANSWERS_MAX + 1)})
     assert r.status_code == 400 and "Новая версия ТЗ" in r.json()["detail"]
+
+
+def test_answers_by_numbers_go_to_their_findings_and_what_did_not_stays(monkeypatch, fake_llm):
+    p, aid = _reviewed("Номера ответов")
+    client = _client(monkeypatch)
+    reply = [review.Answer(id="№ 1", answer="Критерий: статус «новый»", not_relevant=False, note=""),
+             review.Answer(id="[lq0]", answer="", not_relevant=True, note="не про этот документ"),   # no such
+             review.Answer(id="Ж1", answer="", not_relevant=False, note="")]                        # empty
+    fake_llm.script = lambda kind, kw: Resp(parsed=review.Answers(answers=reply))
+    text = "1. Критерий: статус «новый»\nЖ1 — подумаем"
+    r = client.post(f"/api/analyses/{aid}/review/answers", json={"text": text})
+    assert r.status_code == 200, r.text
+    assert r.json()["answered"] == 1
+    a = analyses.get(aid)
+    assert a["review"]["resolutions"]["d0"]["answer"] == "Критерий: статус «новый»"
+    # what did not go to a finding: the text stays for the person, with why
+    assert a["answers_draft"]["text"] == text
+    assert [(x["id"], x["why"]) for x in a["answers_draft"]["missed"]] == [
+        ("[lq0]", "нет такого замечания"), ("Ж1", "пустой ответ")]
+    assert "не разнесено 2" in a["work_result"]
+    assert any("Не разнесены ответы модели" in x["text"] for x in a["progress"]["log"])
+    # an answer to a finding of a theme - to the theme; all went - the text is done with
+    reply[:] = [review.Answer(id="vq0", answer="", not_relevant=True, note="заказ не отменяют")]
+    r = client.post(f"/api/analyses/{aid}/review/answers", json={"text": "2. не актуально"})
+    assert r.status_code == 200 and r.json()["dismissed"] == 1
+    assert "answers_draft" not in analyses.get(aid)
+
+
+def test_answers_nothing_of_which_matched_are_an_error_and_are_kept(monkeypatch, fake_llm):
+    p, aid = _reviewed("Ничего не разнесено")
+    client = _client(monkeypatch)
+    fake_llm.script = lambda kind, kw: Resp(parsed=review.Answers(answers=[
+        review.Answer(id="q7", answer="Да", not_relevant=False, note="")]))
+    r = client.post(f"/api/analyses/{aid}/review/answers", json={"text": "7. Да"})
+    assert r.status_code == 400 and "Ни один ответ не разнесён" in r.json()["detail"]
+    assert "q7 — нет такого замечания" in r.json()["detail"]
+    a = analyses.get(aid)
+    assert not a["review"].get("resolutions") and a["answers_draft"]["text"] == "7. Да"
+    assert a["status"] == "done" and "Ни один ответ" in a["work_error"]
+    fake_llm.script = lambda kind, kw: Resp(parsed=review.Answers(answers=[]))
+    r = client.post(f"/api/analyses/{aid}/review/answers", json={"text": "Спасибо, посмотрим"})
+    assert r.status_code == 400 and "не нашла в тексте ответов" in r.json()["detail"]
+    assert analyses.get(aid)["answers_draft"]["text"] == "Спасибо, посмотрим"
+    # the person is done with them
+    assert client.delete(f"/api/analyses/{aid}/review/answers").status_code == 200
+    assert "answers_draft" not in analyses.get(aid)
 
 
 def test_the_last_finding_dismissed_teaches_the_model_in_the_background(monkeypatch, fake_llm):

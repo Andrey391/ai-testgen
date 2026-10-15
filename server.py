@@ -9,6 +9,7 @@ import base64
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import sys
@@ -3175,7 +3176,17 @@ async def answer_findings(aid: str, body: AnswersBody, request: Request):
     user = request.state.user
 
     async def job(log):
-        found = await review.distribute(p, analyses.get(aid)["review"], body.text, log=log)
+        analyses.set_answers(p["id"], aid, body.text, user)      # kept until distributed: a failure loses nothing
+        missed = []
+        found = await review.distribute(p, analyses.get(aid)["review"], body.text, log=log, missed=missed)
+        if not found:
+            analyses.set_answers(p["id"], aid, body.text, user, missed)
+            why = "; ".join(f"{x['id'] or '(без кода)'} — {x['why']}" for x in missed[:5])
+            raise ValueError("Ни один ответ не разнесён по замечаниям: "
+                             + (f"модель вернула ответы, которые не удалось сопоставить ({why})" if missed else
+                                "модель не нашла в тексте ответов на неразобранные замечания")
+                             + ". Текст ответов сохранён — проверьте номера замечаний (№ 3, № Ж1) или [коды] "
+                               "и разнесите снова")
         answered = dismissed = 0
         for x in found:
             ids = review.unsettled_ids(analyses.get(aid)["review"], x["id"])
@@ -3187,12 +3198,27 @@ async def answer_findings(aid: str, body: AnswersBody, request: Request):
             else:
                 analyses.decide(p["id"], aid, ids, review.TODO, x["answer"], user=user)
                 answered += 1
-        line = f"Ответы разнесены: ждут исправления в ТЗ {answered}, не актуально {dismissed}"
+        # all of it went to the findings - the text is done with; something did not - it stays with what
+        analyses.set_answers(p["id"], aid, body.text if missed else "", user, missed)
+        line = f"Ответы разнесены: ждут исправления в ТЗ {answered}, не актуально {dismissed}" + (
+            f"; не разнесено {len(missed)} — текст ответов сохранён" if missed else "")
         log(line)
         model = await _learn_reviewed(p, aid, user, log) if dismissed else ""
         return {"answered": answered, "dismissed": dismissed, "model": model}, " ".join(x for x in (line, model) if x)
     out = await _analysis_work(p, aid, "answers", user, job)
     return _review_result(aid, out["model"], answered=out["answered"], dismissed=out["dismissed"])
+
+
+@app.delete("/api/analyses/{aid}/review/answers")
+async def clear_answers(aid: str):
+    """The person is done with the saved answers of an analyst (answers_draft) - not while they are distributed."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    try:
+        analyses.set_answers(p["id"], aid, idle=True)
+    except analyses.Conflict as e:
+        raise HTTPException(409, str(e))
+    return {"analysis": analyses.view(analyses.get(aid))}
 
 
 FIX_KEPT = "готовые правки сохранены, «Исправить ТЗ агентом» продолжит с оставшихся замечаний"
@@ -3497,7 +3523,21 @@ async def get_job(jid: str):
     j = pipeline.get_job(jid)
     if not j:
         raise HTTPException(404, "Запуск не найден")
-    return pipeline.reconcile(jid, j, SESSIONS)
+    return _job_review(pipeline.reconcile(jid, j, SESSIONS))
+
+
+def _job_review(j: dict) -> dict:
+    """The run with its review as settled by now: the run keeps the reviewer's report as it was made, the findings
+    are settled in the Requirements tab - the same report of its analysis (same `at`) carries the decisions. With
+    themes (review.public) and how they are settled (`review_state`, review.tally)."""
+    rv = j.get("review")
+    if not rv:
+        return j
+    aid = j.get("review_id") or j.get("analysis_id")
+    a = analyses.get(aid) if aid else None
+    if a and a["project_id"] == j["project_id"] and (a.get("review") or {}).get("at") == rv.get("at"):
+        rv = a["review"]
+    return j | {"review": review.public(rv), "review_state": review.tally(rv)}
 
 
 @app.get("/api/jobs/{jid}/model")
@@ -3558,5 +3598,10 @@ app.mount("/", MCP_APP)
 
 if __name__ == "__main__":
     auth.ensure_admin()
+    # the studio's own log (testgen.*: what a work did and why - review.distribute and the like) in the console
+    _console = logging.StreamHandler()
+    _console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger("testgen").addHandler(_console)
+    logging.getLogger("testgen").setLevel(logging.INFO)
     print(f"AI Test Generator: http://{HOST}:{PORT}  (the model is set per project: Project -> Model)")
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
