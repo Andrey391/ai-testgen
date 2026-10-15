@@ -6733,10 +6733,18 @@ function renderKnConfirm() {
   $('#knConfirm').textContent = c.state === 'confirmed' ? 'Подтвердить заново' : 'Подтвердить жизненный цикл';
 }
 
-// the lifecycle of the system as a diagram, from the simplest view to the one with dependencies and settings:
+// the lifecycle of the system as a diagram, as little in a box as it takes to read it:
 // simple - the states of every entity; deps - entities in the order they are created, arrows from what must exist
-// first; full - plus the settings of dependencies («Товар (в наличии)»), who creates, rules, roles
-const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: настройки и роли'], ['states', 'Состояния сущности']];
+// first, a box says only what the entity is for (lcPurpose); full - the same with the states and transitions in the
+// boxes, the settings of dependencies on the arrows («Товар (в наличии)») and the roles; the rest of an entity (who
+// creates it, rules) - in its card
+const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: статусы и роли'], ['states', 'Состояния сущности']];
+// what an entity is for, in a few words: its description up to the list of its fields («Аккаунт пользователя: email,
+// …» -> «Аккаунт пользователя»), a long one cut at a word
+function lcPurpose(e) {
+  const head = (e.description || '').split(/[:.;(]|\s[—–-]\s/)[0].trim();
+  return head.length <= 70 ? head : head.slice(0, 70).replace(/\s+\S*$/, '') + '…';
+}
 const lcNorm = s => (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[«»"'“”]/g, '').trim();
 const lcStem = s => lcNorm(s).replace(/[аеиоуыьяйю]+$/, '');
 const lcChains = text => (text || '').split(/[;\n]+/)
@@ -6799,11 +6807,9 @@ function lcLayout(group) {       // group: only its entities; what they require 
 function lcNode(n, level) {
   if (n.outside) return `<div class="lc-node missing" data-lc="${n.id}" title="Сущность другой группы">${esc(n.name)}<div style="font-size:11px">группа «${esc(n.outside)}»</div></div>`;
   if (n.missing) return `<div class="lc-node missing" data-lc="${n.id}" title="Такой сущности нет в модели: добавьте её в разделе «Сущности»">${esc(n.name)}<div style="font-size:11px">нет в модели</div></div>`;
-  const e = n.e, f = (label, v) => v ? `<div class="lc-f"><b>${label}:</b> ${esc(v)}</div>` : '';
-  return `<div class="lc-node" data-lc="${n.id}" onclick="knOpenEntity('${e.id}')" title="Открыть сущность">
-    <b>${esc(e.name)}</b>${level === 'full' && e.description ? `<div class="muted">${esc(e.description)}</div>` : ''}
-    ${lcChainHtml(e.lifecycle)}
-    ${level === 'full' ? f('Требует', (e.depends_on || []).join(', ')) + f('Кто создаёт', e.create) + f('Правила', e.rules) : ''}</div>`;
+  const e = n.e, purpose = level === 'deps' ? lcPurpose(e) : '';
+  return `<div class="lc-node" data-lc="${n.id}" onclick="knOpenEntity('${e.id}')" title="${esc(e.description ? e.description + ' — ' : '')}открыть сущность">
+    <b>${esc(e.name)}</b>${level === 'full' ? lcChainHtml(e.lifecycle) : purpose ? `<div class="muted" style="font-size:12px">${esc(purpose)}</div>` : ''}</div>`;
 }
 function lcRender() {
   if (!KN) return;
