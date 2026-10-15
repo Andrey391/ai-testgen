@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from typing import Literal
@@ -42,6 +43,8 @@ from pydantic import BaseModel, ValidationError
 
 from . import knowledge, llm, projects, skills, validation
 from .providers.base import check_call
+
+_log = logging.getLogger("testgen.review")
 
 MAX_TURNS = 8           # lookups of the model and the report; the last turn may only report
 WAIT = 300              # seconds of silence in a streamed answer of the reviewer before it is given up (a gateway
@@ -185,6 +188,28 @@ def summary(report: dict) -> str:
                      + (f", критичных {sum(c['severity'] == 'critical' for c in bad)}" if bad else ""))
     parts += [f"{k}: не удалось — {e}" for k, e in (report.get("errors") or {}).items()]
     return "; ".join(parts)
+
+
+def tally(report: dict | None) -> dict:
+    """How the findings are settled by now (themes()): settled - both checks finished and nothing that blocks test
+    design is left (the quality of the document may be); counts of the themes fixed, not relevant, waiting for the
+    editor, open and the blocking ones left."""
+    ts = themes(report)
+    left = [t for t in ts if t["blocking"] and t["status"] in (OPEN, TODO)]
+    return {"settled": bool(report) and not report.get("errors") and not left, "themes": len(ts),
+            "fixed": sum(t["status"] == FIXED for t in ts), "dismissed": sum(t["status"] == DISMISSED for t in ts),
+            "todo": sum(t["status"] == TODO for t in ts), "open": sum(t["status"] == OPEN for t in ts),
+            "blocking_left": len(left)}
+
+
+def settled_summary(report: dict) -> str:
+    """One line for logs: how the findings were settled."""
+    t = tally(report)
+    if not t["themes"]:
+        return "замечаний нет"
+    rest = t["open"] + t["todo"]
+    return (f"замечаний {t['themes']}: исправлено в ТЗ {t['fixed']}, не актуально {t['dismissed']}"
+            + (f", не обязательных не разобрано {rest}" if rest else ""))
 
 
 CHECKS = ("validation", "lifecycle")
@@ -434,10 +459,27 @@ DISTRIBUTE_BATCH = 15       # themes per request: the answers come back whole ho
 DISTRIBUTE_PARALLEL = 3
 
 
-async def distribute(project: dict, report: dict, text: str, log=None) -> list[dict]:
+def _key(ref: str) -> str:
+    """What an answer calls its finding by, comparable: «[t3]», «№ Ж1», «5.» -> t3, ж1, 5."""
+    return re.sub(r"[\s\[\]()№#.:,;*«»\"']", "", str(ref or "")).lower().replace("zh", "ж")
+
+
+def _theme_of(report: dict) -> dict[str, str]:
+    """What an answer may call a theme by -> its id: the id, the number a person and an analyst answer by
+    (themes() `no`: 3, Ж1) and the id of any finding of it - a model answers by any of them."""
+    out = {}
+    for t in themes(report):
+        for ref in (t["id"], t["no"], *t["ids"]):
+            out.setdefault(_key(ref), t["id"])
+    return out
+
+
+async def distribute(project: dict, report: dict, text: str, log=None, missed: list | None = None) -> list[dict]:
     """The answers in `text` matched to the unsettled themes (themes()): [{id, answer, not_relevant, note}]. The
     text goes whole (up to ANSWERS_MAX characters) with a batch of themes per request (DISTRIBUTE_BATCH), the
-    requests side by side: a long text answering many findings does not cut the answers off."""
+    requests side by side: a long text answering many findings does not cut the answers off. An answer the
+    model gave to the id, the number or a finding of a theme goes to the theme; the rest - to `missed` and the
+    log (`log` and the studio's log): {id, answer, why}."""
     say = log or (lambda line: None)
     left = [t for t in themes(report) if t["status"] in (OPEN, TODO)]
     if not left:
@@ -446,8 +488,9 @@ async def distribute(project: dict, report: dict, text: str, log=None) -> list[d
     batches = [left[i:i + DISTRIBUTE_BATCH] for i in range(0, len(left), DISTRIBUTE_BATCH)]
     gate, done = asyncio.Semaphore(DISTRIBUTE_PARALLEL), [0]
     content = f"The answers of the authors:\n{text[:ANSWERS_MAX]}"
+    aid = project["id"]      # the log of the studio: which project
 
-    async def one(batch: list[dict]) -> list[Answer]:
+    async def one(n: int, batch: list[dict]) -> list[Answer]:
         lines = [f"{t['no']}. [{t['id']}] {t['title'] or by[t['ids'][0]]['problem'][:300]}"
                  + "".join(f"\n   - {by[i]['problem'][:300]}" for i in t["ids"] if t["title"] or i != t["ids"][0])
                  for t in batch]
@@ -459,18 +502,37 @@ async def distribute(project: dict, report: dict, text: str, log=None) -> list[d
                                     max_tokens=32000, project_id=project["id"], stage_name="requirements",
                                     stream=True)
         if reply.parsed is None:
-            raise RuntimeError("Модель не смогла разобрать ответы")
+            _log.warning("distribute %s: part %s of %s - no answer (stop %s): %s", aid, n, len(batches),
+                         reply.stop, (reply.text or "")[:2000])
+            raise RuntimeError(f"Модель не смогла разобрать ответы (часть {n} из {len(batches)}, "
+                               f"остановка: {reply.stop or 'нет'})")
+        answers = reply.parsed.answers
         done[0] += 1
-        if len(batches) > 1:
-            say(f"Ответы разобраны для {done[0]} из {len(batches)} частей замечаний")
-        return reply.parsed.answers
+        _log.info("distribute %s: part %s of %s - %s answers: %s", aid, n, len(batches), len(answers),
+                  [(a.id, a.not_relevant, len(a.answer)) for a in answers])
+        say(f"Часть {n} из {len(batches)} (замечания {batch[0]['no']}–{batch[-1]['no']}): модель нашла ответов "
+            f"{len(answers)}" + (f" — готово частей {done[0]} из {len(batches)}" if len(batches) > 1 else ""))
+        return answers
 
     say(f"Агент сопоставляет ответы аналитика ({len(text):,} символов) с замечаниями: {len(left)}".replace(",", " "))
-    known, out = {t["id"] for t in left}, {}
-    for answers in await asyncio.gather(*(one(b) for b in batches)):
+    known, theme_of, out, lost = {t["id"] for t in left}, _theme_of(report), {}, []
+    for answers in await asyncio.gather(*(one(n, b) for n, b in enumerate(batches, 1))):
         for a in answers:
-            if a.id in known and (a.not_relevant or a.answer.strip()):
-                out[a.id] = a.model_dump()
+            tid = theme_of.get(_key(a.id))
+            why = ("пустой ответ" if not (a.not_relevant or a.answer.strip()) else
+                   "нет такого замечания" if not tid else "замечание уже разобрано" if tid not in known else "")
+            if why:
+                lost.append({"id": a.id, "answer": (a.note if a.not_relevant else a.answer)[:300], "why": why})
+                continue
+            if tid in out:
+                _log.info("distribute %s: %s answered again as %s", aid, tid, a.id)
+            out[tid] = a.model_dump() | {"id": tid}
+    if lost:
+        _log.warning("distribute %s: not matched %s of %s answers: %s", aid, len(lost), len(lost) + len(out), lost)
+        say("Не разнесены ответы модели: " + "; ".join(f"{x['id'] or '(без кода)'} — {x['why']}" for x in lost[:20])
+            + (f" и ещё {len(lost) - 20}" if len(lost) > 20 else ""))
+    if missed is not None:
+        missed.extend(lost)
     return list(out.values())
 
 

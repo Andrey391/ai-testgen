@@ -629,8 +629,9 @@ class Job:
                                   "chars": len(a["requirements"])})
         self.review = a["review"]
         self.validation = self.review.get("validation") or a.get("validation")
-        self._log(f"Требования проверены ревьюером: {review.summary(self.review)}",
-                  "info" if self.review.get("verdict") == "ready" else "warn")
+        # ready (require_ready): what the reviewer found is settled - the run says how, not the reviewer's verdict
+        self._log(f"Требования проверены ревьюером и разобраны во вкладке «Требования»: "
+                  f"{review.settled_summary(self.review)}")
         if cfg["scenarios"]["enabled"]:
             analyses.restart(self.project_id, a["id"], force=True, work="design")
             self.analysis_id = a["id"]

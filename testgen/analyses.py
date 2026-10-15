@@ -506,6 +506,22 @@ def decide(pid: str, aid: str, ids: list[str], status: str, answer: str | None =
     return _change(pid, aid, fn)
 
 
+def set_answers(pid: str, aid: str, text: str = "", user: str = "", missed: list | None = None,
+                idle: bool = False) -> dict:
+    """The answers of an analyst pasted to distribute (`answers_draft`): kept until they are distributed - a text
+    nothing (or not everything) of which went to the findings stays for the person, with what was not matched
+    (`missed`). Empty text - the draft is gone (distributed, or the person cleared it; idle - only when nothing
+    goes on the analysis: Conflict)."""
+    def fn(a):
+        if idle:
+            check_idle(a)
+        if text.strip():
+            a["answers_draft"] = {"text": text, "by": user, "at": time.time(), "missed": missed or []}
+        else:
+            a.pop("answers_draft", None)
+    return _change(pid, aid, fn)
+
+
 def set_groups(pid: str, aid: str, groups: list[dict]) -> dict:
     """The findings of the review grouped into themes (review.group) after the review."""
     def fn(a):

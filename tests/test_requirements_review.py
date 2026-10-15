@@ -206,6 +206,13 @@ def test_the_pipeline_designs_test_cases_from_reviewed_requirements(monkeypatch,
     # Settled in the Requirements tab before: no wait, no second review.
     assert job.status == "done", job.error
     assert seen == ["Сценарий 1"] and job.analysis_id == a["id"] and job.review["verdict"] == "not_ready"
+    # The run says how the findings were settled, not the verdict the reviewer gave before that.
+    assert any("разобраны во вкладке «Требования»: замечаний 1: исправлено в ТЗ 0, не актуально 1" in x["text"]
+               and x["level"] == "info" for x in job.log)
+    shown = client.get(f"/api/jobs/{job.id}").json()
+    assert shown["review_state"]["settled"] and shown["review_state"]["dismissed"] == 1
+    assert [(t["id"], t["status"], t["note"]) for t in shown["review"]["themes"]] == [
+        ("l0", "dismissed", "правка разрешена")]
     after = analyses.get(a["id"])
     assert after["status"] == "done"
     assert [s["title"] for s in after["scenarios"]] == ["Сценарий 1", "Прежний"]      # the earlier one stays

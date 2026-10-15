@@ -4045,6 +4045,10 @@ function openAnalysis(a) {
     for (const k in DRAFTS) delete DRAFTS[k];
     THEME_EDIT.clear(); ANS_DRAFT = ''; ANS_OPEN = false; VER_DRAFT = ''; VER_OPEN = false;
   }
+  // the answers of an analyst kept by the studio until distributed (answers_draft): changed there - shown here
+  if ((AN?.id === a.id ? AN.answers_draft?.at : -1) !== a.answers_draft?.at) {
+    ANS_DRAFT = a.answers_draft?.text || ''; ANS_OPEN = !!ANS_DRAFT || (AN?.id === a.id && ANS_OPEN);
+  }
   AN = a; SCEN = a.scenarios.map(s => ({...s, sel: true})); SCEN_OPEN = new Set();
   if (!AN_TAB) AN_TAB = a.readiness?.step || 'review';     // opened: the step to work on
   renderAnalysis(); refreshSummary();
@@ -4168,7 +4172,8 @@ function lcTabHtml(r, busy) {
   else if (rv.lifecycle) html += lifecycleHtml(rv.lifecycle, true);
   if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: без ответа ${left.filter(t => t.status === 'open').length} из ${ts.length}${todo.length ? `, ждут исправления в ТЗ: ${todo.length}` : ''}</b>
       ${todo.length ? `<button class="btn primary small" onclick="fixFindings(this)" ${busy ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом (${todo.length})</button>` : ''}</div>
-      <div class="hint">Ответьте, как должно быть, и сохраните ответ — агент исправит ТЗ; или отметьте неактуальным.</div>${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
+      <div class="hint">Ответьте, как должно быть, и сохраните ответ — агент исправит ТЗ; или отметьте неактуальным. Ответы аналитика одним текстом агент разнесёт сам.</div>
+      ${settleTools(rv, 'lc', busy)}${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
     ${left.map(t => themeCard(rv, t, true)).join('')}`;
   else if (!err && !ts.length && rv.lifecycle) html += '<div class="hint">Расхождений с жизненным циклом нет.</div>';
   const settled = ts.filter(t => !themeLeft(t));
@@ -4343,6 +4348,12 @@ function themeCtl(t) {
       <button class="btn small primary" onclick="decideTheme('${t.id}', 'todo')" ${dis} title="Ответ сохранится, замечание будет ждать исправления в ТЗ — «Исправить ТЗ агентом»">Сохранить ответ</button>
       ${disBtn}</div>${notRelevant}</div>`;
 }
+// A theme read only (a run of the pipeline): how it was settled.
+function themeState(t) {
+  const [label, cls] = FINDING_STATE[t.status] || [t.status, 'off'];
+  return `<div class="row" style="margin-top:6px;gap:6px"><span class="badge ${cls}">${esc(label)}</span>
+    <span class="hint grow" style="margin:0">${t.answer ? `Ответ: ${esc(t.answer)}` : t.status === 'fixed' ? 'По предложению ревьюера' : ''}${t.note ? `Почему: ${esc(t.note)}` : ''}</span></div>`;
+}
 function editTheme(tid) { THEME_EDIT.add(tid); renderAnalysis(); $(`#fd-${tid}`)?.focus(); }
 function themeCard(rv, t, editable) {
   const by = Object.fromEntries(rv.items.map(x => [x.id, x])), ms = t.ids.map(i => by[i]).filter(Boolean);
@@ -4353,7 +4364,7 @@ function themeCard(rv, t, editable) {
       <span class="badge" title="Замечания обеих проверок об одном и том же: один ответ на все">замечаний: ${ms.length}</span>${quality}</div>`
     : `<div class="row" style="gap:6px">${themeNo(t)}<span class="grow"></span>${quality}</div>`;
   return `<div class="card${t.status === 'todo' ? ' theme-answered' : ''}" id="theme-${t.id}" data-theme="${t.id}" data-blocking="${t.blocking ? 1 : 0}" data-left="${themeLeft(t) ? 1 : 0}" style="margin-top:6px;background:var(--bg);padding:8px">
-    ${head}${ms.map(it => themeItem(it, many)).join('')}${editable ? themeCtl(t) : ''}</div>`;
+    ${head}${ms.map(it => themeItem(it, many)).join('')}${editable ? themeCtl(t) : themeState(t)}</div>`;
 }
 // The filter of the list: the counts of its choices are of what the list would show - the unsettled ones while
 // «только неразобранные» is on, all of them otherwise.
@@ -4369,12 +4380,18 @@ function applyFindFilter() {
   $('#findEmpty')?.classList.toggle('hidden', !!shown || !cards.length);
 }
 const FIND_LABEL = {blocking: 'Блокируют тест-дизайн', quality: 'Качество документа', all: 'Все'};
-// The reviewer's report as a run of the pipeline keeps it: read only (the findings are settled in «Требования»).
-function reviewHtml(rv) {
-  const [vt, vcls] = REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'];
+// How the findings are settled (review.tally): one line.
+const reviewTally = st => [`исправлено в ТЗ ${st.fixed}`, `не актуально ${st.dismissed}`,
+  st.todo + st.open ? `${st.settled ? 'не обязательных ' : ''}не разобрано ${st.todo + st.open}` : ''].filter(Boolean).join(', ');
+// The reviewer's report as a run of the pipeline keeps it: read only (the findings are settled in «Требования»);
+// st - how they are settled by now (review_state): settled - that is what the run says, the verdict was before it.
+function reviewHtml(rv, st) {
+  const [vt, vcls] = st?.settled ? ['требования разобраны', 'ok'] : REVIEW_VERDICT[rv.verdict] || [rv.verdict, 'off'];
   const errors = Object.entries(rv.errors || {}), v = rv.validation;
   const head = `<div class="row" style="margin-top:8px"><b class="grow">Отчёт ревьюера${rv.at ? ` <span class="muted" style="font-weight:400;font-size:12px">— ${fmtTime(rv.at)}</span>` : ''}</b>
+      ${st?.settled && rv.verdict !== 'ready' ? `<span class="muted" style="font-size:12px" title="Вердикт ревьюера до разбора замечаний">при проверке: ${esc((REVIEW_VERDICT[rv.verdict] || [rv.verdict])[0])}</span>` : ''}
       <span class="badge ${vcls}">${esc(vt)}</span></div>
+    ${st?.themes ? `<div class="hint">Замечаний ${st.themes}: ${esc(reviewTally(st))}.</div>` : ''}
     ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(e)}</div>`).join('')}`;
   if (!rv.themes)       // a report kept elsewhere (a run of the pipeline): as the reviewer gave it
     return head + (v ? `<details class="opt" open><summary><b>Дефекты ТЗ</b> — ${v.score}/100, замечаний ${v.findings.length}</summary>${validationHtml(v)}</details>` : '')
@@ -4387,23 +4404,11 @@ function reviewHtml(rv) {
 function findingsWork(rv, ts, busy) {
   const block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
   const blockOpen = block.filter(t => t.status === 'open'), todo = rv.themes.filter(t => t.status === 'todo');
-  const accept = rv.themes.filter(t => t.blocking && t.status === 'open' && !t.question);
-  const dis = busy ? 'disabled' : '';
   return versionBox(busy) + `<div class="box next">
       <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: без ответа ${blockOpen.length} из ${block.length}${todo.length ? `, ждут исправления в ТЗ: ${todo.length}` : ''}</b>
         <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="${todo.length ? 'Агент внесёт ответы в ТЗ; прежний текст сохранится' : 'Сначала ответьте на замечания ниже'}">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
       <div class="hint">Ответьте, как должно быть, и сохраните ответ — замечание будет ждать исправления в ТЗ; или отметьте неактуальным. Похожие замечания собраны в темы: один ответ на тему.${quality.length ? ` Качество документа (${quality.length}) — не обязательно.` : ''}</div>
-      <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
-        <button class="btn small" onclick="copyFindings(this)" title="Неразобранные замечания и вопросы показанного списка — одним текстом для аналитика или автора ТЗ, с их номерами">Скопировать для аналитика</button>
-        <button class="btn small" onclick="ANS_OPEN=!ANS_OPEN;renderAnalysis();ANS_OPEN&&$('#ansText').focus()" ${dis} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям">Вставить ответы аналитика</button>
-        <button class="btn small" onclick="openVersion()" ${dis} title="Аналитик прислал исправленное ТЗ целиком: оно будет проверено заново с учётом решений и ответов по замечаниям">Новая версия ТЗ</button>
-        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions()" ${dis} title="Исправить неразобранные блокирующие замечания по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
-        ${!rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings()" ${dis} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}</div>
-      ${ANS_OPEN ? `<div id="ansBox" style="margin-top:6px">
-        <textarea id="ansText" class="big" maxlength="${ANSWERS_MAX}" style="width:100%" oninput="ANS_DRAFT=this.value;textCount(this, 'ansCount')" placeholder="Ответы аналитика — списком, письмом, в любом порядке, любого объёма (до 200 000 символов). Номера (№ 3, № Ж1) и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным.">${esc(ANS_DRAFT)}</textarea>
-        <div class="row" style="margin-top:4px;gap:6px"><span class="muted grow" id="ansCount">${countText(ANS_DRAFT, ANSWERS_MAX)}</span>
-          <span class="hint" style="margin:0">Прислали исправленное ТЗ целиком? — <a href="#" onclick="openVersion(ANS_DRAFT);return false">проверить как новую версию</a></span>
-          <button class="btn small primary" onclick="pasteAnswers()" ${dis}>Разнести по замечаниям</button></div></div>` : ''}
+      ${settleTools(rv, 'doc', busy)}
       ${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
     <div class="row" style="gap:10px;margin-top:8px;align-items:center">
       <select id="findShow" style="width:auto" onchange="FIND_SHOW=this.value;applyFindFilter()">
@@ -4411,6 +4416,26 @@ function findingsWork(rv, ts, busy) {
       <label class="inline" title="Неразобранные: без ответа или с ответом, который ещё не внесён в ТЗ"><input type="checkbox" ${FIND_LEFT ? 'checked' : ''} onchange="FIND_LEFT=this.checked;applyFindFilter()"> только неразобранные</label></div>
     <div id="findList">${ts.map(t => themeCard(rv, t, true)).join('')}</div>
     <div class="hint hidden" id="findEmpty">В этом списке ничего не осталось — смените фильтр, чтобы увидеть остальное.</div>`;
+}
+// Settling the findings of a step at once (scope: 'doc' - step 2, 'lc' - the lifecycle, step 3): the unsettled
+// ones copied for an analyst, the analyst's answers distributed by the agent (to any unsettled finding, of both
+// steps), the reviewer's suggestions accepted.
+function settleTools(rv, scope, busy) {
+  const dis = busy ? 'disabled' : '', doc = scope === 'doc';
+  const accept = (doc ? rv.themes : rv.themes.filter(lcTheme)).filter(t => t.blocking && t.status === 'open' && !t.question);
+  return `<div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn small" onclick="copyFindings(this, '${scope}')" title="${doc ? 'Неразобранные замечания и вопросы показанного списка' : 'Неразобранные расхождения с жизненным циклом и вопросы о нём'} — одним текстом для аналитика или автора ТЗ, с их номерами">Скопировать для аналитика</button>
+        <button class="btn small" onclick="ANS_OPEN=!ANS_OPEN;renderAnalysis();ANS_OPEN&&$('#ansText').focus()" ${dis} title="Ответы аналитика одним текстом: агент разнесёт их по замечаниям${doc ? '' : ' и расхождениям'}">Вставить ответы аналитика</button>
+        ${doc ? `<button class="btn small" onclick="openVersion()" ${dis} title="Аналитик прислал исправленное ТЗ целиком: оно будет проверено заново с учётом решений и ответов по замечаниям">Новая версия ТЗ</button>` : ''}
+        ${accept.length ? `<button class="btn small" onclick="acceptSuggestions('${scope}')" ${dis} title="Исправить неразобранные блокирующие ${doc ? 'замечания' : 'расхождения'} по предложениям ревьюера (вопросам нужен ответ)">Принять предложения ревьюера (${accept.length})</button>` : ''}
+        ${doc && !rv.groups && rv.items.length >= 6 ? `<button class="btn small" onclick="groupFindings()" ${dis} title="Свести замечания обеих проверок об одном и том же в темы: один ответ на тему (новые проверки сводят сами)">Свести в темы</button>` : ''}</div>
+      ${ANS_OPEN ? `<div id="ansBox" style="margin-top:6px">
+        <textarea id="ansText" class="big" maxlength="${ANSWERS_MAX}" style="width:100%" oninput="ANS_DRAFT=this.value;textCount(this, 'ansCount')" placeholder="Ответы аналитика — списком, письмом, в любом порядке, любого объёма (до 200 000 символов). Номера (№ 3, № Ж1) и [коды] из скопированного списка помогают; «не актуально» — замечание отметится неактуальным.">${esc(ANS_DRAFT)}</textarea>
+        ${ansMissed()}
+        <div class="row" style="margin-top:4px;gap:6px"><span class="muted grow" id="ansCount">${countText(ANS_DRAFT, ANSWERS_MAX)}</span>
+          ${AN.answers_draft ? `<button class="btn small" onclick="clearAnswers()" ${dis} title="Сохранённый студией текст ответов больше не нужен">Очистить</button>` : ''}
+          ${doc ? `<span class="hint" style="margin:0">Прислали исправленное ТЗ целиком? — <a href="#" onclick="openVersion(ANS_DRAFT);return false">проверить как новую версию</a></span>` : ''}
+          <button class="btn small primary" onclick="pasteAnswers()" ${dis}>Разнести по замечаниям</button></div></div>` : ''}`;
 }
 const countText = (text, max) => `${(text || '').length.toLocaleString('ru-RU')} из ${max.toLocaleString('ru-RU')} символов`;
 function textCount(el, id) { const c = $('#' + id); if (c) c.textContent = countText(el.value, +el.maxLength); }
@@ -4423,9 +4448,9 @@ function decideTheme(tid, status) {
   const note = status === 'dismissed' ? ($(`#fdn-${tid}`)?.value ?? '') : undefined;
   settleFindings(ids, status, answer, note, t);
 }
-function acceptSuggestions() {
+function acceptSuggestions(scope = 'doc') {
   const left = new Set(AN.review.items.filter(x => x.status === 'open').map(x => x.id));
-  const ids = AN.review.themes.filter(t => t.blocking && t.status === 'open' && !t.question).flatMap(t => t.ids.filter(i => left.has(i)));
+  const ids = (scope === 'doc' ? AN.review.themes : AN.review.themes.filter(lcTheme)).filter(t => t.blocking && t.status === 'open' && !t.question).flatMap(t => t.ids.filter(i => left.has(i)));
   if (ids.length) settleFindings(ids, 'todo', '');
 }
 // A decision on a theme: the theme shows its new state at once and says so (toast).
@@ -4442,11 +4467,12 @@ async function settleFindings(ids, status, answer, note, theme) {
 }
 // The unsettled findings of the list as shown, one text for an analyst: the numbers they have in the studio and
 // [codes] to answer by.
-function findingsText() {
+function findingsText(scope = 'doc') {
   const rv = AN.review, by = Object.fromEntries(rv.items.map(x => [x.id, x]));
-  const ts = rv.themes.filter(t => themeLeft(t) && (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === t.blocking));
+  const ts = scope === 'doc' ? rv.themes.filter(t => themeLeft(t) && (FIND_SHOW === 'all' || (FIND_SHOW === 'blocking') === t.blocking))
+    : rv.themes.filter(t => lcTheme(t) && themeLeft(t));
   const line = (it, pad) => `${it.problem}${it.location ? ` (${it.location})` : ''}${it.suggestion ? `\n${pad}Предложение ревьюера: ${it.suggestion}` : ''}`;
-  return [`Замечания ревьюера к требованиям «${AN.feature || AN.title || 'Требования'}»`,
+  return [`${scope === 'doc' ? 'Замечания ревьюера' : 'Расхождения с жизненным циклом системы'} к требованиям «${AN.feature || AN.title || 'Требования'}»`,
     'Ответьте, как должно быть, на каждый пункт (можно кратко) или напишите «не актуально» и почему. Номер пункта или код в [скобках] — чтобы ответ попал к своему замечанию.', '',
     ...ts.map(t => {
       const ms = t.ids.map(i => by[i]).filter(Boolean);
@@ -4454,8 +4480,8 @@ function findingsText() {
         : `${t.no}. [${t.id}] ${line(ms[0], '   ')}`;
     })].join('\n');
 }
-async function copyFindings(btn) {
-  const text = findingsText(), n = (text.match(/^Ж?\d+\. \[/gm) || []).length, was = btn.textContent;
+async function copyFindings(btn, scope = 'doc') {
+  const text = findingsText(scope), n = (text.match(/^Ж?\d+\. \[/gm) || []).length, was = btn.textContent;
   if (!n) return notice(btn, 'В показанном списке нет неразобранных замечаний.', 'warn');
   await copyText(text);
   btn.textContent = `Скопировано: ${n}`;
@@ -4473,11 +4499,28 @@ function pasteAnswers() {
   if (!text) return $('#ansText')?.focus();
   runWork('answers', 'Агент разносит ответы аналитика по замечаниям…', async () => {
     const r = await api('POST', `/api/analyses/${AN.id}/review/answers`, {text});
-    ANS_DRAFT = ''; ANS_OPEN = false;
+    // not everything went to the findings - the text stays (the studio keeps it too) with what did not
+    const missed = r.analysis.answers_draft?.missed?.length || 0;
+    ANS_DRAFT = r.analysis.answers_draft?.text || ''; ANS_OPEN = !!ANS_DRAFT;
     FIX_MSG = [`Ответы разнесены: ждут исправления в ТЗ ${r.answered}, не актуально ${r.dismissed}.`,
+      missed ? `Не разнесено ${missed} — текст ответов сохранён, причины — над ним.` : '',
       r.answered ? 'Проверьте ответы и нажмите «Исправить ТЗ агентом».' : '', r.model].filter(Boolean).join(' ');
-    return [r.analysis, `Ответы разнесены: ждут исправления в ТЗ ${r.answered}, не актуально ${r.dismissed}`];
+    return [r.analysis, `Ответы разнесены: ждут исправления в ТЗ ${r.answered}, не актуально ${r.dismissed}${missed ? `, не разнесено ${missed}` : ''}`];
   });
+}
+// What of the saved answers did not go to the findings and why (review.distribute `missed`).
+function ansMissed() {
+  const m = AN.answers_draft?.missed || [];
+  if (!m.length || AN.answers_draft.text !== ANS_DRAFT) return '';
+  return `<div class="hint" style="margin:0 0 4px">Не разнесено (${m.length}):<ul style="margin:2px 0 0 18px;padding:0">${m.slice(0, 20).map(x =>
+    `<li><b>${esc(x.id || 'без кода')}</b> — ${esc(x.why)}${x.answer ? `: «${esc(x.answer.slice(0, 160))}»` : ''}</li>`).join('')}</ul>${m.length > 20 ? `и ещё ${m.length - 20}` : ''}</div>`;
+}
+async function clearAnswers() {
+  try {
+    const r = await api('DELETE', `/api/analyses/${AN.id}/review/answers`);
+    ANS_DRAFT = ''; ANS_OPEN = false;
+    openAnalysis(r.analysis);
+  } catch (e) { toast(e.message, 'bad'); }
 }
 // ---- a new version of the requirements: the analyst sent the corrected document - it replaces the text and is
 // reviewed again, the reviewer knowing the decisions and the answers on the earlier findings.
@@ -5291,7 +5334,11 @@ function renderJob() {
     (j.feature ? `<div style="margin-top:6px"><b>Фича:</b> ${esc(j.feature)}</div>` : '') +
     (j.assumptions?.length ? `<div class="hint"><b>Допущения:</b> ${j.assumptions.map(esc).join('; ')}</div>` : '');
   if (about) html += `<details class="opt" data-g="about" ${opened.has('about') ? 'open' : ''}><summary>Требования и допущения</summary>${about}</details>`;
-  if (j.review && j.status !== 'awaiting_review') html += `<details class="opt" data-g="review" ${opened.has('review') ? 'open' : ''}><summary>Отчёт ревьюера требований — ${esc((REVIEW_VERDICT[j.review.verdict] || [j.review.verdict])[0])}${j.review_accepted && j.review.verdict === 'not_ready' ? ` <span class="muted">(генерация продолжена: ${esc(j.review_accepted)})</span>` : ''}</summary>${reviewHtml(j.review)}</details>`;
+  // settled in the Requirements tab (review_state): how, not the verdict of the reviewer before it
+  if (j.review && j.status !== 'awaiting_review') {
+    const st = j.review_state, what = st?.settled ? `требования разобраны${st.themes ? `: ${reviewTally(st)}` : ''}` : (REVIEW_VERDICT[j.review.verdict] || [j.review.verdict])[0];
+    html += `<details class="opt" data-g="review" ${opened.has('review') ? 'open' : ''}><summary>Отчёт ревьюера требований — ${esc(what)}${!st?.settled && j.review_accepted && j.review.verdict === 'not_ready' ? ` <span class="muted">(генерация продолжена: ${esc(j.review_accepted)})</span>` : ''}</summary>${reviewHtml(j.review, st)}</details>`;
+  }
   html += `<details class="opt" data-g="log" ${opened.has('log') ? 'open' : ''}><summary>Журнал (${j.log.length})</summary><div class="log">` +
     j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString('ru-RU')} — ${esc(l.text)}</div>`).join('') + '</div></details>';
   box.innerHTML = html;
@@ -6686,10 +6733,18 @@ function renderKnConfirm() {
   $('#knConfirm').textContent = c.state === 'confirmed' ? 'Подтвердить заново' : 'Подтвердить жизненный цикл';
 }
 
-// the lifecycle of the system as a diagram, from the simplest view to the one with dependencies and settings:
+// the lifecycle of the system as a diagram, as little in a box as it takes to read it:
 // simple - the states of every entity; deps - entities in the order they are created, arrows from what must exist
-// first; full - plus the settings of dependencies («Товар (в наличии)»), who creates, rules, roles
-const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: настройки и роли'], ['states', 'Состояния сущности']];
+// first, a box says only what the entity is for (lcPurpose); full - the same with the states and transitions in the
+// boxes, the settings of dependencies on the arrows («Товар (в наличии)») and the roles; the rest of an entity (who
+// creates it, rules) - in its card
+const LC_LEVELS = [['simple', 'Простая'], ['deps', 'Зависимости'], ['full', 'Подробная: статусы и роли'], ['states', 'Состояния сущности']];
+// what an entity is for, in a few words: its description up to the list of its fields («Аккаунт пользователя: email,
+// …» -> «Аккаунт пользователя»), a long one cut at a word
+function lcPurpose(e) {
+  const head = (e.description || '').split(/[:.;(]|\s[—–-]\s/)[0].trim();
+  return head.length <= 70 ? head : head.slice(0, 70).replace(/\s+\S*$/, '') + '…';
+}
 const lcNorm = s => (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[«»"'“”]/g, '').trim();
 const lcStem = s => lcNorm(s).replace(/[аеиоуыьяйю]+$/, '');
 const lcChains = text => (text || '').split(/[;\n]+/)
@@ -6752,11 +6807,9 @@ function lcLayout(group) {       // group: only its entities; what they require 
 function lcNode(n, level) {
   if (n.outside) return `<div class="lc-node missing" data-lc="${n.id}" title="Сущность другой группы">${esc(n.name)}<div style="font-size:11px">группа «${esc(n.outside)}»</div></div>`;
   if (n.missing) return `<div class="lc-node missing" data-lc="${n.id}" title="Такой сущности нет в модели: добавьте её в разделе «Сущности»">${esc(n.name)}<div style="font-size:11px">нет в модели</div></div>`;
-  const e = n.e, f = (label, v) => v ? `<div class="lc-f"><b>${label}:</b> ${esc(v)}</div>` : '';
-  return `<div class="lc-node" data-lc="${n.id}" onclick="knOpenEntity('${e.id}')" title="Открыть сущность">
-    <b>${esc(e.name)}</b>${level === 'full' && e.description ? `<div class="muted">${esc(e.description)}</div>` : ''}
-    ${lcChainHtml(e.lifecycle)}
-    ${level === 'full' ? f('Требует', (e.depends_on || []).join(', ')) + f('Кто создаёт', e.create) + f('Правила', e.rules) : ''}</div>`;
+  const e = n.e, purpose = level === 'deps' ? lcPurpose(e) : '';
+  return `<div class="lc-node" data-lc="${n.id}" onclick="knOpenEntity('${e.id}')" title="${esc(e.description ? e.description + ' — ' : '')}открыть сущность">
+    <b>${esc(e.name)}</b>${level === 'full' ? lcChainHtml(e.lifecycle) : purpose ? `<div class="muted" style="font-size:12px">${esc(purpose)}</div>` : ''}</div>`;
 }
 function lcRender() {
   if (!KN) return;
