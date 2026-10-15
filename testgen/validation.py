@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from . import llm, projects, skills
 from .catalog import QUALITY, STANDARDS
+from .explorer import MAP_TITLE
 
 
 class SectionCheck(BaseModel):
@@ -54,8 +55,12 @@ SYSTEM = """You are a lead systems analyst who reviews specifications before tes
 
 Do not invent content of the document; quote it. Write in the language of the document."""
 
+# The Planner's map of the site (explorer.to_requirements) is not written by people.
+SITE_MAP = """
+The document is a map of the user interface recorded by an automatic crawl (Planner), not a specification written by people. It holds only what the pages declare: fields with their type, required flag, length, format, range, hints and the error texts already present in the markup. What the pages do not declare (server-side rules, error texts shown only after a submission, where the user is taken) cannot be in it and is not an omission of authors: report each such gap once for all the forms it concerns, with severity major at most, and put what must be learned into the questions (to the product team). Field names are the labels of the pages."""
 
-def _task(standard: str, checklist: str) -> str:
+
+def _task(standard: str, checklist: str, site_map: bool = False) -> str:
     title, sections = STANDARDS.get(standard) or STANDARDS["gost34"]
     text = f"Standard: {title}\nRequired sections:\n" + "".join(f"- {s}\n" for s in sections)
     text += "Other standards (key: title): " + "; ".join(f"{k}: {t}" for k, (t, _) in STANDARDS.items() if k != standard) + "\n"
@@ -63,7 +68,7 @@ def _task(standard: str, checklist: str) -> str:
     rules = [r.strip() for r in (checklist or "").splitlines() if r.strip()]
     if rules:
         text += "The team's checklist:\n" + "".join(f"- {r}\n" for r in rules)
-    return text + "\nValidate the document."
+    return text + (SITE_MAP if site_map else "") + "\nValidate the document."
 
 
 async def validate(project: dict, document: str, standard: str = "", notes: str = "") -> dict:
@@ -71,8 +76,9 @@ async def validate(project: dict, document: str, standard: str = "", notes: str 
     cfg = project["pipeline"]["requirements"]
     standard = standard if standard in STANDARDS else cfg.get("standard") or "gost34"
     system = SYSTEM + projects.language_rule(project) + skills.prompt(project["id"], cfg.get("skills", []))
+    task = _task(standard, cfg.get("checklist", ""), document.lstrip().startswith(MAP_TITLE)) + notes
     reply = await llm.parse(cfg, system=system, context=f"The document:\n{document[:150_000]}",
-                            messages=[{"role": "user", "content": _task(standard, cfg.get("checklist", "")) + notes}],
+                            messages=[{"role": "user", "content": task}],
                             schema=Validation, max_tokens=16000, project_id=project["id"], stage_name="requirements")
     if reply.stop == "max_tokens":
         raise RuntimeError("Отчёт не поместился в лимит ответа: проверьте документ по частям.")

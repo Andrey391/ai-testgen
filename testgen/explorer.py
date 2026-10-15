@@ -39,24 +39,64 @@ PAGE_JS = r"""() => {
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const visible = el => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
     return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none'; };
+  const FIELDS = 'input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea';
+  // Texts the page already holds for its fields, shown or hidden: hints and error messages.
+  const HINTS = 'small, .hint, .help, [class*=hint], [class*=help], [class*=description]';
+  const ERRORS = '[role=alert], [aria-live], .error, .errors, .invalid-feedback, [class*=error], [class*=invalid], [data-error]';
+  const text = el => { const t = clean(el.textContent).slice(0, 160); return /\p{L}{2}/u.test(t) ? t : ''; };
+  const texts = els => [...new Set([...els].filter(e => !e.querySelector(FIELDS)).map(text).filter(Boolean))].slice(0, 6);
+  const byIds = ids => (ids || '').split(/\s+/).map(i => i && document.getElementById(i)).filter(Boolean);
+  // A caption next to the field when it has no <label>: the nearest preceding short text that holds no fields.
+  const caption = el => {
+    for (let node = el, up = 0; node && up < 3 && node.tagName !== 'FORM'; node = node.parentElement, up++)
+      for (let s = node.previousElementSibling; s; s = s.previousElementSibling) {
+        if (s.matches(FIELDS) || s.querySelector(FIELDS) || s.matches('button')) break;
+        if (s.matches(HINTS) || s.matches(ERRORS)) continue;
+        const t = clean(s.innerText);
+        if (t && t.length <= 60) return t;
+      }
+    return '';
+  };
   const label = el => {
     if (el.getAttribute('aria-label')) return clean(el.getAttribute('aria-label'));
+    const by = byIds(el.getAttribute('aria-labelledby')).map(l => clean(l.innerText)).join(' ');
+    if (by) return by;
     if (el.id) { const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l) return clean(l.innerText); }
     const p = el.closest('label'); if (p) return clean(p.innerText);
-    return clean(el.getAttribute('placeholder') || el.getAttribute('name') || '');
+    return caption(el) || clean(el.getAttribute('placeholder') || el.getAttribute('name') || '');
   };
-  const field = el => ({label: label(el).slice(0, 80), name: el.getAttribute('name') || '',
-    type: el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : (el.getAttribute('type') || 'text'),
-    required: el.required || el.getAttribute('aria-required') === 'true',
-    options: el.tagName === 'SELECT' ? [...el.options].slice(0, 10).map(o => clean(o.text)) : []});
-  const FIELDS = 'input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea';
-  const forms = [...document.querySelectorAll('form')].filter(visible).slice(0, 10).map(f => ({
-    name: clean(f.getAttribute('aria-label') || f.getAttribute('name') || f.id || ''),
-    fields: [...f.querySelectorAll(FIELDS)].filter(visible).slice(0, 25).map(field),
-    submit: [...f.querySelectorAll('button, input[type=submit]')].filter(visible)
-      .map(b => clean(b.innerText || b.value)).filter(Boolean).slice(0, 3)}));
+  const field = el => {
+    const name = label(el), attr = a => el.getAttribute(a) || '';
+    const box = el.parentElement && el.parentElement.querySelectorAll(FIELDS).length === 1 ? el.parentElement : null;
+    const described = byIds(attr('aria-describedby'));
+    // Messages declared on the field itself (data-val-required, data-msg-…, data-error-…: ASP.NET, jQuery Validate…).
+    const declared = [...el.attributes].filter(a => /^data-(val-|msg|error|message|invalid)/i.test(a.name)
+      && /\p{L}{3}/u.test(a.value) && a.value.length > 5).map(a => clean(a.value).slice(0, 160));
+    const errors = [...new Set([...declared, ...texts(byIds(attr('aria-errormessage'))),
+      ...texts(described.filter(d => d.matches(ERRORS))), ...(box ? texts(box.querySelectorAll(ERRORS)) : [])])];
+    const hints = texts([...described.filter(d => !d.matches(ERRORS)), ...(box ? box.querySelectorAll(HINTS) : [])])
+      .filter(h => !errors.includes(h) && h !== name);
+    const options = el.tagName === 'SELECT' ? [...el.options].map(o => clean(o.text)).filter(o => o && !/^[-—–.\s]*$/.test(o)) : [];
+    return {label: name.replace(/\s*\*$/, '').slice(0, 80), name: attr('name'),
+      type: el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : (attr('type') || 'text'),
+      required: el.required || attr('aria-required') === 'true' || /\*$/.test(name),
+      options: options.slice(0, 30), more_options: Math.max(0, options.length - 30),
+      placeholder: attr('placeholder') !== name ? attr('placeholder').slice(0, 80) : '',
+      minlength: el.minLength > 0 ? el.minLength : null, maxlength: el.maxLength >= 0 ? el.maxLength : null,
+      pattern: attr('pattern').slice(0, 120), title: attr('title').slice(0, 160),
+      min: attr('min'), max: attr('max'), step: attr('step'), inputmode: attr('inputmode'),
+      hints, errors};
+  };
+  const forms = [...document.querySelectorAll('form')].filter(visible).slice(0, 10).map(f => {
+    const fields = [...f.querySelectorAll(FIELDS)].filter(visible).slice(0, 25).map(field);
+    const own = new Set(fields.flatMap(x => x.errors));
+    return {name: clean(f.getAttribute('aria-label') || f.getAttribute('name') || f.id || ''), fields,
+      submit: [...f.querySelectorAll('button, input[type=submit]')].filter(visible)
+        .map(b => clean(b.innerText || b.value)).filter(Boolean).slice(0, 3),
+      novalidate: f.noValidate, errors: texts(f.querySelectorAll(ERRORS)).filter(e => !own.has(e))};
+  });
   const loose = [...document.querySelectorAll(FIELDS)].filter(el => !el.closest('form') && visible(el)).slice(0, 25).map(field);
-  if (loose.length) forms.push({name: '', fields: loose, submit: []});
+  if (loose.length) forms.push({name: '', fields: loose, submit: [], novalidate: false, errors: []});
   const buttons = [...document.querySelectorAll('button, [role=button], input[type=button]')]
     .filter(b => visible(b) && !b.closest('form')).map(b => clean(b.innerText || b.value || b.getAttribute('aria-label')))
     .filter(Boolean);
@@ -217,12 +257,45 @@ def get(pid: str, eid: str) -> dict | None:
     return fs.read_json(_dir(pid) / f"{eid}.json")
 
 
+def _quoted(items) -> str:
+    return ", ".join(f"«{t}»" for t in items)
+
+
+def _field_text(x: dict) -> str:
+    """A field of the map: its type and what the page declares about it - required, length, format, range,
+    the hint and the error texts the page already holds."""
+    parts = [x["type"]]
+    if x["required"]:
+        parts.append("обязательное")
+    lo, hi = x.get("minlength"), x.get("maxlength")
+    if lo or hi is not None:
+        parts.append(f"длина {lo}–{hi}" if lo and hi is not None else f"длина от {lo}" if lo else f"длина до {hi}")
+    if x.get("pattern"):
+        parts.append(f"формат: {x['pattern']}")
+    if x.get("min") or x.get("max"):
+        parts.append(f"диапазон: {x.get('min') or '…'}–{x.get('max') or '…'}" + (f", шаг {x['step']}" if x.get("step") else ""))
+    if x.get("inputmode"):
+        parts.append(f"ввод: {x['inputmode']}")
+    if x["options"]:
+        parts.append(f"варианты: {'/'.join(x['options'])}" + (f" и ещё {x['more_options']}" if x.get("more_options") else ""))
+    hints = [h for h in [x.get("title"), x.get("placeholder")] if h] + list(x.get("hints") or [])
+    if hints:
+        parts.append(f"подсказка: {_quoted(dict.fromkeys(hints))}")
+    if x.get("errors"):
+        parts.append(f"ошибки: {_quoted(x['errors'])}")
+    return f"{x['label'] or x['name'] or x['type']} ({', '.join(parts)})"
+
+
 def to_requirements(result: dict) -> str:
     """The map as requirements text for scenarios.generate."""
     out = [f"{MAP_TITLE} {result['start']}",
            "Требования восстановлены автоматическим обходом интерфейса (Planner), ТЗ нет. Ожидаемое поведение "
            "выводи из интерфейса и общепринятых правил для таких страниц и форм; не придумывай функции, которых "
-           "на страницах нет. Сценарии не должны выполнять необратимых действий (оплата, удаление, отправка)."]
+           "на страницах нет. Сценарии не должны выполнять необратимых действий (оплата, удаление, отправка).",
+           "У полей форм указано то, что объявляет страница: обязательность, длина, формат, диапазон, подсказки и "
+           "тексты ошибок, уже заложенные в разметку. Чего страница не объявляет (правила сервера, тексты ошибок, "
+           "которые появляются только после отправки, переходы), обходом не узнать: негативный сценарий проверяет, "
+           "что форма не принята и показана ошибка, а точный текст записывает агент, увидев его на стенде."]
     for p in result["pages"]:
         if p.get("error"):
             continue
@@ -231,13 +304,12 @@ def to_requirements(result: dict) -> str:
         if p.get("headings"):
             block.append("Заголовки: " + " · ".join(p["headings"]))
         for f in p.get("forms") or []:
-            fields = ", ".join(f"{x['label'] or x['name'] or x['type']} ({x['type']}"
-                               + (", обязательное" if x["required"] else "")
-                               + (f", варианты: {'/'.join(x['options'])}" if x["options"] else "") + ")"
-                               for x in f["fields"])
+            fields = ", ".join(_field_text(x) for x in f["fields"])
             name = f["name"] or (f["submit"][0] if f["submit"] else "")
             block.append(f"Форма{f' «{name}»' if name else ''}: {fields or 'без полей'}"
-                         + (f"; кнопки: {', '.join(f['submit'])}" if f["submit"] else ""))
+                         + (f"; кнопки: {', '.join(f['submit'])}" if f["submit"] else "")
+                         + ("; проверка полей браузером выключена (novalidate)" if f.get("novalidate") else "")
+                         + (f"; сообщения формы: {_quoted(f['errors'])}" if f.get("errors") else ""))
         if p.get("buttons"):
             block.append("Кнопки: " + ", ".join(p["buttons"]))
         targets = sorted({urlparse(a["href"]).path or "/" for a in p.get("links", [])

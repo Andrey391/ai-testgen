@@ -7,9 +7,11 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+import pytest
 from conftest import ROOT
 from helpers import arun
 from testgen import explorer, pipeline, projects, reports, storage, suite
+from testgen.browser import BrowserSession
 from testgen.steps import new_step
 
 
@@ -24,6 +26,56 @@ def test_explore_maps_pages_and_skips_dangerous_links(stand, project):
     req = explorer.to_requirements(m)
     assert "Email (email, обязательное)" in req and "Страна (select" in req and "Зарегистрироваться" in req
     assert explorer.latest(project["id"])["id"] == m["id"]
+
+
+REGISTER = """<form id="register" novalidate>
+  <h2>Создать аккаунт</h2>
+  <div class="field"><div class="caption">Имя *</div>
+    <input name="first" minlength="2" maxlength="50" pattern="[А-Яа-яЁё-]+" title="Только буквы и дефис">
+    <small class="hint">От 2 до 50 букв</small><div class="error" hidden>Введите имя</div></div>
+  <div class="field"><div class="caption">Город</div><input name="city" placeholder="Необязательно"></div>
+  <label for="pw">Пароль</label><input id="pw" type="password" required minlength="8"
+    aria-describedby="pw-rules" data-val-required="Придумайте пароль">
+  <p id="pw-rules">Не короче 8 символов, буквы и цифры</p>
+  <label for="age">Возраст</label><input id="age" type="number" min="18" max="120">
+  <label><input type="checkbox" name="agree" required> Согласен с правилами</label>
+  <div role="alert" hidden>Аккаунт с этой почтой уже есть</div>
+  <button>Создать аккаунт</button>
+</form>"""
+
+
+@pytest.mark.browser
+def test_explore_reads_field_rules_and_error_texts():
+    async def read():
+        bs = await BrowserSession.launch(headless=True)
+        try:
+            await bs.page.set_content(REGISTER)
+            return await bs.page.evaluate(explorer.PAGE_JS)
+        finally:
+            await bs.close()
+    form = arun(read())["forms"][0]
+    first, city, pw, age, agree = form["fields"]
+    assert first["label"] == "Имя" and first["required"]            # the caption without <label>, "*" — required
+    assert (first["minlength"], first["maxlength"], first["pattern"]) == (2, 50, "[А-Яа-яЁё-]+")
+    assert first["hints"] == ["От 2 до 50 букв"] and first["errors"] == ["Введите имя"]
+    assert city["label"] == "Город" and city["placeholder"] == "Необязательно" and not city["required"]
+    assert pw["minlength"] == 8 and pw["hints"] == ["Не короче 8 символов, буквы и цифры"]
+    assert pw["errors"] == ["Придумайте пароль"]
+    assert (age["min"], age["max"]) == ("18", "120") and agree["required"]
+    assert form["novalidate"] and form["errors"] == ["Аккаунт с этой почтой уже есть"]
+    req = explorer.to_requirements({"start": "http://app", "pages": [
+        {"url": "http://app/register", "title": "Регистрация", "forms": [form]}]})
+    assert ("Имя (text, обязательное, длина 2–50, формат: [А-Яа-яЁё-]+, подсказка: «Только буквы и дефис», "
+            "«От 2 до 50 букв», ошибки: «Введите имя»)") in req
+    assert "Город (text, подсказка: «Необязательно»)" in req and "Возраст (number, диапазон: 18–120)" in req
+    assert "проверка полей браузером выключена" in req and "сообщения формы: «Аккаунт с этой почтой уже есть»" in req
+
+
+def test_site_map_validation_knows_there_are_no_authors():
+    """The Planner's map is validated as a crawl of the pages: gaps are questions, not omissions of authors."""
+    from testgen import validation
+    assert "automatic crawl" in validation._task("gost34", "", site_map=True)
+    assert "automatic crawl" not in validation._task("gost34", "")
 
 
 def test_coverage_by_screens(stand, project, save_test):
