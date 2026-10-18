@@ -298,7 +298,9 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `requirements.confirm_model`; в тестах студии выключена фикстурой `lifecycle_confirmed`). Скиллы модели —
   слот `requirements.model_skills` (`application-model`), в сценариях — `test-data-roles`.
 - `testgen/validation.py` — проверка ТЗ на соответствие стандарту (`requirements.standard`, `checklist`,
-  скиллы этапа `requirements`): разделы, замечания, вопросы, оценка; хранится в анализе (`validation`).
+  скиллы этапа `requirements`): разделы, замечания, вопросы, оценка; хранится в анализе (`validation`). Карта сайта
+  Planner (текст с `explorer.MAP_TITLE`) проверяется как обход, а не документ авторов (`SITE_MAP`): необъявленное
+  разметкой (правила сервера, тексты ошибок после отправки) — вопрос команде, не дефект выше major.
 - `testgen/review.py` — ревьюер требований, субагент на чистом контексте: `review()` параллельно запускает
   `validation.validate` и `lifecycle()` — свой цикл (стримится с ожиданием `WAIT`: шлюз без потока обрывает долгий
   ответ 504) с инструментами `model_lookup` (если модель не помещается в промпт) и `report` (`LifecycleReport`: `contradiction`/`role`/`gap`/`new`, серьёзность, цитаты документа и модели).
@@ -450,7 +452,10 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `steps.run_api` через `options["mutate_response"]`); результат в `test["verify"]`; `improvement_task()` — задача агенту.
 - `testgen/explorer.py` — Planner: обход по ссылкам только переданной страницы и дочерних (`_in_scope`: путь под начальным; от корня — весь сайт; запросы страниц — в каталог API, `explore["api"]`; только GET, без форм; `SKIP` — выход,
   удаление, файлы), карта в `data/projects/<id>/explore/`, `to_requirements()` для сценариев,
-  `coverage()` — страницы без тестов.
+  `coverage()` — страницы без тестов. У поля формы — то, что объявляет разметка (`PAGE_JS`): метка (без `<label>` —
+  подпись рядом, не placeholder), обязательность, длина, `pattern`, диапазон, подсказки, тексты ошибок (скрытые
+  элементы ошибок, `aria-errormessage`, `data-val-*`/`data-msg*`), `novalidate` формы; проверка ТЗ знает, что карта —
+  обход, а не документ авторов (`validation.SITE_MAP`).
 - `testgen/traffic.py` — XHR/fetch сессии автора: маскирование, HAR в `data/projects/<id>/traffic/`,
   `mock_spec()` для шага `mock_route`; каталог API `catalog()` — эндпоинты (метод + путь-шаблон с `{id}`,
   статусы, названия полей, без значений) из HAR тестов и карты Planner (`explore["api"]`, `recorded()`) с правками людей
