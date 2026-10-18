@@ -2267,18 +2267,24 @@ function waited(t) {
   if (!t || s < 60) return 'только что';
   return s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч` : `${Math.floor(s / 86400)} дн`;
 }
+// The project's list is drawn as soon as it comes: counting every other project takes longer, it is not waited
+// for. An answer to an older look that comes after a newer one is dropped - it would bring back what was decided.
+let INBOX_ASKED = 0, OTHERS_ASKED = 0;
 async function pollInbox(others = true) {
   if (others) clearTimeout(inboxTimer);
   const pid = PID;
   if (!ME || !pid) return;
   try {
     if (!document.hidden || !INBOX) {
-      const [box, all] = await Promise.all([api('GET', `/api/projects/${pid}/inbox`),
-                                            others ? api('GET', '/api/inbox') : null]);
-      if (pid !== PID) return;
-      INBOX = box;
-      if (all) OTHERS = all.filter(x => x.project_id !== pid && x.total);
-      renderBell();
+      const mine = ++INBOX_ASKED, theirs = others ? ++OTHERS_ASKED : 0;
+      const all = others && api('GET', '/api/inbox').then(all => {
+        if (pid !== PID || theirs !== OTHERS_ASKED) return;
+        OTHERS = all.filter(x => x.project_id !== pid && x.total);
+        renderBell();
+      }).catch(() => {});
+      const box = await api('GET', `/api/projects/${pid}/inbox`);
+      if (pid === PID && mine === INBOX_ASKED) { INBOX = box; renderBell(); }
+      await all;
     }
   } catch {}
   finally { if (others && pid === PID) inboxTimer = setTimeout(pollInbox, 30000); }
