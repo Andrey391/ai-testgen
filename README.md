@@ -89,6 +89,7 @@ docker compose logs studio      # пароль admin
 | [docs/deploy.md](docs/deploy.md) | Установка на команду: PostgreSQL, S3, воркеры, несколько экземпляров, Helm-чарт `helm/ai-testgen`, `docker-compose.team.yml` |
 | [docs/offline.md](docs/offline.md) | Закрытый контур: локальная модель (vLLM, Qwen2.5-VL), требования к GPU |
 | [docs/security.md](docs/security.md) | Для службы безопасности: какие данные уходят в модель, где хранятся секреты |
+| [docs/test-stand.md](docs/test-stand.md) | CAPTCHA на тестовом стенде: как настроить стенд для автотестов |
 | [docs/mcp.md](docs/mcp.md) | Студия как MCP-сервер для Claude Code, Copilot, Cursor |
 | [docs/economics.md](docs/economics.md) | Юнит-экономика: сколько стоит тест |
 | [docs/glossary.md](docs/glossary.md) | Термины студии |
