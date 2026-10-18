@@ -7,7 +7,8 @@ The mailbox is a project setting ("Проект → Общие → Тестов�
     imap     any mailbox over IMAP: {"host", "port", "user", "ssl"}, the password in secrets
 Only reading: letters are never deleted or marked.
 
-CAPTCHA is never solved: switch it off on the test stand or use the provider's test keys.
+CAPTCHA is never solved: switch it off on the test stand or use the provider's test keys
+(docs/test-stand.md).
 """
 from __future__ import annotations
 
