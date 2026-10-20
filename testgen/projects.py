@@ -121,6 +121,25 @@ DEFAULT_PIPELINE = {
         "folder": "",
         "model": "", "effort": "",
     },
+    "decisions": {                 # what waits for people and who decides it (pipeline, cases, inbox)
+        # a test of the pipeline: "all" - every new test is a draft for its author to review; "risk" - a test with
+        # strong checks (mutations), no self-healing and a green run joins the suite by itself, a person reviews
+        # only the weak ones and the ones the agent changed
+        "review_policy": "all",
+        "min_score": 80,           # percent of killed mutants a test needs to join the suite by the policy
+        # the reviewer of manual cases settles by itself the minor findings it proposes a fix for and the major
+        # ones it is sure of (confidence, percent): logged, a person can undo it
+        "auto_accept": False,
+        "auto_confidence": 90,
+        # who decides what (a user of the studio; empty - whoever looks): requirements - the analyst, the
+        # application model - the test lead, the findings of manual cases (empty - the analyst); the review of a
+        # test - its author, else `tests`
+        "owner_requirements": "",
+        "owner_model": "",
+        "owner_cases": "",
+        "owner_tests": "",
+        "sla_hours": 24,           # a decision is due this many hours after it began to wait («Мои решения»)
+    },
     "budget": {                    # spending limits of language models, 0 = none (llm.py)
         "session": 0.0,            # one Studio session
         "job": 0.0,                # one pipeline run
@@ -129,7 +148,7 @@ DEFAULT_PIPELINE = {
     },
 }
 # Ranges of numbers that are not the usual 1..200 / 0..100.
-RANGES = {("budget", "session"): (0, 1e7), ("budget", "job"): (0, 1e7), ("budget", "month"): (0, 1e8)}
+RANGES = {("decisions", "sla_hours"): (1, 720), ("budget", "session"): (0, 1e7), ("budget", "job"): (0, 1e7), ("budget", "month"): (0, 1e8)}
 
 
 def _valid_id(pid: str) -> bool:
@@ -193,6 +212,12 @@ def normalize_pipeline(p: dict | None) -> dict:
     a["prompt"] = a["prompt"] if a["prompt"] in ("full", "compact") else "full"
     a["screenshots"] = a["screenshots"] if a["screenshots"] in ("always", "on_request", "never") else "always"
     out["budget"]["currency"] = out["budget"]["currency"] if out["budget"]["currency"] in ("USD", "RUB") else "USD"
+    dc = out["decisions"]
+    dc["review_policy"] = dc["review_policy"] if dc["review_policy"] in ("all", "risk") else "all"
+    dc["min_score"] = min(dc["min_score"], 100)
+    dc["auto_confidence"] = min(dc["auto_confidence"], 100)
+    for k in ("owner_requirements", "owner_model", "owner_cases", "owner_tests"):
+        dc[k] = dc[k][:120]
     r["heal_mode"] = r["heal_mode"] if r["heal_mode"] in ("review", "auto") else "review"
     r["trace"] = r["trace"] if r["trace"] in ("always", "failed", "off") else "failed"
     r["a11y_impact"] = r["a11y_impact"] if r["a11y_impact"] in ("minor", "moderate", "serious",

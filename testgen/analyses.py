@@ -503,7 +503,14 @@ def decide(pid: str, aid: str, ids: list[str], status: str, answer: str | None =
         if not a.get("review"):
             raise KeyError("review")
         review.decide(a["review"], ids, status, answer, note, user)
-    return _change(pid, aid, fn)
+    out = _change(pid, aid, fn)
+    if status == "todo" and (answer or "").strip():
+        # an answer to a question of the reviewer is a fact of the project: the same question is not asked again
+        from . import answers
+        for it in review.items(out.get("review")):
+            if it["id"] in ids and it["kind"] == "question":
+                answers.record(pid, it["problem"], answer, source=f"требования «{out.get('title') or ''}»", user=user)
+    return out
 
 
 def set_answers(pid: str, aid: str, text: str = "", user: str = "", missed: list | None = None,

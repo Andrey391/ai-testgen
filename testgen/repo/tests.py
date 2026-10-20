@@ -153,20 +153,26 @@ class Sql:
 
     @classmethod
     def healing(cls, pid: str) -> list[dict]:
-        """Tests of the project with self-healing proposals waiting for a person: {id, name, count, updated}."""
+        """Tests of the project with self-healing proposals waiting for a person: {id, name, count, updated, author}."""
         t = cls.t
         n = cls._proposals()
+        author = t.c.body["author"].astext.label("author")
         with db.engine().connect() as c:
-            return [{"id": r.id, "name": r.name or r.id, "count": r.n, "updated": r.updated} for r in c.execute(
-                select(t.c.id, t.c.name, t.c.updated, n.label("n")).where(t.c.project_id == pid, n > 0))]
+            return [{"id": r.id, "name": r.name or r.id, "count": r.n, "updated": r.updated,
+                     "author": r.author or r.updated_by or ""} for r in c.execute(
+                select(t.c.id, t.c.name, t.c.updated, t.c.updated_by, author, n.label("n")).where(
+                    t.c.project_id == pid, n > 0))]
 
     @classmethod
     def under_review(cls, pid: str) -> list[dict]:
-        """Tests of the project with the status `review`: {id, name, updated}."""
+        """Tests of the project with the status `review`: {id, name, updated, author} - the author reviews them
+        (whoever saved the test last when it has none)."""
         t = cls.t
+        author = t.c.body["author"].astext.label("author")
         with db.engine().connect() as c:
-            return [{"id": r.id, "name": r.name or r.id, "updated": r.updated} for r in c.execute(
-                select(t.c.id, t.c.name, t.c.updated).where(t.c.project_id == pid, t.c.status == "review"))]
+            return [{"id": r.id, "name": r.name or r.id, "updated": r.updated, "author": r.author or r.updated_by or ""}
+                    for r in c.execute(select(t.c.id, t.c.name, t.c.updated, t.c.updated_by, author).where(
+                        t.c.project_id == pid, t.c.status == "review"))]
 
     @classmethod
     def counts(cls) -> dict[str, int]:

@@ -7,11 +7,17 @@
                application model it touches): the test data the case uses (the role, the objects, the users) and
                the findings that keep an agent from automating it as the authors meant (an ambiguous step, no
                expected result, data the case does not give, a step against the lifecycle of the system...)
-    settle     a person settles the findings: an answer «как должно быть», the reviewer's proposal, or «не
-               актуально»; the answers reach the agent with the case (`clarifications`, pipeline.scenario_text)
+    group      the findings of many cases one answer settles - themes: «под каким пользователем входить» is asked
+               once, not in every case
+    settle     a person settles the findings (or a theme of them): an answer «как должно быть», the reviewer's
+               proposal, or «не актуально»; the answers reach the agent with the case (`clarifications`,
+               pipeline.scenario_text) and the team's memory (answers.py): the same question is not asked again
+    auto       what settles without a person - an answer the team gave to the same question before, and (the
+               project's `decisions.auto_accept`) the reviewer's proposals for minor findings and for major ones it
+               is sure of; each is logged and can be undone («reopen»)
 
-A run of the pipeline with cases waits for the person (`awaiting_cases`) while a blocking finding (not minor)
-is not settled; the test data of the cases joins the application model (knowledge.need) after that.
+A case of a pipeline run waits for a person while a blocking finding (not minor) of it is not settled; the other
+cases go to work at once. The test data of a case joins the application model (knowledge.need) when it is settled.
 """
 from __future__ import annotations
 
@@ -22,13 +28,17 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from . import fs, knowledge, llm, projects, storage
+from . import answers, fs, knowledge, llm, projects, storage
 
 BATCH = 5           # cases in one request to the reviewer
 PARALLEL = 3        # requests at once
 KEEP = 20           # imports a project keeps
-ACTIONS = ("answer", "accept", "dismiss")
+ACTIONS = ("answer", "accept", "dismiss", "reopen")
 BLOCKING = ("blocker", "major")
+NEVER_AUTO = ("account", "irreversible")       # an account and a stop before a real action are a person's call
+GROUP_MIN = 2       # open findings (of two cases or more) worth grouping into themes
+MEMORY = "память ответов"       # who settled a finding by an earlier answer of the team
+AUTO = "авто"                   # who settled it by the reviewer's confident proposal
 KINDS = {"ambiguous": "неоднозначный шаг", "expected": "нет ожидаемого результата",
          "data": "не хватает тестовых данных", "precondition": "неясное предусловие",
          "account": "учётная запись", "lifecycle": "расходится с моделью приложения",
@@ -95,6 +105,7 @@ class XFinding(BaseModel):
     problem: str
     question: str = ""
     suggestion: str = ""
+    confidence: int = 0
 
 
 class XCase(BaseModel):
@@ -120,7 +131,7 @@ SYSTEM = """You review manual test cases written by testers before an AI agent a
    - lifecycle: the case contradicts the model of the application below (a transition the lifecycle does not allow, a role doing what its restrictions forbid);
    - irreversible: a real payment, an order, a message to real people or a deletion - the agent stops before it and asserts there;
    - other.
-   severity: blocker - the case cannot be automated as written; major - the agent will most likely guess wrong; minor - worth fixing, the agent copes. `step` - the number of the step (0 - the whole case), `quote` - the words of the case, `question` - what to ask the authors, `suggestion` - how the step should read, when you can propose it from the case and the model.
+   severity: blocker - the case cannot be automated as written; major - the agent will most likely guess wrong; minor - worth fixing, the agent copes. `step` - the number of the step (0 - the whole case), `quote` - the words of the case, `question` - what to ask the authors, `suggestion` - how the step should read, when you can propose it from the case and the model; `confidence` - how sure you are, 0-100, that the suggestion is what the authors meant (100 - the case or the model says so, 50 - a guess, 0 - no suggestion).
 Do not report style, wording or the form of the case. A case with nothing to report gets an empty list of findings. Return every case by its index. Write everything in Russian."""
 
 
@@ -134,7 +145,8 @@ async def _review_batch(project: dict, batch: list[tuple[int, dict]]) -> dict[in
     pid = project["id"]
     text = "\n".join(_text(i, c) for i, c in batch)
     model = knowledge.prompt(pid, knowledge.focus(text=text))
-    reply = await llm.parse(project["pipeline"]["requirements"], system=SYSTEM + projects.language_rule(project),
+    known = answers.prompt(pid, text)
+    reply = await llm.parse(project["pipeline"]["requirements"], system=SYSTEM + known + projects.language_rule(project),
                             context=model, messages=[{"role": "user", "content": text[:60000]}], schema=XCases,
                             max_tokens=8000, project_id=pid, stage_name="cases")
     if reply.parsed is None:
@@ -143,7 +155,7 @@ async def _review_batch(project: dict, batch: list[tuple[int, dict]]) -> dict[in
 
 
 def _result(index: int, x: XCase | None) -> dict:
-    findings = [f.model_dump() | {"id": f"c{index}f{n}", "decision": None}
+    findings = [f.model_dump() | {"id": f"c{index}f{n}", "decision": None, "confidence": max(0, min(f.confidence, 100))}
                 for n, f in enumerate((x.findings if x else [])[:20]) if f.problem.strip()]
     return {"at": time.time(), "role": (x.role if x else "").strip(),
             "test_data": [d.model_dump() for d in (x.test_data if x else [])[:30] if d.entity.strip() and d.name.strip()],
@@ -156,6 +168,8 @@ async def review(project: dict, cases: list[tuple[int, dict]], keep=None, log=No
     todo = [(i, c) for i, c in cases if not c.get("case_review")]
     if not todo:
         return
+    pid = project["id"]
+    team = answers.all_answers(pid)
     sem = asyncio.Semaphore(PARALLEL)
     batches = [todo[k:k + BATCH] for k in range(0, len(todo), BATCH)]
 
@@ -169,6 +183,13 @@ async def review(project: dict, cases: list[tuple[int, dict]], keep=None, log=No
                 c["role"] = r["role"]
             if r["test_data"] and not c.get("test_data"):
                 c["test_data"] = [d | {"record_id": ""} for d in r["test_data"]]
+            for f in r["findings"]:
+                # the team answered the same question before: settled by that answer (shown, can be undone)
+                hit = team and answers.known(pid, f["question"] or f["problem"], team)
+                if hit:
+                    f["decision"] = {"action": "answer", "text": hit["answer"], "user": MEMORY, "auto": "memory",
+                                     "at": time.time(), "by": hit.get("user") or ""}
+            _clarify([c])
         if keep:
             keep()
         if log:
@@ -185,30 +206,70 @@ def unsettled(cases: list[dict]) -> list[dict]:
     return [f for f in findings(cases) if f["severity"] in BLOCKING and not f.get("decision")]
 
 
-def settle(cases: list[dict], decisions: list[dict], user: str = "") -> int:
-    """A person's decisions [{id, action, text}] on the findings: answer (text - how it should be), accept (the
-    reviewer's suggestion), dismiss (text - why not relevant). -> how many were settled. The answers become the
-    case's `clarifications` for the agent."""
-    by_id = {f["id"]: f for f in findings(cases)}
-    n = 0
-    for d in decisions:
-        f = by_id.get(str(d.get("id") or ""))
-        action, text = d.get("action"), " ".join(str(d.get("text") or "").split())[:4000]
-        if not f or action not in ACTIONS:
-            continue
-        if action == "answer" and not text:
-            continue
-        if action == "accept":
-            if not f.get("suggestion"):
-                continue
-            text = f["suggestion"]
-        f["decision"] = {"action": action, "text": text, "user": user, "at": time.time()}
-        n += 1
+def _clarify(cases: list[dict]) -> None:
     for c in cases:
         c["clarifications"] = [f"{x['problem']} — {x['decision']['text']}"
                                for x in (c.get("case_review") or {}).get("findings") or []
                                if x.get("decision") and x["decision"]["action"] in ("answer", "accept")]
-    return n
+
+
+def settle(cases: list[dict], decisions: list[dict], user: str = "", themes: list[dict] | None = None,
+           pid: str = "") -> list[dict]:
+    """A person's decisions [{id, action, text}] on the findings - or on a theme of them (its id: each finding of the
+    theme not settled yet): answer (text - how it should be), accept (the reviewer's suggestion; the theme's, if it
+    has one), dismiss (text - why not relevant), reopen (undecided again: an automatic decision undone).
+    -> the findings settled. The answers become the case's `clarifications` for the agent and, with `pid`, the
+    team's memory (answers.record)."""
+    by_id = {f["id"]: (f, c) for c in cases for f in (c.get("case_review") or {}).get("findings") or []}
+    by_theme = {t["id"]: t for t in themes or []}
+    done = []
+    for d in decisions:
+        key, action = str(d.get("id") or ""), d.get("action")
+        text = " ".join(str(d.get("text") or "").split())[:4000]
+        theme = by_theme.get(key)
+        if theme:
+            targets = [by_id[i] for i in theme["ids"]
+                       if i in by_id and (action == "reopen") == bool(by_id[i][0].get("decision"))]
+        else:
+            targets = [by_id[key]] if key in by_id else []
+        if action not in ACTIONS or action == "answer" and not text:
+            continue
+        for f, c in targets:
+            if action == "reopen":
+                if f.get("decision"):
+                    f["decision"] = None
+                    done.append(f)
+                continue
+            said = text
+            if action == "accept":
+                said = (theme or {}).get("suggestion") or f.get("suggestion") or ""
+                if not said:
+                    continue
+            f["decision"] = {"action": action, "text": said, "user": user, "at": time.time()} | (
+                {"theme": theme["id"]} if theme else {})
+            done.append(f)
+            if pid and action in ("answer", "accept"):
+                answers.record(pid, (theme or {}).get("question") or f.get("question") or f["problem"], said,
+                               source=f"кейс «{c.get('title', '')}»", role=c.get("role") or "", user=user)
+    _clarify(cases)
+    return done
+
+
+def auto_accept(cases: list[dict], confidence: int) -> list[tuple[dict, dict]]:
+    """The reviewer's proposals that settle by themselves (decisions.auto_accept): a minor finding with a proposal,
+    a major one the reviewer is sure of (`confidence` and more); never a blocker, an account or an irreversible
+    action. -> (case, finding) settled."""
+    out = []
+    for c in cases:
+        for f in (c.get("case_review") or {}).get("findings") or []:
+            if f.get("decision") or not f.get("suggestion") or f["kind"] in NEVER_AUTO or f["severity"] == "blocker":
+                continue
+            if f["severity"] == "minor" or (f.get("confidence") or 0) >= confidence:
+                f["decision"] = {"action": "accept", "text": f["suggestion"], "user": AUTO, "auto": "confidence",
+                                 "confidence": f.get("confidence") or 0, "at": time.time()}
+                out.append((c, f))
+    _clarify(cases)
+    return out
 
 
 def tally(cases: list[dict]) -> dict:
@@ -217,4 +278,52 @@ def tally(cases: list[dict]) -> dict:
             "blocking": sum(1 for f in fs_ if f["severity"] in BLOCKING),
             "unsettled": len(unsettled(cases)),
             "answered": sum(1 for f in fs_ if (f.get("decision") or {}).get("action") in ("answer", "accept")),
-            "dismissed": sum(1 for f in fs_ if (f.get("decision") or {}).get("action") == "dismiss")}
+            "dismissed": sum(1 for f in fs_ if (f.get("decision") or {}).get("action") == "dismiss"),
+            "auto": sum(1 for f in fs_ if (f.get("decision") or {}).get("auto"))}
+
+
+# ---------- themes: one answer for many cases ----------
+
+class XTheme(BaseModel):
+    title: str
+    question: str = ""
+    suggestion: str = ""
+    items: list[str]
+
+
+class XThemes(BaseModel):
+    themes: list[XTheme]
+
+
+GROUP = """A reviewer read manual test cases before an AI agent automates them and reported findings in each. The same question often comes up in many cases: which user to log in as, which product to take, what the result should be. Group the findings that one answer settles for all of them, so that the team answers once.
+
+A theme: a short title (what has to be decided, a few words), `question` - the one question to ask the team, `suggestion` - the fix when the findings propose the same one ("" otherwise), and the ids of its findings. Put findings together only when one answer settles all of them; a finding unlike the others stays out of every theme. Every id is in one theme at most."""
+
+
+async def group(project: dict, cases: list[dict]) -> list[dict]:
+    """The open findings of the cases grouped into themes by a model on a clean context: [{id: ct<i>, title,
+    question, suggestion, ids}] - only themes of two findings or more of two cases or more; each finding of a theme
+    gets its `theme`. Few findings - none."""
+    rows = [(f, c) for c in cases for f in (c.get("case_review") or {}).get("findings") or [] if not f.get("decision")]
+    if len(rows) < GROUP_MIN or len({id(c) for _, c in rows}) < 2:
+        return []
+    brief = "\n".join(f"[{f['id']}] case «{c.get('title', '')[:80]}», {f['kind']}, {f['severity']}: {f['problem'][:300]}"
+                      + (f" Question: {f['question'][:200]}" if f.get("question") else "") for f, c in rows)
+    reply = await llm.parse(project["pipeline"]["requirements"], system=GROUP + projects.language_rule(project),
+                            messages=[{"role": "user", "content": "The findings:\n" + brief[:60000]}], schema=XThemes,
+                            max_tokens=8000, project_id=project["id"], stage_name="cases")
+    if reply.parsed is None:
+        return []
+    case_of = {f["id"]: (f, c) for f, c in rows}
+    seen, out = set(), []
+    for t in reply.parsed.themes:
+        ids = [i for i in dict.fromkeys(t.items) if i in case_of and i not in seen]
+        if len(ids) < 2 or len({id(case_of[i][1]) for i in ids}) < 2:
+            continue
+        seen |= set(ids)
+        tid = f"ct{len(out)}"
+        for i in ids:
+            case_of[i][0]["theme"] = tid
+        out.append({"id": tid, "title": t.title.strip()[:200], "question": t.question.strip()[:1000],
+                    "suggestion": t.suggestion.strip()[:2000], "ids": ids})
+    return out

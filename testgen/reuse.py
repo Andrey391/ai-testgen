@@ -7,7 +7,7 @@ gets a `match`. A person decides what to do with it (DECISIONS): create a new te
 earlier one (its test is linked to the new scenario, nothing is generated; an earlier scenario without a
 test - "Не дублировать" - is automated once, its test is linked to both scenarios) or refine it (the agent
 replays the earlier test and extends it to the new scenario; the test keeps its id). The pipeline
-waits for the decisions before authoring (Job._await_reuse); the Requirements tab asks in the row
+holds the item until it is decided (Job._holds, the others go on); the Requirements tab asks in the row
 of the scenario.
 
 match = {"kind": "test" | "scenario", "id", "analysis_id" (kind scenario), "title",

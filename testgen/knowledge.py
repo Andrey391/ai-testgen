@@ -90,6 +90,7 @@ PREFLIGHT_CACHE = 500
 CONFIRMED = {"entities": ("name", "depends_on", "lifecycle", "create", "rules"),
              "roles": ("name", "capabilities", "restrictions")}
 ROLES_UNIT = "@roles"           # the unit of confirmation of the roles; the others are the groups of entities
+SNAPSHOT_MAX = 2000             # records of a unit kept as confirmed (what changed since); a bigger one - its signature
 # The model in a prompt: at most this many tokens (about CHARS_PER_TOKEN characters each, Cyrillic text).
 PROMPT_BUDGET = 8000
 LOOKUP_BUDGET = 3000
@@ -191,8 +192,9 @@ def _clean_fact(m: dict) -> dict:
 def _clean_confirmed(c) -> dict | None:
     if not isinstance(c, dict) or not (c.get("sig") or c.get("units")):
         return None
-    units = {str(u)[:120]: {k: v.get(k) for k in ("at", "by", "sig")} for u, v in (c.get("units") or {}).items()
-             if isinstance(v, dict) and v.get("sig")}
+    units = {str(u)[:120]: {k: v.get(k) for k in ("at", "by", "sig")} | (
+                 {"snap": v["snap"]} if isinstance(v.get("snap"), dict) else {})
+             for u, v in (c.get("units") or {}).items() if isinstance(v, dict) and v.get("sig")}
     return {"at": c.get("at"), "by": c.get("by") or "", **({"sig": c["sig"]} if c.get("sig") else {}),
             **({"units": units} if units else {})}
 
@@ -279,6 +281,40 @@ def unit_signature(doc: dict, unit: str) -> str:
     return _sig({"entities": _sig_rows("entities", [e for e in doc["entities"] if e["group"] == unit])})
 
 
+def _unit_items(doc: dict, unit: str) -> tuple[str, list[dict]]:
+    if unit == ROLES_UNIT:
+        return "roles", doc["roles"]
+    return "entities", [e for e in doc["entities"] if e["group"] == unit]
+
+
+def unit_snapshot(doc: dict, unit: str) -> dict | None:
+    """The unit as a person confirms it: name -> the confirmed fields (CONFIRMED). None - too big to keep."""
+    kind, items = _unit_items(doc, unit)
+    if len(items) > SNAPSHOT_MAX:
+        return None
+    return {x["name"]: {f: sorted(str(v) for v in x.get(f) or []) if f in LISTS else str(x.get(f) or "")
+                        for f in CONFIRMED[kind] if f != "name"} for x in items}
+
+
+def unit_changes(doc: dict, unit: str, snap: dict) -> dict:
+    """What changed in a unit since it was confirmed (its snapshot): the entities (or roles) added and removed, and
+    the fields changed in the others, before and after."""
+    now = unit_snapshot(doc, unit) or {}
+    keys = {norm(k): k for k in snap}
+    added, changed, seen = [], [], set()
+    for name, fields in now.items():
+        old_name = keys.get(norm(name))
+        if old_name is None:
+            added.append(name)
+            continue
+        seen.add(old_name)
+        diff = [{"field": f, "before": snap[old_name].get(f, ""), "after": v} for f, v in fields.items()
+                if v != snap[old_name].get(f, "" if not isinstance(v, list) else [])]
+        if diff:
+            changed.append({"name": name, "fields": diff})
+    return {"added": added, "removed": [k for k in snap if k not in seen], "changed": changed}
+
+
 def unit_title(unit: str) -> str:
     return "Роли и их возможности" if unit == ROLES_UNIT else unit or "Без группы"
 
@@ -318,10 +354,12 @@ def confirmation(doc: dict, only: list[str] | None = None) -> dict:
     out = []
     for u in units(doc):
         e = done.get(u)
-        out.append({"unit": u, "title": unit_title(u),
-                    "state": "none" if not e else "confirmed" if e["sig"] == unit_signature(doc, u) else "changed",
+        st = "none" if not e else "confirmed" if e["sig"] == unit_signature(doc, u) else "changed"
+        out.append({"unit": u, "title": unit_title(u), "state": st,
                     "at": (e or {}).get("at"), "by": (e or {}).get("by") or "",
-                    "entities": sum(1 for x in doc["entities"] if x["group"] == u) if u != ROLES_UNIT else 0})
+                    "entities": sum(1 for x in doc["entities"] if x["group"] == u) if u != ROLES_UNIT else 0}
+                   # changed since it was confirmed: only what changed is shown to the person
+                   | ({"changes": unit_changes(doc, u, e["snap"])} if st == "changed" and e.get("snap") else {}))
     states = [x["state"] for x in out if only is None or x["unit"] in only]
     state = ("confirmed" if states and all(s == "confirmed" for s in states)
              else "none" if not done or all(s == "none" for s in states) else "changed")
@@ -380,7 +418,8 @@ def confirm(pid: str, user: str = "", only: list[str] | None = None) -> dict:
         now = time.time()
         done = {u: v for u, v in _confirmed_units(doc).items() if u in units(doc)}
         for u in units(doc) if only is None else [u for u in only if u in units(doc)]:
-            done[u] = {"at": now, "by": user, "sig": unit_signature(doc, u)}
+            snap = unit_snapshot(doc, u)
+            done[u] = {"at": now, "by": user, "sig": unit_signature(doc, u)} | ({"snap": snap} if snap is not None else {})
         doc["confirmed"] = {"at": now, "by": user, "units": done}
         _write(pid, doc)
     return view(pid)

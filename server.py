@@ -216,7 +216,7 @@ AUDIT_ACTIONS = {
     ("PUT", "/api/projects/{pid}/knowledge"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/extract"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/confirm"): "knowledge.confirm",
-    ("POST", "/api/projects/{pid}/knowledge/pending"): "knowledge.save",
+    ("POST", "/api/projects/{pid}/knowledge/pending"): "knowledge.pending",
     ("POST", "/api/projects/{pid}/knowledge/sort"): "knowledge.save",
     ("POST", "/api/projects/{pid}/knowledge/duplicates"): "knowledge.save",
     ("POST", "/api/projects/{pid}/blocks/{key}/accept"): "test.module",
@@ -231,6 +231,11 @@ AUDIT_ACTIONS = {
     ("POST", "/api/projects/{pid}/sessions/{sid}/save"): "test.save",
     ("DELETE", "/api/projects/{pid}/sessions/{sid}"): "studio.discard",
     ("POST", "/api/jobs/{jid}/resume"): "pipeline.resume",
+    ("POST", "/api/jobs/{jid}/cases"): "decision.cases",
+    ("POST", "/api/jobs/{jid}/reuse"): "decision.reuse",
+    ("POST", "/api/jobs/{jid}/select"): "decision.select",
+    ("PUT", "/api/analyses/{aid}/review/findings"): "decision.findings",
+    ("POST", "/api/analyses/{aid}/review/answers"): "decision.findings",
     ("POST", "/api/jobs/{jid}/retry"): "pipeline.retry",
     ("PUT", "/api/tests/{tid}"): "test.update",
     ("PUT", "/api/tests/{tid}/steps"): "test.update",
@@ -3549,8 +3554,8 @@ async def get_case_import(pid: str, iid: str):
 
 
 class CaseDecision(BaseModel):
-    id: str
-    action: str             # answer | accept | dismiss (cases.ACTIONS)
+    id: str                 # a finding, or a theme of findings (cases.group): one answer for all its cases
+    action: str             # answer | accept | dismiss | reopen (cases.ACTIONS)
     text: str = ""
 
 
@@ -3560,13 +3565,14 @@ class CaseDecisionsBody(BaseModel):
 
 @app.post("/api/jobs/{jid}/cases")
 async def settle_case_findings(jid: str, body: CaseDecisionsBody, request: Request):
-    """A person settles the findings of the review of manual cases: an answer, the reviewer's proposal or
-    «Не актуально». The run goes on when no blocking finding is left."""
+    """A person settles the findings of the review of manual cases (one by one or a theme of them): an answer, the
+    reviewer's proposal or «Не актуально»; reopen - an automatic decision undone. A case goes to work as soon as no
+    blocking finding of it is left, the others do not wait for it."""
     job = pipeline.JOBS.get(jid)
-    if not job or job.status != "awaiting_cases":
+    if not job or not job.cases or job.status not in pipeline.LIVE:
         raise HTTPException(409, "Запуск не ждёт решений по замечаниям к кейсам")
     if any(d.action not in cases_mod.ACTIONS for d in body.decisions):
-        raise HTTPException(400, "Решение: answer, accept или dismiss")
+        raise HTTPException(400, "Решение: answer, accept, dismiss или reopen")
     if any(d.action == "answer" and not d.text.strip() for d in body.decisions):
         raise HTTPException(400, "Напишите, как должно быть")
     n = await call(_settle(job, [d.model_dump() for d in body.decisions], request.state.user or ""))
@@ -3622,8 +3628,14 @@ async def job_model(jid: str):
     j = pipeline.get_job(jid)
     if not j:
         raise HTTPException(404, "Запуск не найден")
-    units = pipeline.model_units(j["project_id"], j.get("scenarios") or [])
-    return knowledge.parts(knowledge.get(j["project_id"]), units) | {"all": units is None}
+    scenarios = j.get("scenarios") or []
+    by_title = {s.get("title"): s for s in scenarios}
+    # the items held by the model (their scenarios' parts); none held - every scenario of the run
+    held = [scenarios[it["scenario_index"]] if 0 <= it.get("scenario_index", -1) < len(scenarios)
+            else by_title.get(it.get("title")) for it in j.get("items") or [] if it.get("wait") == "model"]
+    units = pipeline.model_units(j["project_id"], [s for s in held if s] or scenarios)
+    doc = knowledge.get(j["project_id"])
+    return knowledge.parts(doc, units) | {"all": units is None}
 
 
 class SelectBody(BaseModel):

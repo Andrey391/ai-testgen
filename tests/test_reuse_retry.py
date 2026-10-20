@@ -105,13 +105,14 @@ def test_pipeline_waits_for_the_decision_and_reuses(monkeypatch):
             if job.status == "awaiting_reuse":
                 break
             await asyncio.sleep(0.02)
-        assert job.status == "awaiting_reuse" and not created
+        # the scenario like nothing earlier went to work at once; the two like earlier ones wait for the decision
+        assert job.status == "awaiting_reuse" and created == ["Профиль"]
         job.decide({0: "reuse", 1: "reuse"})
         await asyncio.wait_for(task, 5)
     arun(scenario())
     assert job.status == "done", job.log
     # "Не дублировать" a scenario that has no test: it is automated, not skipped
-    assert created == ["Выход", "Профиль"]
+    assert created == ["Профиль", "Выход"]
     assert job.items[0]["test_id"] == login["id"] and "Переиспользован" in job.items[0]["summary"]
     assert job.items[1]["status"] == "done" and job.items[1]["test_id"]
 

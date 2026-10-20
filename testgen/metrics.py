@@ -7,15 +7,25 @@
     regression   duration of the last suite runs (the main effect of automation for most companies)
     saved hours  automatic runs in the period x the time of a manual run of a case (run.manual_minutes)
     spending     language models this month and the average cost of generating a test
-    waits        how long pipeline runs waited for a person's decision (median; the confirmation of the model
-                 apart) and how many runs wait now
+    waits        how long pipeline runs (and their items) waited for a person's decision: the median, by kind of
+                 decision, and how many runs wait now
+    decisions    the load on people: their decisions in the period (audit log) per new test, and the decisions made
+                 without them (the team's earlier answers, the reviewer's confident proposals, the review policy) -
+                 the numbers to tune the project's `decisions` by
 """
 from __future__ import annotations
 
 import statistics
 import time
 
-from . import llm, pipeline, projects, runs, storage, suite
+from . import audit, llm, pipeline, projects, runs, storage, suite
+
+# What a person decides (audit actions) and what was decided without one.
+DECISIONS = {"decision.cases": "замечания к кейсам", "decision.findings": "замечания к требованиям",
+             "decision.reuse": "похожие сценарии", "decision.select": "выбор сценариев",
+             "knowledge.confirm": "подтверждение модели", "knowledge.pending": "обновления модели",
+             "heal.accept": "самолечение", "heal.reject": "самолечение", "test.meta": "статус и метки тестов"}
+AUTOMATIC = {"decision.auto": "приняты автоматически", "test.auto_ready": "тесты в наборе по политике"}
 
 
 def project_metrics(pid: str, days: int = 30) -> dict:
@@ -70,6 +80,7 @@ def project_metrics(pid: str, days: int = 30) -> dict:
         "saved": {"runs": run_count, "manual_minutes": minutes, "hours": round(run_count * minutes / 60, 1),
                   "per_day": [{"day": d, "runs": c} for d, c in sorted(per_day.items())]},
         "waits": _waits(waits, waiting_now),
+        "decisions": _decisions(pid, since, sum(1 for t in tests if (t.get("created") or 0) >= since)),
         "spending": {"month": month["month"], "usd": month["total_usd"], "rub": month["total_rub"],
                      "test_generation_usd": round(statistics.mean(costs), 3) if costs else None},
     }
@@ -88,5 +99,24 @@ def _waits(waits: list[dict], now: int) -> dict:
     def median(ws: list[dict]) -> float | None:
         return round(statistics.median((w["until"] - w["since"]) / 60 for w in ws), 1) if ws else None
     model = [w for w in waits if w.get("status") == "awaiting_model"]
+    kinds = {}
+    for w in waits:
+        kinds.setdefault(w.get("status") or "", []).append(w)
     return {"count": len(waits), "median_minutes": median(waits), "model_count": len(model),
-            "model_median_minutes": median(model), "now": now}
+            "model_median_minutes": median(model), "now": now,
+            "by_kind": [{"status": k, "count": len(ws), "median_minutes": median(ws)}
+                        for k, ws in sorted(kinds.items(), key=lambda kv: -len(kv[1]))]}
+
+
+def _decisions(pid: str, since: float, new_tests: int) -> dict:
+    """People's decisions in the period per new test, by kind, and the decisions made without a person."""
+    n = audit.counts(pid, since, list(DECISIONS) + list(AUTOMATIC))
+    people = sum(n[a] for a in DECISIONS)
+    kinds: dict[str, int] = {}
+    for a, title in DECISIONS.items():
+        if n[a]:
+            kinds[title] = kinds.get(title, 0) + n[a]
+    return {"people": people, "automatic": sum(n[a] for a in AUTOMATIC), "new_tests": new_tests,
+            "per_test": round(people / new_tests, 1) if new_tests else None,
+            "by_kind": [{"title": t, "count": c} for t, c in sorted(kinds.items(), key=lambda kv: -kv[1])],
+            "auto_by_kind": [{"title": AUTOMATIC[a], "count": n[a]} for a in AUTOMATIC if n[a]]}

@@ -41,7 +41,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from . import knowledge, llm, projects, skills, validation
+from . import answers, knowledge, llm, projects, skills, validation
 from .providers.base import check_call
 
 _log = logging.getLogger("testgen.review")
@@ -232,6 +232,8 @@ async def review(project: dict, document: str, standard: str = "", log=None, not
     a check is finished (kept to go on from if this review is cut off)."""
     say = log or (lambda text: None)
     done = {k: v for k, v in (done or {}).items() if k in CHECKS and v}
+    # what the team has answered before (answers.py): facts, not questions to ask again
+    notes += answers.prompt(project["id"], document)
 
     async def check(name: str, work):
         if name in done:

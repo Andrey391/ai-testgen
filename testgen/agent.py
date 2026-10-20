@@ -697,7 +697,7 @@ class StudioSession:
         t["status"] = "draft"
         if old:
             for key in ("external", "last_run", "priority", "scenario_type", "source", "gherkin_scenario", "tags",
-                        "quarantine", "role", "before", "after", "status", "comments", "review", "account"):
+                        "quarantine", "role", "before", "after", "status", "comments", "review", "account", "author"):
                 if key in old:
                     t[key] = old[key]
         if status in storage.STATUSES:
@@ -709,6 +709,8 @@ class StudioSession:
                 t["verify"] = old["verify"]
         if self.account:
             t["account"] = self.account
+        if not t.get("author") and self.user:
+            t["author"] = self.user         # the review of the test is the author's decision («Мои решения»)
         storage.save(t)
         self.test_id, self.saved_steps = t["id"], _signature(self.steps)
         self.checkpoint()

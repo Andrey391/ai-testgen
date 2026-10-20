@@ -209,6 +209,8 @@ def test_the_waits_of_runs_are_kept_for_the_dashboard(monkeypatch):
     assert job.waiting_since is None and job.state()["waits"] == job.waits
     job.save()
     w = metrics.project_metrics(p["id"])["waits"]
-    assert w == {"count": 2, "median_minutes": 20.0, "model_count": 1, "model_median_minutes": 10.0, "now": 0}
+    assert w == {"count": 2, "median_minutes": 20.0, "model_count": 1, "model_median_minutes": 10.0, "now": 0,
+                 "by_kind": [{"status": "awaiting_model", "count": 1, "median_minutes": 10.0},
+                             {"status": "awaiting_selection", "count": 1, "median_minutes": 30.0}]}
     resumed = pipeline.Job.resumed(projects.get(p["id"]), pipeline.get_job(job.id), {})
     assert resumed.waits == job.waits                # a restart keeps them
