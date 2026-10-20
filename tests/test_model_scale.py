@@ -166,11 +166,12 @@ def test_a_confirmed_model_takes_new_entities_and_roles_from_a_person():
     assert [d["entity"] for d in doc["data"]] == ["Склад"]          # the object is kept, its entity waits
     res = arun(knowledge.preflight(projects.get(pid), {"title": "Приёмка", "role": "Кладовщик"}, lifecycle=False))
     assert "ждёт подтверждения" in knowledge.preflight_text(res)
-    # Found again: still one proposal; a person accepts it - the roles are to be confirmed again.
+    # Found again: still one proposal; a person accepts it - that decision confirms the roles with the new one.
     knowledge.need(pid, [{"title": "Отгрузка", "role": "кладовщик", "test_data": []}])
     assert len([x for x in knowledge.get(pid)["pending"] if x["kind"] == "roles"]) == 1
     doc = knowledge.resolve(pid, [new["roles"]["id"]], "accept")
-    assert "Кладовщик" in {r["name"] for r in doc["roles"]} and not knowledge.is_confirmed(pid)
+    assert "Кладовщик" in {r["name"] for r in doc["roles"]} and knowledge.is_confirmed(pid, [knowledge.ROLES_UNIT])
+    assert "Склад" not in {e["name"] for e in doc["entities"]}       # the entity still waits in the updates
     # What people add is theirs: added at once.
     doc = knowledge.get(pid)
     doc["entities"].append({"name": "Поставщик", "group": "Склад"})

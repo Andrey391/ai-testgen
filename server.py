@@ -239,6 +239,7 @@ AUDIT_ACTIONS = {
     ("POST", "/api/jobs/{jid}/retry"): "pipeline.retry",
     ("PUT", "/api/tests/{tid}"): "test.update",
     ("PUT", "/api/tests/{tid}/steps"): "test.update",
+    ("POST", "/api/tests/{tid}/current"): "test.current",
     ("POST", "/api/tests/{tid}/edit"): "studio.start",
     ("PATCH", "/api/tests/{tid}/meta"): "test.meta",
     ("DELETE", "/api/tests/{tid}"): "test.delete",
@@ -601,7 +602,7 @@ def _require_lifecycle(p: dict, sc: dict | None = None) -> None:
         return
     doc = knowledge.get(p["id"])
     only = knowledge.units_for(p["id"], sc, doc) if sc else None
-    state = knowledge.confirmation(doc, only)
+    state = knowledge.confirmed_for(p["id"], sc, doc) if sc else knowledge.confirmation(doc)
     if state["state"] != "confirmed":
         todo = [u["title"] for u in state["units"] if u["state"] != "confirmed" and (only is None or u["unit"] in only)]
         raise HTTPException(409, "Сначала подтвердите жизненный цикл системы — сущности, статусы, роли и их "
@@ -1810,6 +1811,13 @@ async def edit_in_studio(tid: str, body: EditBody, request: Request):
     return {"id": s.id}
 
 
+@app.post("/api/tests/{tid}/current")
+async def test_current(tid: str, request: Request):
+    """«Тест актуален»: a person checked the outdated test against what changed (its `outdated` reasons)."""
+    test_or_404(tid)
+    return storage.clear_outdated(tid, request.state.user)
+
+
 @app.get("/api/tests/{tid}/links")
 async def test_links(tid: str):
     """What the test is linked to («Связано» in its card): the tasks it is made for, the scenarios of requirements
@@ -2652,6 +2660,9 @@ class ReviewBody(BaseModel):
     requirements: str = ""      # with analysis_id: a new version of its document (the analyst corrected it)
     analysis_id: str = ""       # review again the requirements of this analysis (the new report replaces the old)
     standard: str = ""          # empty = the project's ("requirements.standard")
+    # where the text was loaded from: [{link, kind, title, digest}] (POST /api/requirements/fetch) - «Сверить с
+    # источником» fetches them again later; with a new version - its sources now
+    sources: list[dict] = []
 
 
 def _learn_waits(p: dict, a: dict | None) -> str | None:
@@ -2667,6 +2678,13 @@ def _learn_waits(p: dict, a: dict | None) -> str | None:
         return (f"Модель приложения обновится по требованиям, когда замечания, блокирующие тест-дизайн, будут "
                 f"исправлены или отмечены неактуальными (осталось {len(left)})")
     return None
+
+
+def _outdate_by_requirements(a: dict, why: str, user: str) -> int:
+    """The requirements of the analysis changed: the tests of its scenarios may check what they no longer say."""
+    ids = [tid for s in a.get("scenarios") or [] for tid in s.get("test_ids") or []]
+    title = a.get("feature") or a.get("title") or ""
+    return len(storage.mark_outdated(ids, f"{why}: «{title}»" if title else why, "requirements", a["id"], user))
 
 
 async def _learn_reviewed(p: dict, aid: str, user: str, log=None) -> str:
@@ -2731,6 +2749,8 @@ async def review_requirements(body: ReviewBody, request: Request):
     else:
         a = analyses.create(p["id"], text, "", user, work="review")
     pid, aid = p["id"], a["id"]
+    if body.sources:
+        analyses.set_sources(pid, aid, body.sources)
     # A review cut off (a restart of the studio, «Остановить») kept the checks it finished: only the rest is asked.
     key = review.parts_key(p, text, body.standard, notes)
     done = analyses.review_parts(a, key)
@@ -2769,6 +2789,9 @@ async def review_requirements(body: ReviewBody, request: Request):
     send({"type": "analysis", "analysis": analyses.view(a)})
     if version and a.get("revisions") and a["revisions"][-1].get("kind") == "version":
         log("Новая версия ТЗ: ревьюер проверит её заново с учётом решений и ответов по прежним замечаниям")
+        marked = _outdate_by_requirements(a, "Загружена новая версия ТЗ", user)
+        if marked:
+            log(f"Тесты по прежней версии ТЗ отмечены «Устарел»: {marked} — проверьте их во вкладке «Тесты»")
     elif again:
         log("Эти требования уже проверялись: обновляю их анализ — решения по прежним замечаниям ревьюер учтёт")
     submit(work())
@@ -2799,6 +2822,24 @@ def _ndjson(queue: asyncio.Queue) -> StreamingResponse:
 async def get_knowledge(pid: str):
     project(pid)
     return knowledge.view(pid)
+
+
+class TouchesBody(BaseModel):
+    text: str = ""
+
+
+@app.post("/api/projects/{pid}/knowledge/touches")
+async def knowledge_touches(pid: str, body: TouchesBody):
+    """What of the application model the agent gets for a scenario being typed (Studio): the entities and roles its
+    text names (with what they require), whether the model is given whole anyway (`whole`). Nothing named in a
+    big model - the agent gets only its index: the person names the entities as the model does or adds a synonym."""
+    project(pid)
+    doc = knowledge.get(pid)
+    if not doc["entities"] and not doc["roles"]:
+        return {"empty": True}
+    about = knowledge.touches(doc, body.text[:20_000])
+    return {"empty": False, "whole": await asyncio.to_thread(knowledge.fits, pid), "entities": about.get("entities", []),
+            "roles": about.get("roles", [])}
 
 
 @app.put("/api/projects/{pid}/knowledge")
@@ -2862,10 +2903,18 @@ async def resolve_knowledge(pid: str, body: PendingBody, request: Request):
     """A person decides on updates of existing records (found again by analyses, Planner, tests or
     added by people): each one or all of them."""
     project(pid, "editor")
+    before = knowledge.get(pid)
     try:
-        return knowledge.resolve(pid, None if body.all else body.ids, body.action, request.state.user)
+        out = knowledge.resolve(pid, None if body.all else body.ids, body.action, request.state.user)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # Accepted changes of confirmed parts are confirmed by the decision itself: the runs waiting for them go on, the
+    # tests they touch are marked outdated.
+    changed = knowledge.diff_parts(before, knowledge.get(pid))
+    if changed:
+        _wake_jobs(pid)
+        await asyncio.to_thread(_outdate_by_model, pid, before, changed, request.state.user)
+    return out
 
 
 class SortBody(BaseModel):
@@ -2970,12 +3019,25 @@ async def confirm_knowledge(pid: str, request: Request, body: ConfirmBody | None
         raise HTTPException(409, f"Модель приложения сейчас учится на требованиях «{busy['feature'] or busy['title']}»"
                                  f"{' (запустил ' + busy['by'] + ')' if busy.get('by') else ''}: подтвердите после "
                                  "окончания — модель вот-вот изменится")
+    only = body.units if body else None
+    before = knowledge.get(pid)
+    changed = [u for u in knowledge.confirmation(before)["units"]
+               if u["state"] == "changed" and (only is None or u["unit"] in only)]
     try:
-        doc = knowledge.confirm(pid, request.state.user, body.units if body else None)
+        doc = knowledge.confirm(pid, request.state.user, only)
     except ValueError as e:
         raise HTTPException(400, str(e))
     _wake_jobs(pid)
+    if changed:
+        # The tests written by the parts confirmed with changes may check what is no longer so.
+        await asyncio.to_thread(_outdate_by_model, pid, before, changed, request.state.user)
     return doc
+
+
+def _outdate_by_model(pid: str, doc: dict, changed: list[dict], user: str) -> None:
+    for tid, what in knowledge.changed_tests(pid, doc, changed).items():
+        storage.mark_outdated([tid], "Модель приложения подтверждена с изменениями: " + "; ".join(what[:5]),
+                              "model", "", user)
 
 
 def _wake_jobs(pid: str) -> None:
@@ -3064,9 +3126,16 @@ async def add_scenario(aid: str, body: ScenarioPatch):
 
 
 @app.put("/api/analyses/{aid}/scenarios/{scid}")
-async def update_scenario(aid: str, scid: str, body: ScenarioPatch):
+async def update_scenario(aid: str, scid: str, body: ScenarioPatch, request: Request):
     a = _analysis(aid)
-    return _scenario_call(lambda: analyses.update_scenario(a["project_id"], aid, scid, body.model_dump()))
+    before = next((s for s in a.get("scenarios") or [] if s["id"] == scid), None)
+    out = _scenario_call(lambda: analyses.update_scenario(a["project_id"], aid, scid, body.model_dump()))
+    # The tests written by the scenario check what it said before.
+    what = [f for f in (*analyses.FIELDS, "test_data") if before and (out.get(f) or "") != (before.get(f) or "")]
+    if what and before.get("test_ids"):
+        storage.mark_outdated(before["test_ids"], f"Сценарий «{out.get('title') or before.get('title')}» изменён",
+                              "scenario", f"{aid}:{scid}", request.state.user)
+    return out
 
 
 @app.delete("/api/analyses/{aid}/scenarios/{scid}")
@@ -3273,6 +3342,10 @@ async def fix_findings(aid: str, request: Request):
                                              status=status)
                 analyses.end_work(pid, aid, result=f"Исправлено в ТЗ: {len(result['fixed'])}"
                                   + (f", не удалось: {len(result['failed'])}" if result["failed"] else ""))
+                if result["fixed"]:
+                    marked = _outdate_by_requirements(analyses.get(aid), "ТЗ исправлено по ответам на замечания", user)
+                    if marked:
+                        log(f"Тесты по прежнему тексту ТЗ отмечены «Устарел»: {marked}")
                 send(_review_result(aid, type="done", fixed=result["fixed"], failed=result["failed"],
                                     summary=result["summary"]))
             except asyncio.CancelledError:
@@ -3323,9 +3396,43 @@ class FetchBody(BaseModel):
 async def fetch_requirements(body: FetchBody):
     p = project(body.project_id, "editor")
     try:
-        return await call(sources.fetch(body.link, p))
+        r = await call(sources.fetch(body.link, p))
     except sources.SourceError as e:
         raise HTTPException(400, str(e))
+    return r | {"digest": analyses.digest(r["text"])}       # kept with the analysis: did the source change since
+
+
+@app.post("/api/analyses/{aid}/sources/check")
+async def check_sources(aid: str):
+    """«Сверить с источником»: the Jira issues, Confluence pages and tracker issues the requirements were loaded from,
+    fetched again - which changed since. `text` - what they say now, one after another (as the Requirements tab
+    joins them): the person checks it and sends it as a new version of the requirements."""
+    a = _analysis(aid)
+    p = project(a["project_id"], "editor")
+    if not a.get("sources"):
+        raise HTTPException(400, "Требования не загружались из трекера или Confluence: сверять не с чем")
+    out, parts = [], []
+    for s in a["sources"]:
+        try:
+            r = await call(sources.fetch(s["link"], p))
+        except sources.SourceError as e:
+            out.append(s | {"error": str(e), "checked": time.time()})
+            continue
+        now = analyses.digest(r["text"])
+        out.append(s | {"changed": bool(s.get("digest")) and now != s["digest"], "checked": time.time(), "error": "",
+                        "now": now, "text_now": r["text"], "title_now": r.get("title") or s["title"]})
+    analyses.checked_sources(p["id"], aid, out)
+    changed = [s for s in out if s.get("changed")]
+    if changed:
+        for s in out:
+            text = s.get("text_now", "")
+            if text:
+                title = s["title_now"]
+                parts.append((f"# {title}\n\n" if title and not text.startswith("#") else "") + text.strip())
+    return {"changed": len(changed), "errors": sum(1 for s in out if s.get("error")),
+            "sources": [{k: s.get(k) for k in ("link", "kind", "title", "changed", "error")}
+                        | ({"digest": s["now"]} if s.get("now") else {}) for s in out],
+            "text": "\n\n---\n\n".join(parts) if changed and len(parts) == len(out) else ""}
 
 
 @app.post("/api/requirements/file")

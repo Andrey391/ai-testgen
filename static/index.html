@@ -673,6 +673,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="hint hidden" id="fScen"></div>
     <label>Сценарий</label>
     <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
+    <div class="hint hidden" id="fModel" aria-live="polite"></div>
+    <div class="hint" id="fFree" title="Сценарий из вкладки «Требования» («Тест в Studio») проходит эти проверки">Свой сценарий записывается сразу: студия не проверяет его по требованиям и не ждёт подтверждения модели и учётной записи роли — тест сохранится черновиком, его проверит человек.</div>
     <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div>
     <div class="grid2">
       <div><label>Движок браузера</label>
@@ -885,7 +887,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <option value="draft">Черновики</option><option value="review">На ревью</option><option value="ready">В наборе</option></select>
           <select id="healthFilter" aria-label="Состояние" style="width:auto"><option value="">Любое состояние</option>
             <option value="failing">Падают</option><option value="flaky">Нестабильные</option><option value="quarantined">В карантине</option>
-            <option value="weak">Слабые проверки</option><option value="heal">Самолечение на ревью</option></select>
+            <option value="weak">Слабые проверки</option><option value="heal">Самолечение на ревью</option><option value="outdated">Устаревшие</option></select>
           <select id="layerFilter" aria-label="Слой" style="width:auto"><option value="">UI и API</option><option value="ui">UI</option><option value="api">API</option></select>
           <select id="tagFilter" aria-label="Тег" style="width:auto"><option value="">Все теги</option></select>
         </div>
@@ -1646,6 +1648,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div><label>Срок решения, часов</label><input type="number" min="1" max="720" data-p="decisions.sla_hours" title="«Мои решения» в «Ждёт вас» показывают срок и просроченные"></div>
           </div>
           <div class="hint">«По риску»: тест с долей обнаруженных мутантов не ниже порога, без самолечения и с прошедшим прогоном сразу попадает в регрессионный набор; остальные — на ревью с причиной. Тесты, изменённые агентом, всегда идут на ревью.</div>
+          <div class="hint hidden" id="riskWarn" style="color:var(--warn)">Этап «Проверка качества теста (мутации)» выключен: без него силу проверок не измерить, и «По риску» отправит на ревью каждый тест. Включите этап выше.</div>
           <div class="checks" style="margin-top:8px">
             <label class="inline"><input type="checkbox" data-p="decisions.auto_accept"> Принимать уверенные предложения ревьюера кейсов сами</label>
           </div>
@@ -2325,7 +2328,7 @@ window.addEventListener('beforeunload', e => {
 // ---- «Ждёт вас»: what in the project waits for a person's decision (GET …/inbox) - the bell in the header.
 // Polled every 30 s and when the browser tab is back; other projects are counted on the timer and when it opens.
 const INBOX_KINDS = {job: 'Запуски ждут решения', attention: 'Нужно подтверждение', review: 'Замечания ревьюера',
-  model: 'Модель приложения', heal: 'Ревью самолечения', test_review: 'Тесты ждут ревью', session: 'Прерванные сессии', task: 'Мои задачи'};
+  model: 'Модель приложения', heal: 'Ревью самолечения', test_review: 'Тесты ждут ревью', outdated: 'Устаревшие тесты', session: 'Прерванные сессии', task: 'Мои задачи'};
 let INBOX = null, OTHERS = [], inboxTimer = null, BELL_HTML = '', BELL_PULSE = false;
 function waited(t) {
   const s = Date.now() / 1000 - (t || 0);
@@ -3137,6 +3140,7 @@ async function loadTests() {
         ${t.comments ? `<span class="badge off">💬 ${t.comments}</span>` : ''}
         ${q ? `<span class="badge warn" title="${esc(t.quarantine.reason || '')}">карантин</span>` : ''}
         ${t.proposals ? `<span class="badge warn" title="Самолечение ждёт ревью">ревью локаторов: ${t.proposals}</span>` : ''}
+        ${(t.outdated || []).length ? `<span class="badge warn" title="${esc(t.outdated.map(o => o.why).join('\n'))}">устарел</span>` : ''}
         <div class="muted" style="font-size:12px">${esc(t.url)}</div>
         <div class="chips" style="margin-top:3px">${t.tags.map(x => `<span class="badge">#${esc(x)}</span>`).join('')}<button class="linkbtn" onclick="editTags('${t.id}')">${t.tags.length ? 'теги' : '+ тег'}</button></div></td>
       <td class="wide">${t.steps}</td>
@@ -3529,6 +3533,11 @@ async function acceptBaseline(rid, stepId, btn) {
   catch (e) { notice(btn, e.message); btn.disabled = false; }
 }
 
+async function testCurrent(id, btn) {
+  btn.disabled = true;
+  try { await api('POST', `/api/tests/${id}/current`); toast('Тест отмечен актуальным'); openTest(id, true); loadTests(); pollInbox(false); }
+  catch (e) { notice(btn, e.message); btn.disabled = false; }
+}
 // test details: history, heal review, mutation testing, traffic
 async function openTest(id, quiet) {     // quiet: a refresh of the open test
   OPEN_TEST = id;
@@ -3545,6 +3554,10 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
     <div class="muted" style="font-size:12px">${esc(t.url)} · шагов: ${t.steps.length}${t.authoring_usage?.requests ? ' · генерация' + usageText(t.authoring_usage) : ''}</div>
     ${t.scenario ? `<div class="hint">${esc(t.scenario)}</div>` : ''}
     ${t.quarantine?.on ? `<div class="hint"><span class="badge warn">карантин</span> ${esc(t.quarantine.reason || '')} ${t.quarantine.by ? '· ' + esc(t.quarantine.by) : ''} ${fmtTime(t.quarantine.at)}</div>` : ''}
+    ${(t.outdated || []).length ? `<div class="box next" style="margin-top:8px"><b>Устарел:</b> тест записан до изменений, он может проверять то, чего уже нет.
+      ${t.outdated.map(o => `<div class="hint" style="margin:2px 0">${esc(o.why)}${o.by ? ' · ' + esc(o.by) : ''} · ${fmtTime(o.at)}</div>`).join('')}
+      <div class="row" style="margin-top:6px">${canRole('editor') ? `<button class="btn small" onclick="editInStudio('${t.id}', this)">Править в Studio</button>
+        <button class="btn small" onclick="testCurrent('${t.id}', this)" title="Вы сверили тест с изменениями: он проверяет то, что есть сейчас">Тест актуален</button>` : ''}</div></div>` : ''}
     <div class="hint" id="testLinks"></div>`;
 
   html += `<div class="sub" id="stepsBox">${stepsViewHtml(t)}</div>`;
@@ -3835,9 +3848,9 @@ async function openSuite(sid, quiet) {
       <button class="btn small" onclick="closeDetail('#suiteBox')" aria-label="Закрыть">✕</button></div>
     <div class="bar"><span style="width:${pct(c.passed)};background:var(--ok)"></span><span style="width:${pct(c.flaky)};background:var(--warn)"></span><span style="width:${pct((c.failed || 0) + (c.error || 0))};background:var(--bad)"></span></div>
     <div class="hint">passed ${c.passed || 0} · нестабильных ${c.flaky || 0} · упало ${c.failed || 0} · ошибок ${c.error || 0}${c.quarantined_failed ? ` · из них в карантине ${c.quarantined_failed}` : ''}</div>
-    <table><tbody>${s.items.map(i => `<tr ${i.run_id ? `class="click" onclick="openRun('${i.run_id}')"` : ''}><td><b>${esc(i.name)}</b>${i.quarantined ? ' <span class="badge off">карантин</span>' : ''}
+    <table><tbody>${s.items.map(i => `<tr ${i.run_id ? `class="click" onclick="openRun('${i.run_id}')"` : ''}><td><b>${esc(i.name)}</b>${i.quarantined ? ' <span class="badge off">карантин</span>' : ''}${i.shares ? ` <span class="badge" title="Тест работает с теми же данными стенда, что и другие тесты набора (записей: ${i.shares}): они идут по очереди, а не одновременно">общие данные</span>` : ''}
       ${i.error ? `<div class="err">${esc(i.failed_step ? i.failed_step + ': ' : '')}${esc(i.error)}</div>` : ''}</td>
-      <td>${i.status === 'queued' ? '<span class="muted">в очереди</span>' : runBadge(i.status)}</td><td class="muted">${i.duration != null ? i.duration + ' с' : ''}</td></tr>`).join('')}</tbody></table>`;
+      <td>${i.status === 'queued' ? `<span class="muted">${(i.after || []).some(j => ['queued', 'running'].includes(s.items[j]?.status)) ? 'ждёт тесты с общими данными' : 'в очереди'}</span>` : runBadge(i.status)}</td><td class="muted">${i.duration != null ? i.duration + ' с' : ''}</td></tr>`).join('')}</tbody></table>`;
   if (s.status === 'running') suiteTimer = setTimeout(() => openSuite(sid, true), 1500);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
 }
@@ -4017,6 +4030,28 @@ async function taskToStudio(id) {
   $('#fScenario').focus();
 }
 
+// What of the application model the agent gets for the scenario being typed: a word the model knows by another
+// name leaves the agent without that entity's dependencies and lifecycle - the person sees it and names it.
+let F_MODEL_TIMER = null;
+$('#fScenario').addEventListener('input', () => { clearTimeout(F_MODEL_TIMER); F_MODEL_TIMER = setTimeout(scenarioModel, 700); });
+async function scenarioModel() {
+  const box = $('#fModel'), text = $('#fScenario').value.trim();
+  const hide = () => box.classList.add('hidden');
+  if (!PID || text.length < 15) return hide();
+  let r;
+  try { r = await api('POST', `/api/projects/${PID}/knowledge/touches`, {text}); } catch { return hide(); }
+  if (r.empty) return hide();
+  const link = `<a href="#" onclick="openSettings('data', 'entities');return false">«Тестовые данные → Сущности»</a>`;
+  const named = [...r.entities, ...r.roles.map(x => 'роль ' + x)];
+  box.innerHTML = named.length
+    ? `Агент учтёт из модели приложения: ${named.map(esc).join(', ')}.` + (r.whole ? '' : ` Если чего-то нет — назовите это в сценарии, как в модели, или добавьте сущности другое название в ${link}.`)
+    : r.whole ? 'Сценарий не называет сущностей модели приложения: агент получит модель целиком.'
+      : `Сценарий не называет ни одной сущности модели приложения — агент не узнает их зависимости и жизненный цикл. Назовите их, как в модели, или добавьте сущности другое название (синоним) в ${link}.`;
+  box.classList.remove('hidden');
+}
+// Where the new requirements were loaded from (Jira, Confluence, a tracker): kept with the analysis - «Сверить с
+// источником» later finds whether they changed there.
+let REQ_SOURCES = [], VER_SOURCES = null;
 function appendText(ta, title, text) {
   const cur = ta.value.trim();
   ta.value = (cur ? cur + '\n\n---\n\n' : '') + (title && !text.startsWith('#') ? `# ${title}\n\n` : '') + text.trim();
@@ -4027,6 +4062,7 @@ $('#srcFetch').onclick = async () => {
   try {
     const r = await api('POST', '/api/requirements/fetch', {project_id: PID, link});
     appendText($('#reqText'), r.title, r.text);
+    REQ_SOURCES.push({link: r.source || link, kind: r.kind, title: r.title, digest: r.digest});
     $('#srcStatus').innerHTML = `<span class="ok">Загружено:</span> ${esc({jira: 'Jira', confluence: 'Confluence', youtrack: 'YouTrack', yandex_tracker: 'Яндекс Трекер', kaiten: 'Kaiten'}[r.kind] || r.kind)} · ${esc(r.title)}` +
       (r.truncated ? ' · <span class="err">текст обрезан</span>' : '');
     $('#srcLink').value = '';
@@ -4211,7 +4247,7 @@ function renderAnalysis() {
       <span class="badge ${cls}" title="${busy ? 'Пока идёт работа, действия с этими требованиями недоступны' : 'Шаг, на котором сейчас требования'}">${esc(st)}</span>
       <button class="btn small" id="anDelete" style="color:var(--bad)" ${busy ? 'disabled' : ''} title="Удалить анализ из истории: тесты по его сценариям останутся">Удалить</button></div>
     <div class="hint" style="margin-top:2px">${fmtTime(AN.created)}${AN.user ? ` · ${esc(AN.user)}` : ''}${AN.feature && AN.title && AN.feature !== AN.title ? ` · ${esc(AN.title)}` : ''}</div>
-    ${stepTabs(r, tab, busy)}${lock}
+    ${stepTabs(r, tab, busy)}${pathHtml(r)}${lock}
     ${AN.error ? `<div class="err">${esc(AN.error)}</div>` : ''}
     ${werr ? `<div class="err">${esc(werr)}</div>` : ''}
     ${tab === 'review' ? reqTabHtml(r, busy) : tab === 'findings' ? findTabHtml(r, busy) : tab === 'lifecycle' ? lcTabHtml(r, busy) : scenTabHtml(r, busy)}</div>`;
@@ -4239,6 +4275,25 @@ function stepTabs(r, tab, busy) {
     return `<button class="st ${cls}" onclick="anTab('${k}')"><div class="n">${i + 1}. ${name}</div><div class="c">${esc(cap[k])}</div></button>`;
   }).join('')}</div>`;
 }
+// The whole way from the requirements to test design in the order a person goes it: what is done, what is next.
+// The steps above group it; this list names every action (an answer alone does not unblock - the text is fixed by it).
+function pathHtml(r) {
+  if (r.ready || !AN.review) return '';
+  const ts = (AN.review.themes || []).filter(t => t.blocking);
+  const open = ts.filter(t => t.status === 'open').length, todo = ts.filter(t => t.status === 'todo').length;
+  const steps = [
+    ['Ревьюер проверил ТЗ', r.done.review, r.done.review ? '' : 'шаг 1'],
+    ['Ответить на блокирующие замечания и расхождения или отметить «Не актуально»', !open, open ? `осталось ${open} — шаги 2 и 3` : ''],
+    ['«Исправить ТЗ агентом»: ответы вносятся в текст ТЗ', !open && !todo, todo ? `ждут исправления: ${todo}` : ''],
+    ...(r.learn ? [['Модель приложения учится на ТЗ — сама, когда всё разобрано', r.learned, '']] : []),
+    ...(r.confirm ? [['Подтвердить части модели, которые затрагивает ТЗ', r.state === 'confirmed', r.state === 'confirmed' ? '' : 'шаг 3']] : []),
+    ['«Генерировать тест-кейсы в конвейере»', false, 'шаг 4'],
+  ];
+  const next = steps.findIndex(s => !s[1]);
+  return `<details class="opt" style="margin-top:6px"><summary>Путь к тест-дизайну: дальше — ${esc(steps[next][0])}</summary>
+    <ol style="margin:6px 0 0 18px;padding:0">${steps.map(([name, done, note], i) =>
+      `<li style="${i === next ? 'font-weight:600' : done ? 'color:var(--muted)' : ''}">${done ? '✓ ' : ''}${esc(name)}${note ? ` <span class="muted">— ${esc(note)}</span>` : ''}</li>`).join('')}</ol></details>`;
+}
 const nextBtn = (k, label) => `<button class="btn primary small" onclick="anTab('${k}')">${label} →</button>`;
 const lockBox = text => `<div class="box lock">${text}</div>`;
 // Step 1: the requirements and the reviewer's check of them.
@@ -4265,7 +4320,7 @@ function reqTabHtml(r, busy) {
       ${std ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
       стандарт проекта — в «Проект → Требования».</div>` : '';
   const fixes = revs.filter(x => x.kind !== 'version').length, versions = revs.length - fixes;
-  return versionBox(busy) + head + fit + `
+  return versionBox(busy) + head + sourcesLine() + fit + `
     <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${fixes ? ` · исправлен агентом: ${fixes}` : ''}${versions ? ` · новых версий: ${versions}` : ''}</summary>
       <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
       ${last ? `<details class="opt"><summary>${last.kind === 'version' ? 'Новая версия ТЗ' : 'Последнее исправление'} — ${fmtTime(last.at)}${last.by ? `, ${esc(last.by)}` : ''}</summary>
@@ -4688,7 +4743,29 @@ function checkVersion(btn) {
     return notice(btn, 'Текст не изменился — чтобы проверить его ещё раз, нажмите «Проверить заново» на шаге «Требования».', 'warn');
   VER_OPEN = false; VER_DRAFT = '';
   AN_TAB = 'review';
-  runReview({analysis_id: AN.id, requirements: text});
+  const sources = VER_SOURCES || []; VER_SOURCES = null;
+  runReview({analysis_id: AN.id, requirements: text, sources});
+}
+// «Сверить с источником»: the issues and pages the requirements came from, fetched again; changed - their text now
+// opens as a new version of the requirements for the person to check and send.
+async function checkSources(btn) {
+  btn.disabled = true;
+  let r;
+  try { r = await api('POST', `/api/analyses/${AN.id}/sources/check`); }
+  catch (e) { notice(btn, e.message); btn.disabled = false; return; }
+  btn.disabled = false;
+  if (r.errors && !r.changed) return notice(btn, `Не удалось загрузить источники: ${r.errors}`, 'warn');
+  if (!r.changed) return toast('В источнике ТЗ не изменилось');
+  if (!r.text) return notice(btn, 'ТЗ в источнике изменилось, но часть источников не загрузилась — загрузите новую версию вручную', 'warn');
+  VER_SOURCES = r.sources;
+  openVersion(r.text);
+  toast(`ТЗ в источнике изменилось (${r.changed}): проверьте текст и нажмите «Проверить новую версию»`, 'warn');
+}
+function sourcesLine() {
+  const ss = AN.sources || [];
+  if (!ss.length) return '';
+  return `<div class="hint">Источник: ${ss.map(s => `${esc(s.title || s.link)}${s.changed ? ' <span class="badge warn">изменилось</span>' : ''}${s.error ? ` <span class="badge bad" title="${esc(s.error)}">не загрузилось</span>` : ''}`).join(', ')}
+    ${canRole('editor') ? ` · <button class="linkbtn" onclick="checkSources(this)" title="Загрузить ТЗ из трекера или Confluence заново и сравнить с тем, что проверялось">Сверить с источником</button>` : ''}</div>`;
 }
 // The editor fixes the requirements a theme per request, a few at a time (review.revise): the live card above shows
 // the batches and how the requests in work go (status: the model thinks / writes), each batch done is kept at
@@ -4882,7 +4959,7 @@ function testsHtml(s) {
   if (!tests.length) return '';
   return `<div class="sc-tests"><span class="muted" style="font-size:12px">Тесты:</span>${tests.map(t =>
     `<a href="#" data-test="${t.id}" title="Открыть тест">${esc(t.name)}</a>
-     <span class="badge off">${esc(TEST_STATUS[t.status] || t.status)}</span>${t.last_run ? runBadge(t.last_run.status || (t.last_run.passed ? 'passed' : 'failed')) : ''}`).join(' ')}</div>`;
+     <span class="badge off">${esc(TEST_STATUS[t.status] || t.status)}</span>${t.outdated ? '<span class="badge warn" title="Требования, сценарий или модель изменились после теста: проверьте его">устарел</span>' : ''}${t.last_run ? runBadge(t.last_run.status || (t.last_run.passed ? 'passed' : 'failed')) : ''}`).join(' ')}</div>`;
 }
 function scenRow(s, i) {
   if (!isReady(s)) return `<tr class="sc-row pending" id="sc-row-${s.id}"><td class="num">${i + 1}</td>
@@ -5076,13 +5153,16 @@ async function runReview(body) {
 $('#reqBtn').onclick = () => {
   const requirements = $('#reqText').value.trim();
   if (!requirements) { $('#reqStatus').textContent = 'Вставьте текст требований'; return; }
-  if (!REQ_ABORT) runReview({requirements});
+  if (REQ_ABORT) return;
+  const sources = REQ_SOURCES; REQ_SOURCES = [];
+  runReview({requirements, sources});
 };
 function reviewAnalysis(standard = '') { if (AN && !REQ_ABORT) runReview({analysis_id: AN.id, standard}); }
 function setStudioScen(v) {
   STUDIO_SCEN = v;
   $('#fScen').classList.toggle('hidden', !v);
   $('#fScen').innerHTML = v ? `Тест будет показан под сценарием «${esc(v.title)}» в истории анализа <button class="linkbtn" onclick="setStudioScen(null)">отвязать</button>` : '';
+  $('#fFree').classList.toggle('hidden', !!v);
 }
 // A scenario of the pipeline's common list (with its analysis_id) -> a test written in the Studio.
 async function toStudio(sc, url = '', btn = null) {     // btn: the clicked button, the reason it does nothing goes under it
@@ -6682,7 +6762,16 @@ function showStandard() {
     <details class="opt"><summary>Чем отличаются стандарты</summary><table><tbody>${Object.entries(PROJ.catalog.standards).map(([k, x]) =>
       `<tr${k === sel.value ? ' class="on"' : ''}><td style="width:32%"><b>${esc(x.title)}</b></td><td class="muted">${esc(x.about)}</td></tr>`).join('')}</tbody></table></details>` : '';
 }
+// «По риску» measures a test by its mutants: without the mutation stage every test goes to review anyway.
+function riskWarn() {
+  const pol = $('[data-p="decisions.review_policy"]'), on = $('[data-p="verify.enabled"]');
+  if (pol && on) $('#riskWarn').classList.toggle('hidden', !(pol.value === 'risk' && !on.checked));
+}
+document.addEventListener('change', e => {
+  if (e.target.matches?.('[data-p="decisions.review_policy"], [data-p="verify.enabled"]')) riskWarn();
+});
 function fillProcess() {
+  setTimeout(riskWarn);      // after the fields are filled
   const L = PROJ.llm;
   $('#defModel').textContent = L.model ? `${L.model}, effort ${L.effort || 'модели'}` : 'модель не выбрана';
   $$('.modelIn').forEach(i => i.placeholder = L.model || 'модель не выбрана');
@@ -7051,6 +7140,17 @@ function knAccountSelect(kind, i, value) {
   return `<select data-kn="${kind}" data-i="${i}" data-k="account"><option value="">—</option>${kind === 'roles'
     ? `<option value="none" ${value === 'none' ? 'selected' : ''}>без входа (гость)</option>` : ''}${accs.map(a => `<option value="${a.id}" ${a.id === value ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
 }
+// The draft of the model came from a crawl that saw a part of the application: before confirming it, the person
+// knows what Planner did not reach - confirming a part of the system as the whole of it gives tests a false ground.
+function knExploredHtml(x) {
+  if (!x?.partial) return '';
+  const why = [];
+  if (x.left) why.push(`не открыто ссылок: ${x.left} (лимит ${x.max_pages} страниц)`);
+  if (x.deeper) why.push(`глубже ${x.max_depth} уровней осталось ссылок: ${x.deeper}`);
+  if (!x.logged_in) why.push('без входа в приложение — страницы за входом не видны');
+  return `<div class="box next" style="margin-top:8px"><b>Черновик модели неполный.</b> Planner обошёл ${x.pages} стр.${why.length ? ': ' + why.map(esc).join('; ') : ''}.
+    <div class="hint">Чего Planner не видел, в модели нет — тесты по этим частям получат неверную модель. Перед подтверждением дополните модель требованиями (вкладка «Требования») или сущностями вручную, либо увеличьте лимиты и задайте тест входа в <a href="#" onclick="openSettings('process');return false">«Процесс генерации → Planner»</a> и исследуйте сайт заново.</div></div>`;
+}
 function renderKnConfirm() {
   const c = KN.confirmation || {state: 'none', missing: [], units: []};
   const [label, cls] = KN_CONFIRM[c.state];
@@ -7072,7 +7172,8 @@ function renderKnConfirm() {
   $('#knConfirmState').innerHTML = `<span class="badge ${cls}">Жизненный цикл ${label}</span>` +
     (c.at ? ` <span class="muted" style="font-size:12px">${fmtTime(c.at)}${c.by ? ' · ' + esc(c.by) : ''}</span>` : '') +
     (c.missing?.length ? `<div class="hint">Не хватает: ${c.missing.map(esc).join('; ')}</div>` : '') +
-    (KN.pending.some(p => p.kind !== 'data') ? `<div class="hint">Есть обновления сущностей и ролей, ожидающие решения: <a href="#" onclick="showSub('data', 'pending'); return false">рассмотрите их</a> до подтверждения.</div>` : '');
+    (KN.pending.some(p => p.kind !== 'data') ? `<div class="hint">Есть обновления сущностей и ролей, ожидающие решения: <a href="#" onclick="showSub('data', 'pending'); return false">рассмотрите их</a> до подтверждения.</div>` : '') +
+    knExploredHtml(KN.explored);
   $('#knConfirm').textContent = c.state === 'confirmed' ? 'Подтвердить заново' : 'Подтвердить жизненный цикл';
 }
 

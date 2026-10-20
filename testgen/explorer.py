@@ -223,6 +223,14 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
                         result["skipped"] += 1
                     elif _norm(a["href"]) not in seen:
                         queue.append((a["href"], depth + 1))
+            else:
+                deeper = {_norm(a["href"]) for a in page.get("links", []) if not SKIP.search(a["text"])
+                          and _in_scope(_norm(a["href"]), start)}
+                result["deeper"] = result.get("deeper", 0) + len(deeper - seen)
+        # What the crawl did not reach (the limits of the stage): the model drawn from it is a draft of a part.
+        left = {_norm(u) for u, _ in queue if _in_scope(_norm(u), start) and not SKIP.search(u)} - seen
+        result["limits"] = {"max_pages": cfg["max_pages"], "max_depth": cfg["max_depth"], "left": len(left),
+                            "deeper": result.pop("deeper", 0), "logged_in": bool(login)}
     except Exception as e:
         result.update(status="error", error=str(e).splitlines()[0][:300])
     finally:

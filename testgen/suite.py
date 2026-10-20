@@ -13,6 +13,11 @@ server start them.
 With a shared database (workqueue.py) a suite started from the studio is spread over the
 workers: one worker logs in once (distribute), then every test is its own queue item that
 any worker takes; item_done() records each result and the last one closes the suite.
+
+Tests that share data of the stand (their `data_refs`: records of the application model, not
+recipes made anew on every run) do not run at once: a test that changes a shared object would
+break the other. plan() chains them - the tests that create a record others use first - and
+an item runs after the items before it in each of its chains (`after`); the others run in parallel.
 """
 from __future__ import annotations
 
@@ -55,9 +60,57 @@ def new(project: dict, tests: list[dict], tags: list[str] | None = None, trigger
                     "status": "queued", "run_id": None, "error": "", "failed_step": "", "duration": None}
                    # an API test has no browser: it runs once, not per browser and device
                    for t in tests for b, d in (combos[:1] if t.get("layer") == "api" else combos)]}
+    plan(project["id"], s["items"], tests)
     LIVE[s["id"]] = s
     save(s)
     return s
+
+
+def shared_data(pid: str, tests: list[dict]) -> dict[str, dict[str, str]]:
+    """test id -> {record id: use} of the stand data each test shares with others (`data_refs`; a recipe is made
+    anew on every run and shared by nobody)."""
+    refs = {t["id"]: {r["id"]: r.get("use") or "uses" for r in t.get("data_refs") or [] if r.get("id")}
+            for t in tests}
+    if not any(refs.values()):
+        return refs
+    from . import knowledge
+    recipes = {d["id"] for d in knowledge.get(pid)["data"] if d.get("status") == "recipe"}
+    return {tid: {k: u for k, u in r.items() if k not in recipes} for tid, r in refs.items()}
+
+
+def plan(pid: str, items: list[dict], tests: list[dict]) -> None:
+    """Items that touch the same stand data do not run at once: for each record its items form a chain - the
+    tests that create a record another test of the suite uses first, then in the suite's order - and an item gets
+    `after` (the indices of the items it waits for) and `shares` (how many records it shares). One order for all
+    the chains: they never wait for each other in a circle."""
+    shared = shared_data(pid, tests)
+    used = {k for r in shared.values() for k, u in r.items() if u == "uses"}
+    makers = {tid for tid, r in shared.items() if any(u == "creates" and k in used for k, u in r.items())}
+    last: dict[str, int] = {}
+    for i in sorted(range(len(items)), key=lambda i: (items[i]["test_id"] not in makers, i)):
+        recs = shared.get(items[i]["test_id"]) or {}
+        after = {last[k] for k in recs if k in last}
+        for k in recs:
+            last[k] = i
+        items[i].pop("after", None)
+        if after:
+            items[i]["after"] = sorted(after)
+    users: dict[str, set[str]] = {}
+    for tid, r in shared.items():
+        for k in r:
+            users.setdefault(k, set()).add(tid)
+    for it in items:
+        n = sum(1 for k in shared.get(it["test_id"]) or {} if len(users[k]) > 1)
+        it.pop("shares", None)
+        if n:
+            it["shares"] = n
+
+
+def ready(s: dict) -> list[int]:
+    """Items of a spread suite to queue now: not queued yet, every item they wait for (`after`) finished."""
+    items = s["items"]
+    return [i for i, it in enumerate(items) if it["status"] == "queued" and not it.get("run_id")
+            and all(items[j]["status"] not in ("queued", "running") for j in it.get("after") or [])]
 
 
 def _file(s: dict):
@@ -110,7 +163,17 @@ async def run(project: dict, s: dict, tests: list[dict], headless: bool | None =
                         states[key] = await ensure_login_state(project, creds, browser=await browser_for(
                             first["browser"]), headless=headless, engine=first["browser"], fresh=True)
 
-            async def one(item: dict) -> None:
+            finished = [asyncio.Event() for _ in s["items"]]
+
+            async def one(n: int, item: dict) -> None:
+                try:
+                    # after the items that share its stand data (plan()), whatever their result
+                    await asyncio.gather(*(finished[j].wait() for j in item.get("after") or []))
+                    await run_one(item)
+                finally:
+                    finished[n].set()
+
+            async def run_one(item: dict) -> None:
                 async with gate:
                     test = by_id[item["test_id"]]
                     item["status"] = "running"
@@ -134,7 +197,7 @@ async def run(project: dict, s: dict, tests: list[dict], headless: bool | None =
                         on_item(item)
 
             try:
-                await asyncio.gather(*(one(i) for i in s["items"]))
+                await asyncio.gather(*(one(n, i) for n, i in enumerate(s["items"])))
             finally:
                 for b in browsers.values():
                     await b.close()
@@ -161,9 +224,36 @@ def _close(project: dict, s: dict) -> None:
 
 # ---------- a suite spread over the workers (shared database) ----------
 
-async def distribute(project: dict, s: dict, put, browser_for) -> None:
+def enqueue(project: dict, s: dict, index: int) -> None:
+    """Queue one test of a spread suite for any worker: a run record and its queue item."""
+    from . import workqueue
+    it = s["items"][index]
+    t = storage.load(it["test_id"])
+    if not t:
+        it.update(status="error", error="Тест удалён")
+        return
+    r = runs.new(t, "suite", s["id"], s["user"], live=False)
+    it["run_id"] = r["id"]
+    workqueue.put("run", {"project_id": project["id"], "test_id": it["test_id"], "run_id": r["id"],
+                          "trigger": "suite", "user": s["user"], "browser": it["browser"], "device": it["device"],
+                          "suite_id": s["id"], "index": index}, project["id"], r["id"])
+
+
+def _queue_ready(project: dict, s: dict) -> None:
+    """Queue every item whose wait for the items sharing its data is over (an item that failed to queue lets the
+    ones after it go too)."""
+    while True:
+        todo = ready(s)
+        if not todo:
+            return
+        for i in todo:
+            enqueue(project, s, i)
+
+
+async def distribute(project: dict, s: dict, browser_for) -> None:
     """In a worker: log in once per login of the suite (the saved state is shared through the vault),
-    then queue every test. `put(item_index, run)` queues one; `browser_for(engine)` is the worker's browser."""
+    then queue the tests - those that wait for others sharing their stand data are queued by item_done() when
+    those finish. `browser_for(engine)` is the worker's browser."""
     from .pipeline import ensure_login_state, uses_login_state
     done = set()
     for item in s["items"]:
@@ -176,14 +266,7 @@ async def distribute(project: dict, s: dict, put, browser_for) -> None:
                                          engine=item["browser"], fresh=True)
     with fs.lock(_file(s)):
         s = get(s["id"]) or s
-        for i, item in enumerate(s["items"]):
-            t = storage.load(item["test_id"])
-            if not t:
-                item.update(status="error", error="Тест удалён")
-                continue
-            r = runs.new(t, "suite", s["id"], s["user"], live=False)
-            item["run_id"] = r["id"]
-            put(i, r)
+        _queue_ready(project, s)
         save(s)
     if all(i["status"] not in ("queued", "running") for i in s["items"]):
         _close(project, s)
@@ -218,6 +301,7 @@ def item_done(project: dict, sid: str, index: int, run: dict | None, error: str 
         for k, v in ((run or {}).get("usage") or {}).items():
             if isinstance(v, (int, float)):
                 s["usage"][k] = round(s["usage"].get(k, 0) + v, 6)
+        _queue_ready(project, s)        # the items that waited for this one
         summarize(s)
         if all(i["status"] not in ("queued", "running") for i in s["items"]):
             _close(project, s)

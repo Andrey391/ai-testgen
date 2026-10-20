@@ -118,6 +118,8 @@ class Sql:
             w.append(t.c.body["verify"]["weak"].as_boolean().is_(True))
         elif health == "heal":
             w.append(cls._proposals() > 0)
+        elif health == "outdated":
+            w.append(cls._outdated() > 0)
         with db.engine().connect() as c:
             return [dict(r.body) for r in c.execute(select(t.c.body).where(*w).order_by(t.c.updated.desc()))]
 
@@ -126,6 +128,26 @@ class Sql:
         props = cls.t.c.body["heal_proposals"]
         # SQL does not promise to check the type first: the length only of an array
         return case((func.jsonb_typeof(props) == "array", func.jsonb_array_length(props)), else_=0)
+
+    @classmethod
+    def _outdated(cls):
+        marks = cls.t.c.body["outdated"]
+        return case((func.jsonb_typeof(marks) == "array", func.jsonb_array_length(marks)), else_=0)
+
+    @classmethod
+    def outdated(cls, pid: str) -> list[dict]:
+        """Tests of the project marked outdated (what they were made from changed): {id, name, count, since,
+        author}."""
+        t = cls.t
+        n = cls._outdated()
+        author = t.c.body["author"].astext.label("author")
+        marks = t.c.body["outdated"].label("marks")
+        with db.engine().connect() as c:
+            return [{"id": r.id, "name": r.name or r.id, "count": r.n,
+                     "since": min((m.get("at") or 0 for m in r.marks or []), default=r.updated),
+                     "author": r.author or r.updated_by or ""} for r in c.execute(
+                select(t.c.id, t.c.name, t.c.updated, t.c.updated_by, author, marks, n.label("n")).where(
+                    t.c.project_id == pid, n > 0))]
 
     @classmethod
     def names(cls, pid: str) -> dict[str, str]:

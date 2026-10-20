@@ -13,7 +13,8 @@ Nothing here asks the model: only stored state is read, so the bell can poll it.
     model      the application model: updates to accept, duplicates, parts not confirmed (or changed since)
     heal       tests with self-healing proposals to review
     test_review tests waiting for a person's review (status `review`; drafts are their author's work, not here)
-    session    Studio sessions interrupted by a restart of the studio
+    outdated   tests marked outdated: the requirements, the scenario or the model they were made from changed
+    session   Studio sessions interrupted by a restart of the studio
     task       the user's open tasks overdue or due today
 """
 from __future__ import annotations
@@ -25,7 +26,7 @@ from . import agent, analyses, fs, knowledge, notify, pipeline, projects, review
 from .repo import tasks as tasks_repo
 from . import tasks as tasks_mod
 
-KINDS = ("job", "attention", "review", "model", "heal", "test_review", "session", "task")
+KINDS = ("job", "attention", "review", "model", "heal", "test_review", "outdated", "session", "task")
 JOBS = 30           # the newest runs whose items "нужно подтверждение" are looked at, as the list of runs shows them
 
 # The bell polls every 30 s in every open tab, and «Другие проекты» counts every project: a document is read and
@@ -177,6 +178,20 @@ def _test_review_entries(pid: str) -> list[dict]:
     return out
 
 
+def _outdated_entries(pid: str) -> list[dict]:
+    """The outdated tests, one entry per author: the author looks whether the test still checks what is so."""
+    by: dict[str, list[dict]] = {}
+    for t in storage.outdated(pid):
+        by.setdefault(t.get("author") or "", []).append(t)
+    out = []
+    for author, tests in by.items():
+        title = f"«{tests[0]['name']}»: устарел" if len(tests) == 1 else "Тесты устарели"
+        out.append(_entry("outdated", title + (f" (автор — {author})" if author and len(by) > 1 else ""),
+                          f"/p/{pid}/tests?health=outdated", count=len(tests),
+                          since=min(t["since"] or 0 for t in tests) or None, author=author))
+    return out
+
+
 def _checkpoint_digest(cp: dict) -> dict:
     return {k: cp.get(k) for k in ("id", "name", "scenario", "origin", "updated", "user")}
 
@@ -211,13 +226,14 @@ def project_inbox(pid: str, user: str = "", alive=lambda cp: False) -> list[dict
     checkpoint still runs (not interrupted)."""
     project = projects.get(pid) or {}
     entries = (_job_entries(pid) + _review_entries(pid) + _model_entries(pid, project) + _heal_entries(pid)
-               + _test_review_entries(pid) + _session_entries(pid, alive) + _task_entries(pid, user))
+               + _test_review_entries(pid) + _outdated_entries(pid) + _session_entries(pid, alive) + _task_entries(pid, user))
     route(entries, project)
     return sorted(entries, key=lambda e: (KINDS.index(e["kind"]), e["since"] or 0))
 
 
 # Who decides an entry (decisions.owner_*): by its kind; a wait of a run - by what it waits for.
 OWNER = {"review": "owner_requirements", "model": "owner_model", "heal": "owner_tests", "test_review": "owner_tests",
+         "outdated": "owner_tests",
          "awaiting_review": "owner_requirements", "awaiting_cases": "owner_cases", "awaiting_model": "owner_model"}
 
 
@@ -227,7 +243,7 @@ def owner(entry: dict, dc: dict) -> str:
     "" - anyone."""
     if entry.get("owner"):
         return entry["owner"]
-    if entry["kind"] in ("heal", "test_review") and entry.get("author"):
+    if entry["kind"] in ("heal", "test_review", "outdated") and entry.get("author"):
         return entry["author"]
     key = OWNER.get(entry.get("status") or "") if entry["kind"] == "job" else OWNER.get(entry["kind"])
     named = dc.get(key or "", "") or (dc.get("owner_requirements", "") if key == "owner_cases" else "")

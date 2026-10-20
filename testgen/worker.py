@@ -169,14 +169,7 @@ async def execute(item: dict, w: Worker) -> None:
         s = suite.get(p["suite_id"])
         if not s:
             raise ValueError("Прогон набора удалён")
-
-        def put(index: int, run: dict) -> None:
-            it = s["items"][index]
-            workqueue.put("run", {"project_id": project["id"], "test_id": it["test_id"], "run_id": run["id"],
-                                  "trigger": "suite", "user": s["user"], "browser": it["browser"],
-                                  "device": it["device"], "suite_id": s["id"], "index": index},
-                          project["id"], run["id"])
-        await suite.distribute(project, s, put, w.browser)
+        await suite.distribute(project, s, w.browser)
     elif kind == "verify":
         test = storage.load(p["test_id"])
         if not test:

@@ -642,6 +642,41 @@ def mark_learned(pid: str, aid: str) -> None:
         _change(pid, aid, lambda a: a.update(learned=time.time()))
 
 
+SOURCES_MAX = 20
+
+
+def digest(text: str) -> str:
+    """What a source said, to know later whether it changed (whitespace aside)."""
+    return hashlib.sha256(_norm(text).encode()).hexdigest()[:16]
+
+
+def clean_sources(sources) -> list[dict]:
+    """Where the requirements were loaded from (a Jira issue, a Confluence page, a tracker issue): link, kind,
+    title and the digest of the text loaded then."""
+    out = []
+    for s in sources if isinstance(sources, list) else []:
+        if isinstance(s, dict) and str(s.get("link") or "").strip():
+            out.append({"link": str(s["link"]).strip()[:500], "kind": str(s.get("kind") or "")[:30],
+                        "title": str(s.get("title") or "")[:200], "digest": str(s.get("digest") or "")[:64]})
+    return out[:SOURCES_MAX]
+
+
+def set_sources(pid: str, aid: str, sources: list[dict]) -> None:
+    """The sources of the requirements of the analysis (its new version replaces them)."""
+    sources = clean_sources(sources)
+    if sources:
+        _change(pid, aid, lambda a: a.update(sources=[s | {"at": time.time()} for s in sources]))
+
+
+def checked_sources(pid: str, aid: str, sources: list[dict]) -> None:
+    """The result of a check of the sources against what they say now: `changed`, `checked`, `error`."""
+    def fn(a):
+        by = {s["link"]: s for s in sources}
+        a["sources"] = [s | {k: by[s["link"]][k] for k in ("changed", "checked", "error") if k in by.get(s["link"], {})}
+                        for s in a.get("sources") or []]
+    _change(pid, aid, fn)
+
+
 def reviewed(a: dict) -> bool:
     """The reviewer has a report on the requirements of the analysis."""
     return bool(a.get("review"))
@@ -687,7 +722,7 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     if confirm and a.get("project_id"):
         doc = doc or knowledge.get(a["project_id"])
         units = knowledge.units_for(a["project_id"], text, doc)
-        c = knowledge.confirmation(doc, units)
+        c = knowledge.confirmed_for(a["project_id"], text, doc)
         state = c["state"]
         parts = [u for u in c["units"] if units is None or u["unit"] in units]
         if state != "confirmed":
@@ -815,6 +850,7 @@ def view(a: dict) -> dict:
             if t:
                 last = t.get("last_run") or {}
                 tests.append({"id": t["id"], "name": t["name"], "status": storage.status(t),
+                              "outdated": bool(t.get("outdated")),
                               "last_run": {k: last.get(k) for k in ("status", "passed", "at")} if last else None})
         out["scenarios"].append({"layer": "ui"} | {k: v for k, v in s.items() if k != "added"} | {"tests": tests})
     return out
