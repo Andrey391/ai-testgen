@@ -11,8 +11,10 @@ whose path lies under the start path (/catalog -> /catalog/42, not /admin); from
 the site root that is the whole site. It only ever follows <a href> links with GET: no clicks, no
 form submissions, and links that look like they change state (log out, delete,
 unsubscribe...) or download files are skipped - the same "no irreversible
-actions" rule the authoring agent follows. To explore behind a login, the
-project names a saved test (explore.login_test) that is replayed first.
+actions" rule the authoring agent follows. To explore behind a login, a saved test is
+replayed first: the one named in explore.login_test, otherwise the project's login test
+(the role "login", «Сделать тестом входа»). A map of one or two pages with a login form
+and no login test says so (`login_wall`, LOGIN_WALL): the application is behind a login.
 
 Maps are kept in data/projects/<id>/explore/; the latest one also gives the
 screen coverage: which pages no saved test visits.
@@ -33,6 +35,8 @@ SKIP = re.compile(r"log-?out|sign-?out|выход|выйти|delete|remove|destr
                   r"deactivat|\.(pdf|zip|rar|7z|exe|msi|dmg|docx?|xlsx?|pptx?|csv|mp4|mp3)(\?|$)", re.I)
 MAX_REQUIREMENTS = 60_000
 MAP_TITLE = "# Карта приложения"
+LOGIN_WALL = ("Приложение за входом: запишите тест входа в Studio и отметьте «Сделать тестом входа» "
+              "(«Тесты → Ещё ▾»), затем исследуйте сайт ещё раз")
 LIVE: dict[str, dict] = {}
 
 PAGE_JS = r"""() => {
@@ -146,6 +150,21 @@ def find_test(pid: str, ref: str) -> dict | None:
     return next((t for t in storage.all_tests(pid) if t["name"].strip().lower() == ref.strip().lower()), None)
 
 
+def login_test(project: dict) -> dict | None:
+    """The test replayed to log in before the crawl: explore.login_test, otherwise the project's login test."""
+    named = project["pipeline"]["explore"].get("login_test", "")
+    if named:
+        return find_test(project["id"], named)
+    return next((t for t in storage.all_tests(project["id"]) if t.get("role") == "login"), None)
+
+
+def login_wall(result: dict) -> bool:
+    """One or two pages and a login form among them: the crawl stopped at the login."""
+    pages = [p for p in result["pages"] if not p.get("error")]
+    return 0 < len(pages) <= 2 and any(x.get("type") == "password" for p in pages
+                                       for f in p.get("forms") or [] for x in f.get("fields") or [])
+
+
 async def _login(bs: BrowserSession, test: dict) -> None:
     for i, step in enumerate(test["steps"]):
         bs.step_index = i
@@ -186,9 +205,9 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
                    "start": start, "at": time.time(), "status": "running", "pages": [], "skipped": 0,
                    "error": ""})
     # The requests the pages make go into the API catalog (traffic.catalog): endpoints for API tests.
+    login = login_test(project)
     bs = await BrowserSession.launch(headless=cfg["headless"], record_traffic=True)
     try:
-        login = find_test(project["id"], cfg.get("login_test", ""))
         if login:
             bs.credentials = storage.credentials(login)
             if log:
@@ -229,6 +248,9 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
         result["api"] = traffic.endpoints(bs.traffic or [], start)
         await bs.close()
     if result["status"] == "running":
+        result["login_wall"] = not login and login_wall(result)
+        if result["login_wall"] and log:
+            log(LOGIN_WALL)
         if learn:
             await learn_model(project, result, log)
         result["status"] = "done"
