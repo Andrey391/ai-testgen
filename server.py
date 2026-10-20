@@ -2797,8 +2797,10 @@ def _ndjson(queue: asyncio.Queue) -> StreamingResponse:
 
 @app.get("/api/projects/{pid}/knowledge")
 async def get_knowledge(pid: str):
-    project(pid)
-    return knowledge.view(pid)
+    p = project(pid)
+    # the latest crawl stopped at the login form and the project still has no login test
+    wall = bool((explorer.latest(pid) or {}).get("login_wall")) and not explorer.login_test(p)
+    return knowledge.view(pid) | {"login_wall": explorer.LOGIN_WALL if wall else ""}
 
 
 @app.put("/api/projects/{pid}/knowledge")

@@ -276,6 +276,25 @@ def test_explorer_scope_is_start_page_and_children():
     assert _in_scope("https://app.test/app/list.html", "https://app.test/app/index.html")
     assert not _in_scope("https://app.test/list.html", "https://app.test/app/index.html")
 
+def test_explorer_logs_in_with_the_login_test_and_says_when_it_stopped_at_login(project, save_test):
+    """Planner replays the project's login test when explore.login_test is empty; a map of the login page alone
+    says the application is behind a login."""
+    from testgen import explorer
+
+    assert explorer.login_test(project) is None
+    login = save_test("Вход", [], role="login")
+    save_test("Каталог", [])
+    assert explorer.login_test(projects.get(project["id"]))["id"] == login["id"]
+    p = projects.get(project["id"])
+    p["pipeline"]["explore"]["login_test"] = "Каталог"
+    assert explorer.login_test(p)["name"] == "Каталог"            # the one named in the settings wins
+
+    form = {"forms": [{"fields": [{"type": "text"}, {"type": "password"}]}]}
+    assert explorer.login_wall({"pages": [{"url": "/login"} | form]})
+    assert not explorer.login_wall({"pages": [{"url": "/login"}]})
+    assert not explorer.login_wall({"pages": [{"url": f"/{i}"} | form for i in range(3)]})   # got past it
+    assert not explorer.login_wall({"pages": []})
+
 def test_record_and_play_acts_as_a_user_would():
     """Record & Play: the action follows from the element clicked; a field and a list ask for the value."""
     from testgen.agent import VALUE_ACTIONS, auto_action

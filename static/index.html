@@ -1278,7 +1278,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div class="grid3">
               <div><label>Страниц не больше</label><input type="number" min="1" max="100" data-p="explore.max_pages"></div>
               <div><label>Глубина переходов</label><input type="number" min="1" max="5" data-p="explore.max_depth"></div>
-              <div><label>Тест входа (имя или id)</label><input data-p="explore.login_test" placeholder="Вход в систему"></div>
+              <div><label>Тест входа (имя или id)</label><input data-p="explore.login_test" placeholder="По умолчанию — тест входа проекта"></div>
             </div>
             <div class="checks" style="margin-top:8px"><label class="inline"><input type="checkbox" data-p="explore.headless"> Без окна браузера</label></div>
           </div>
@@ -1367,6 +1367,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               <div class="row" style="margin-top:6px"><input id="knMeetUrl" class="grow" placeholder="Адрес, с которого начать — по умолчанию адрес проекта">
                 <button class="btn primary" id="knMeetBtn">Исследовать сайт</button></div>
               <div class="muted" id="knMeetMsg"></div></div>
+            <div class="box warn hidden" id="knLoginWall"></div>
             <div class="kn-tiles" id="knTiles"></div>
             <div id="knLimits"></div>
             <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Интернет-магазин: каталог, категории, товары, корзина, заказы, оплата, доставка, покупатели"></textarea>
@@ -1672,6 +1673,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div><label>На проект в месяц</label><input type="number" min="0" step="0.01" data-p="budget.month"></div>
             <div><label>Валюта</label><select data-p="budget.currency"><option value="USD">$</option><option value="RUB">₽</option></select></div>
           </div>
+          <div class="box bad hidden" id="budgetPrice"></div>
           <div class="sub" id="usageBox"></div>
         </div>
 
@@ -6682,6 +6684,23 @@ function showStandard() {
     <details class="opt"><summary>Чем отличаются стандарты</summary><table><tbody>${Object.entries(PROJ.catalog.standards).map(([k, x]) =>
       `<tr${k === sel.value ? ' class="on"' : ''}><td style="width:32%"><b>${esc(x.title)}</b></td><td class="muted">${esc(x.about)}</td></tr>`).join('')}</tbody></table></details>` : '';
 }
+// models of the project and its stages without a price in «Проект → Модель»: their requests count as free, so limits do not stop them
+function unpricedModels() {
+  const models = [PROJ.llm.model, ...Object.values(PROJ.pipeline).map(s => s && typeof s === 'object' ? (s.model || '').trim() : '')].filter(Boolean);
+  const keys = Object.entries(PROJ.llm.prices || {}).filter(([, p]) => p && (+p[0] || +p[1])).map(([k]) => k);
+  return [...new Set(models)].filter(m => !keys.some(k => m === k || m.startsWith(k + '-')));
+}
+function budgetPriceText(budget) {
+  const set = ['session', 'job', 'month'].some(k => +budget[k] > 0), none = unpricedModels();
+  return set && none.length ? `Лимиты не работают для ${none.map(m => '«' + m + '»').join(', ')}: у модели нет цены, и её запросы считаются бесплатными. Задайте цены в «Проект → Модель».` : '';
+}
+function renderBudgetPrice() {
+  const box = $('#budgetPrice'); if (!box) return;
+  const text = budgetPriceText(readProcess().budget);
+  box.innerHTML = text ? esc(text).replace('«Проект → Модель»', `<a href="#" onclick="showSub('model'); return false">«Проект → Модель»</a>`) : '';
+  box.classList.toggle('hidden', !text);
+}
+$$('[data-p^="budget."]').forEach(el => el.addEventListener('input', renderBudgetPrice));
 function fillProcess() {
   const L = PROJ.llm;
   $('#defModel').textContent = L.model ? `${L.model}, effort ${L.effort || 'модели'}` : 'модель не выбрана';
@@ -6710,7 +6729,7 @@ function fillProcess() {
   });
   showStandard();
   $$('[data-csv]').forEach(el => el.value = (getPath(PROJ.pipeline, el.dataset.csv) || []).join(', '));
-  syncStages();
+  syncStages(); renderBudgetPrice();
 }
 
 // option lists: a counter and "all / none" above the tiles
@@ -6801,7 +6820,9 @@ $$('[data-save-process]').forEach(btn => btn.onclick = async () => {
   const msg = btn.parentElement.querySelector('[data-proc-msg]');
   try {
     PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: readProcess()});
-    fillProcess(); $$('[data-proc-msg]').forEach(m => m.textContent = ''); msg.textContent = 'Сохранено';
+    fillProcess(); $$('[data-proc-msg]').forEach(m => m.textContent = '');
+    const warn = budgetPriceText(PROJ.pipeline.budget);
+    msg.textContent = warn ? 'Сохранено. ' + warn : 'Сохранено';
     $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
     renderDesignChoices();
   } catch (e) { msg.textContent = e.message; }
@@ -7451,6 +7472,8 @@ async function loadKnowledge() {
   try { doc = await api('GET', `/api/projects/${PID}/knowledge`); await refreshProject(); }   // users found by tests are accounts
   catch (e) { $('#knMsg').textContent = e.message; return; }
   if (KN_PID !== PID) Object.keys(KN_UI).forEach(k => delete KN_UI[k]);
+  const wall = $('#knLoginWall');           // the crawl stopped at the login form: the model is empty without a login test
+  wall.textContent = doc.login_wall || ''; wall.classList.toggle('hidden', !doc.login_wall); delete doc.login_wall;
   KN = doc; KN_PID = PID; KN_DIRTY = false; KN_DUPS = null;
   renderKnowledge();
   if (KN_SEC === 'dups' && !$('[data-subpanel="data"]').classList.contains('hidden')) knCheckDups();
@@ -7834,7 +7857,9 @@ async function watchMeet() {
   }
   KN_MEET = null; $('#knMeetBtn').disabled = false;
   if (r.status !== 'done') { $('#knMeetMsg').textContent = r.error || 'Обход не удался'; return; }
-  $('#knMeetMsg').textContent = `Готово: страниц ${r.pages.length}. ${last} Проверьте черновик ниже и подтвердите жизненный цикл — требования, кейсы и тесты дополнят модель.`;
+  $('#knMeetMsg').textContent = r.login_wall
+    ? `Обход остановился на входе: страниц ${r.pages.length}.`
+    : `Готово: страниц ${r.pages.length}. ${last} Проверьте черновик ниже и подтвердите жизненный цикл — требования, кейсы и тесты дополнят модель.`;
   loadKnowledge();
 }
 
