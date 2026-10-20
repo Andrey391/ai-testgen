@@ -76,6 +76,8 @@ def test_every_kind_of_decision_is_seen(client, open_studio, monkeypatch):
                   "heal_proposals": []})
     storage.save({"project_id": pid, "name": "Доработан", "url": p["base_url"], "scenario": "", "steps": [],
                   "status": "review"})
+    old = storage.save({"project_id": pid, "name": "Устарел", "url": p["base_url"], "scenario": "", "steps": []})
+    storage.mark_outdated([old["id"]], "Новая версия ТЗ", "requirements", "a1")
     fs.write_json(agent._checkpoints(pid) / "sess01.json", {"id": "sess01", "name": "Регистрация", "steps": [],
                                                            "updated": 7})
     fs.write_json(agent._checkpoints(pid) / "sess02.json", {"id": "sess02", "name": "Из конвейера", "steps": [],
@@ -101,6 +103,8 @@ def test_every_kind_of_decision_is_seen(client, open_studio, monkeypatch):
     assert heal["count"] == 2 and heal["route"] == f"/p/{pid}/tests/{t['id']}"
     [tr] = k["test_review"]
     assert tr["count"] == 1 and tr["route"] == f"/p/{pid}/tests?status=review"
+    [od] = k["outdated"]
+    assert od["count"] == 1 and od["route"] == f"/p/{pid}/tests?health=outdated"
     [sess] = k["session"]
     assert sess["route"] == f"/p/{pid}/studio/sess01"
     assert [e["route"].rsplit("/", 1)[1] for e in k["task"]] == [mine["id"], k["task"][1]["route"].rsplit("/", 1)[1]]

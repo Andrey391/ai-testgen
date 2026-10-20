@@ -195,7 +195,8 @@ def _clean_confirmed(c) -> dict | None:
     if not isinstance(c, dict) or not (c.get("sig") or c.get("units")):
         return None
     units = {str(u)[:120]: {k: v.get(k) for k in ("at", "by", "sig")} | (
-                 {"snap": v["snap"]} if isinstance(v.get("snap"), dict) else {})
+                 {"snap": v["snap"]} if isinstance(v.get("snap"), dict) else {}) | (
+                 {"accepted": True} if v.get("accepted") else {})     # by accepting an update of it
              for u, v in (c.get("units") or {}).items() if isinstance(v, dict) and v.get("sig")}
     return {"at": c.get("at"), "by": c.get("by") or "", **({"sig": c["sig"]} if c.get("sig") else {}),
             **({"units": units} if units else {})}
@@ -412,11 +413,25 @@ def _usage(pid: str) -> dict[str, list[dict]]:
     return out
 
 
+def explored(pid: str) -> dict | None:
+    """What the latest crawl of Planner (the draft of the model) did not reach, for the person confirming the model:
+    {pages, at, max_pages, max_depth, left - links in scope not visited, deeper - links below the depth, logged_in,
+    partial - it saw only a part of the application}; None - no crawl."""
+    from . import explorer
+    m = explorer.latest(pid)
+    if not m:
+        return None
+    lim = m.get("limits") or {}
+    out = {"pages": len(m.get("pages") or []), "at": m.get("finished") or m.get("at")} | lim
+    out["partial"] = bool(lim) and (lim.get("left", 0) > 0 or lim.get("deeper", 0) > 0 or not lim.get("logged_in"))
+    return out
+
+
 def view(pid: str) -> dict:
     doc = get(pid)
     return doc | {"confirmation": confirmation(doc), "duplicates": len(duplicates(doc)),
                   "role_accounts": role_accounts(pid, doc), "data_tests": _usage(pid),
-                  "limits": {k: [len(doc[k]), LIMITS[k]] for k in LIMITS}}
+                  "limits": {k: [len(doc[k]), LIMITS[k]] for k in LIMITS}, "explored": explored(pid)}
 
 
 def is_confirmed(pid: str, only: list[str] | None = None) -> bool:
@@ -451,6 +466,94 @@ def units_for(pid: str, sc: dict | str, doc: dict | None = None) -> list[str] | 
         return None
     groups = {e["group"] for e in doc["entities"] if e["id"] in sel["entities"]}
     return [u for u in units(doc) if u in groups or u == ROLES_UNIT]
+
+
+def diff_parts(before: dict, after: dict) -> list[dict]:
+    """The parts confirmed in `before` that changed in `after`: [{unit, title, changes}] (unit_changes)."""
+    done = _confirmed_units(before)
+    out = []
+    for u in units(after):
+        if u in done and u in units(before) and unit_signature(before, u) != unit_signature(after, u):
+            snap = unit_snapshot(before, u)
+            out.append({"unit": u, "title": unit_title(u),
+                        "changes": unit_changes(after, u, snap) if snap is not None else None})
+    return out
+
+
+def confirmed_for(pid: str, sc: dict | str, doc: dict | None = None) -> dict:
+    """confirmation() of the parts a test of the scenario `sc` (or of a text) needs (units_for()). The roles are
+    one part, but a scenario works with its own roles: roles changed since they were confirmed that the scenario
+    does not name do not hold it (`units` - that part counts as confirmed for it, with `other_roles`). The part of
+    the roles without a snapshot (too big) holds every scenario."""
+    doc = doc or get(pid)
+    only = units_for(pid, sc, doc)
+    c = confirmation(doc, only)
+    if c["state"] == "confirmed":
+        return c
+    mine = {norm(n) for n in touches(doc, sc).get("roles", [])}
+    units = []
+    for u in c["units"]:
+        ch = u.get("changes")
+        if u["unit"] == ROLES_UNIT and u["state"] == "changed" and ch:
+            names = {norm(n) for n in ch["added"] + ch["removed"] + [x["name"] for x in ch["changed"]]}
+            if not names & mine:
+                u = u | {"state": "confirmed", "other_roles": True}
+        units.append(u)
+    states = [u["state"] for u in units if only is None or u["unit"] in only]
+    if states and all(s == "confirmed" for s in states):
+        return c | {"state": "confirmed", "units": units}
+    return c | {"units": units}
+
+
+def touches(doc: dict, sc: dict | str | None = None, test: dict | None = None) -> dict:
+    """What of the model a scenario (or its text) or a saved test is about: {entities, roles} - names (the entities
+    with what they require first), {} - it names nothing of the model."""
+    if test is not None:
+        f = focus(text=f"{test.get('name') or ''}\n{test.get('scenario') or ''}",
+                  records=[r.get("id") for r in test.get("data_refs") or [] if r.get("id")])
+    else:
+        f = focus(sc) if isinstance(sc, dict) else focus(text=sc or "")
+    sel = _select(doc, f)
+    if sel is None:
+        return {}
+    ents = {e["id"]: e for e in doc["entities"]}
+    return {"entities": [ents[i]["name"] for i in sel["entities"] if i in ents],
+            "roles": [r["name"] for r in doc["roles"] if r["id"] in sel["roles"]]}
+
+
+def changed_tests(pid: str, doc: dict, changed: list[dict]) -> dict[str, list[str]]:
+    """The saved tests a change of confirmed parts of the model touches: `changed` - the parts (confirmation()
+    units, state "changed") with their `changes`; -> test id -> what of it changed, for the person. A test that
+    names nothing of the model is not touched; a part without a snapshot (too big) - every test about the part."""
+    from . import storage
+    out: dict[str, list[str]] = {}
+    tests = storage.all_tests(pid)
+    for u in changed:
+        ch = u.get("changes")
+        names = None if ch is None else {norm(n): n for n in ch["removed"] + [c["name"] for c in ch["changed"]]}
+        fields = {} if ch is None else {norm(c["name"]): [f["field"] for f in c["fields"]] for c in ch["changed"]}
+        roles = u["unit"] == ROLES_UNIT
+        group = {norm(e["name"]) for e in doc["entities"] if e["group"] == u["unit"]}
+        for t in tests:
+            if t.get("role") == "module":
+                continue
+            about = touches(doc, test=t)
+            if not about:
+                continue
+            mine = {norm(n): n for n in about["roles" if roles else "entities"]}
+            if names is None:
+                hit = [mine[k] for k in mine if roles or k in group]
+                if hit:
+                    out.setdefault(t["id"], []).append(unit_title(u["unit"]))
+                continue
+            for k in mine.keys() & names.keys():
+                what = ", ".join(FIELD_TITLES.get(f, f) for f in fields.get(k, [])) or "удалено из модели"
+                out.setdefault(t["id"], []).append(f"{names[k]} ({what})")
+    return out
+
+
+FIELD_TITLES = {"depends_on": "зависимости", "lifecycle": "жизненный цикл", "create": "кто создаёт",
+                "rules": "правила", "capabilities": "возможности", "restrictions": "ограничения"}
 
 
 def _about(doc: dict, about: str) -> tuple[list[str], list[str]]:
@@ -1506,6 +1609,10 @@ def resolve(pid: str, ids: list[str] | None, action: str, user: str = "") -> dic
         raise ValueError("Неизвестное действие")
     with fs.lock(_path(pid)):
         doc = get(pid)
+        before = set(units(doc))
+        # The parts confirmed before: what a person accepts here is their decision on that very change, it does not
+        # ask for a confirmation of the part once more (a part new by this decision is confirmed by it too).
+        held = {u for u, v in _confirmed_units(doc).items() if u in before and v.get("sig") == unit_signature(doc, u)}
         for p in [p for p in doc["pending"] if ids is None or p["id"] in ids]:
             doc["pending"].remove(p)
             if action == "reject":
@@ -1522,6 +1629,14 @@ def resolve(pid: str, ids: list[str] | None, action: str, user: str = "") -> dic
             else:
                 _apply(target, p["changes"])
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
+        if held and action != "reject":
+            now, done = time.time(), dict(_confirmed_units(out))
+            for u in units(out):
+                if (u in held or u not in before) and (done.get(u) or {}).get("sig") != unit_signature(out, u):
+                    snap = unit_snapshot(out, u)
+                    done[u] = {"at": now, "by": user, "sig": unit_signature(out, u), "accepted": True} | (
+                        {"snap": snap} if snap is not None else {})
+            out["confirmed"] = (out.get("confirmed") or {}) | {"units": done}
         _write(pid, out)
     return view(pid)
 

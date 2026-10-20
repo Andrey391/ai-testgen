@@ -181,6 +181,7 @@ def edit_steps(test_id: str, given: list[dict]) -> dict | None:
         t["heal_proposals"] = [p for p in t.get("heal_proposals") or [] if p["step_id"] in ids]
         if before != [(s["id"], s.get("value"), s.get("locator")) for s in steps]:
             t.pop("verify", None)      # the mutation result was about other steps
+            t.pop("outdated", None)    # a person brought the steps up to date
     return update(test_id, change)
 
 
@@ -283,6 +284,39 @@ def agent_edited(t: dict, reason: str) -> None:
     t["review"] = {"status": "review", "by": "конвейер", "at": time.time(), "reason": reason}
 
 
+OUTDATED_MAX = 10       # reasons kept on a test
+
+
+def mark_outdated(test_ids, why: str, kind: str, ref: str = "", user: str = "") -> list[str]:
+    """What the test was made from changed after it - a new version of the requirements, an edited scenario, a
+    part of the application model confirmed with changes (`kind`; `ref` - which one, a reason of the same kind and
+    ref replaces the earlier one): the test may check what is no longer so. It stays as it is and keeps running; a
+    person looks at it - re-records or edits it (that clears the mark), or says it is still up to date
+    (clear_outdated). -> the ids of the tests marked."""
+    done = []
+    for tid in dict.fromkeys(i for i in test_ids if i):
+        def change(t: dict) -> None:
+            keep = [x for x in t.get("outdated") or [] if (x.get("kind"), x.get("ref")) != (kind, ref)]
+            t["outdated"] = (keep + [{"kind": kind, "ref": ref, "why": why[:300], "at": time.time(),
+                                      "by": user}])[-OUTDATED_MAX:]
+        if update(tid, change):
+            done.append(tid)
+    return done
+
+
+def clear_outdated(test_id: str, user: str = "") -> dict | None:
+    """A person checked the test against what changed: it is up to date."""
+    def change(t: dict) -> None:
+        if t.pop("outdated", None):
+            t["outdated_cleared"] = {"by": user, "at": time.time()}
+    return update(test_id, change)
+
+
+def outdated(project_id: str) -> list[dict]:
+    """Tests of the project marked outdated: {id, name, count, since, author}."""
+    return repo.Sql.outdated(project_id)
+
+
 def module_calls(tests: list[dict]) -> dict[str, list[dict]]:
     """{module id: [{id, name} of the tests calling it with a use_module step]}."""
     used: dict[str, list[dict]] = {}
@@ -321,7 +355,7 @@ def select(project_id: str, tags: list[str] | None = None, test_ids: list[str] |
                                 ready=not include_drafts, modules=False)
 
 
-HEALTH = ("failing", "flaky", "quarantined", "weak", "heal")   # the «Тесты» filters and the dashboard tiles
+HEALTH = ("failing", "flaky", "quarantined", "weak", "heal", "outdated")   # the «Тесты» filters and the dashboard tiles
 LAYERS = ("ui", "api")
 
 
@@ -344,7 +378,7 @@ def list_tests(project_id: str, tag: str = "", q: str = "", status: str = "", he
         hist = histories.get(t["id"]) or []
         out.append({k: t.get(k) for k in ("id", "project_id", "name", "url", "scenario", "updated",
                                           "last_run", "external", "engine", "quarantine", "verify",
-                                          "authoring_usage", "account", "layer")}
+                                          "authoring_usage", "account", "layer", "outdated")}
                    | {"steps": len(t.get("steps", [])), "tags": t.get("tags") or [], "role": t.get("role") or "",
                       "status": repo.status(t), "comments": len(t.get("comments") or []),
                       "data_steps": len(t.get("before") or []) + len(t.get("after") or []),

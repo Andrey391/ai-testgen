@@ -819,8 +819,8 @@ class Job:
             if item.get("skipped"):
                 continue
             why = ("cases" if self.cases and case_review.unsettled([sc]) else
-                   "model" if doc is not None and knowledge.confirmation(
-                       doc, knowledge.units_for(self.project_id, sc, doc))["state"] != "confirmed" else
+                   "model" if doc is not None and knowledge.confirmed_for(
+                       self.project_id, sc, doc)["state"] != "confirmed" else
                    "reuse" if item["status"] not in DONE_ITEMS and reuse.pending(item.get("match")) else "")
             self._mark(item, why)
             if why:

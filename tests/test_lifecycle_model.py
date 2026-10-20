@@ -65,8 +65,10 @@ def test_lifecycle_is_confirmed_and_a_change_asks_again():
     assert knowledge.is_confirmed(pid)          # the known entity is not changed until a person accepts it
     [p] = [p for p in doc["pending"] if p["kind"] == "entities"]
     assert p["changes"] == {"depends_on": ["Товар", "Адрес доставки"]} and p["source"] == "Studio: тест"
+    # A person accepts the change itself: that decision confirms the changed part, it is not asked again.
     knowledge.resolve(pid, [p["id"]], "accept", "bob")
-    assert not knowledge.is_confirmed(pid)
+    assert knowledge.is_confirmed(pid)
+    assert any(u.get("accepted") and u["by"] == "bob" for u in knowledge.get(pid)["confirmed"]["units"].values())
 
 
 def test_scenario_test_data_is_recorded_and_reused():
