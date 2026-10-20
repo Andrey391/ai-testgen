@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextvars
 import copy
+import json
 import os
 import re
 import time
@@ -268,6 +269,46 @@ def counts() -> dict[str, int]:
 
 STATUSES = ("draft", "review", "ready")     # a test from the agent goes to regression after a person's review
 status = repo.status        # draft (written by the agent) -> review -> ready (in the regression suite). Older: ready
+
+
+def agent_edited(t: dict, reason: str) -> None:
+    """The steps of `t` were changed by the agent without a person (the pipeline refined the test or strengthened
+    its assertions): a test of the regression suite goes back to review, with the reason. Use inside update()."""
+    if status(t) == "draft":
+        return
+    t["status"] = "review"
+    t["review_reason"] = reason
+    t["review"] = {"status": "review", "by": "конвейер", "at": time.time(), "reason": reason}
+
+
+def module_calls(tests: list[dict]) -> dict[str, list[dict]]:
+    """{module id: [{id, name} of the tests calling it with a use_module step]}."""
+    used: dict[str, list[dict]] = {}
+    for t in tests:
+        for s in t.get("steps") or []:
+            if s.get("action") != "use_module":
+                continue
+            try:
+                mid = json.loads(s.get("value") or "{}").get("module")
+            except (ValueError, AttributeError):
+                continue
+            calls = used.setdefault(str(mid or ""), [])
+            if not any(c["id"] == t["id"] for c in calls):
+                calls.append({"id": t["id"], "name": t.get("name") or t["id"]})
+    return used
+
+
+def module_callers(test_id: str) -> list[dict]:
+    """Tests of the project that call `test_id` as a module: a module in use is not deleted (their runs would fail)."""
+    pid = repo.Sql.locate(test_id)
+    if pid is None:
+        return []
+    return [c for c in module_calls(all_tests(pid)).get(test_id, []) if c["id"] != test_id]
+
+
+def under_review(project_id: str) -> list[dict]:
+    """Tests waiting for a person's review (status `review`): {id, name, updated}."""
+    return repo.Sql.under_review(project_id)
 
 
 def select(project_id: str, tags: list[str] | None = None, test_ids: list[str] | None = None,

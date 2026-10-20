@@ -9,6 +9,7 @@ only stored state is read, so the bell can poll it.
     review     requirements with findings of the reviewer that block test design, not settled yet
     model      the application model: updates to accept, duplicates, parts not confirmed (or changed since)
     heal       tests with self-healing proposals to review
+    test_review tests waiting for a person's review (status `review`; drafts are their author's work, not here)
     session    Studio sessions interrupted by a restart of the studio
     task       the user's open tasks overdue or due today
 """
@@ -21,7 +22,7 @@ from . import agent, analyses, fs, knowledge, notify, pipeline, projects, review
 from .repo import tasks as tasks_repo
 from . import tasks as tasks_mod
 
-KINDS = ("job", "attention", "review", "model", "heal", "session", "task")
+KINDS = ("job", "attention", "review", "model", "heal", "test_review", "session", "task")
 JOBS = 30           # the newest runs whose items "нужно подтверждение" are looked at, as the list of runs shows them
 
 # The bell polls every 30 s in every open tab, and «Другие проекты» counts every project: a document is read and
@@ -149,6 +150,15 @@ def _heal_entries(pid: str) -> list[dict]:
                    since=t["updated"] or None) for t in storage.healing(pid)]
 
 
+def _test_review_entries(pid: str) -> list[dict]:
+    tests = storage.under_review(pid)
+    if not tests:
+        return []
+    title = f"«{tests[0]['name']}»: тест ждёт ревью" if len(tests) == 1 else "Тесты ждут ревью"
+    return [_entry("test_review", title, f"/p/{pid}/tests?status=review", count=len(tests),
+                   since=min(t["updated"] or 0 for t in tests) or None)]
+
+
 def _checkpoint_digest(cp: dict) -> dict:
     return {k: cp.get(k) for k in ("id", "name", "scenario", "origin", "updated")}
 
@@ -182,7 +192,7 @@ def project_inbox(pid: str, user: str = "", alive=lambda cp: False) -> list[dict
     checkpoint still runs (not interrupted)."""
     project = projects.get(pid) or {}
     entries = (_job_entries(pid) + _review_entries(pid) + _model_entries(pid, project) + _heal_entries(pid)
-               + _session_entries(pid, alive) + _task_entries(pid, user))
+               + _test_review_entries(pid) + _session_entries(pid, alive) + _task_entries(pid, user))
     return sorted(entries, key=lambda e: (KINDS.index(e["kind"]), e["since"] or 0))
 
 

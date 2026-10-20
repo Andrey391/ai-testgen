@@ -1846,6 +1846,7 @@ async def test_meta(tid: str, body: MetaBody, request: Request):
         if body.status is not None and body.status != storage.status(t):
             t["status"] = body.status
             t["review"] = {"status": body.status, "by": request.state.user, "at": time.time()}
+            t.pop("review_reason", None)
     return storage.update(tid, change)
 
 
@@ -1959,6 +1960,11 @@ async def traffic_to_before(tid: str, index: int):
 
 @app.delete("/api/tests/{tid}")
 async def delete_test(tid: str):
+    callers = storage.module_callers(tid)
+    if callers:
+        # Their runs would fail on «Модуль не найден»: the calls are replaced or removed first.
+        raise HTTPException(409, {"message": "Тест — модуль, его вызывают другие тесты: сначала уберите из них "
+                                             "вызов модуля", "used_by": callers})
     return {"ok": storage.delete(tid)}
 
 
@@ -2880,17 +2886,8 @@ async def reusable_blocks(pid: str):
     their sections and the tests that call them."""
     project(pid)
     tests = storage.all_tests(pid)
-    used: dict[str, list[str]] = {}
-    for t in tests:
-        for s in t.get("steps") or []:
-            if s.get("action") == "use_module":
-                try:
-                    mid = json.loads(s.get("value") or "{}").get("module")
-                except ValueError:
-                    continue
-                used.setdefault(mid, [])
-                if t["name"] not in used[mid]:
-                    used[mid].append(t["name"])
+    used = {mid: list(dict.fromkeys(c["name"] for c in calls))
+            for mid, calls in storage.module_calls(tests).items()}
     mods = [{"id": m["id"], "name": m["name"], "steps": len(m.get("steps") or []),
              "section": blocks.section_label(m.get("section") or [], blocks.module_start(m)
                                              or blocks.path_key(m.get("url") or "")),

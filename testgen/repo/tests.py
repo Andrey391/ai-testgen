@@ -161,6 +161,14 @@ class Sql:
                 select(t.c.id, t.c.name, t.c.updated, n.label("n")).where(t.c.project_id == pid, n > 0))]
 
     @classmethod
+    def under_review(cls, pid: str) -> list[dict]:
+        """Tests of the project with the status `review`: {id, name, updated}."""
+        t = cls.t
+        with db.engine().connect() as c:
+            return [{"id": r.id, "name": r.name or r.id, "updated": r.updated} for r in c.execute(
+                select(t.c.id, t.c.name, t.c.updated).where(t.c.project_id == pid, t.c.status == "review"))]
+
+    @classmethod
     def counts(cls) -> dict[str, int]:
         with db.engine().connect() as c:
             return dict(c.execute(select(cls.t.c.project_id, func.count()).group_by(cls.t.c.project_id)).all())

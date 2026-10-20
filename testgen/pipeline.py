@@ -1103,7 +1103,10 @@ class Job:
             self._log(f"«{sc['title']}»: {problem}", "warn")
             return None
         scenario = f"{test.get('scenario', '')}\n\nДоработка: {sc['title']}\n{scenario_text(sc)}".strip()
-        test = storage.update(test["id"], lambda t: t.update(steps=steps, scenario=scenario))
+        def change(t: dict) -> None:
+            t.update(steps=steps, scenario=scenario)
+            storage.agent_edited(t, f"Доработан конвейером по сценарию «{sc['title']}»")
+        test = storage.update(test["id"], change)
         if not test:
             item["status"], item["error"] = "needs_attention", "Прежний тест удалён — откройте сессию в Studio"
             return None
@@ -1183,7 +1186,10 @@ class Job:
             self._log(f"«{name}»: агент не усилил проверки — откройте сессию в Studio", "warn")
             return
         steps = s.to_test()["steps"]
-        storage.update(test["id"], lambda t: t.update(steps=steps))
+        def change(t: dict) -> None:
+            t["steps"] = steps
+            storage.agent_edited(t, "Проверки усилены агентом после мутационного тестирования")
+        storage.update(test["id"], change)
         test["steps"] = steps
         await s.close(discard=True)
         self.sessions.pop(s.id, None)

@@ -1749,8 +1749,8 @@ const api = async (method, url, body, signal) => {
   }
   if (r.status === 401 && !url.startsWith('/api/auth/')) { showLogin(); throw new Error('Требуется вход'); }
   if (!r.ok) {
-    let m = r.statusText; try { m = (await r.json()).detail || m } catch {}
-    const e = new Error(m); e.status = r.status; e.preflight = r.headers.get('X-Preflight') || '';
+    let m = r.statusText, data = null; try { data = (await r.json()).detail; m = data?.message || data || m } catch {}
+    const e = new Error(m); e.status = r.status; e.data = data; e.preflight = r.headers.get('X-Preflight') || '';
     e.limit = +(r.headers.get('X-Session-Limit') || 0); throw e;
   }
   return r.status === 204 ? null : r.json();
@@ -2260,7 +2260,7 @@ window.addEventListener('beforeunload', e => {
 // ---- «Ждёт вас»: what in the project waits for a person's decision (GET …/inbox) - the bell in the header.
 // Polled every 30 s and when the browser tab is back; other projects are counted on the timer and when it opens.
 const INBOX_KINDS = {job: 'Запуски ждут решения', attention: 'Нужно подтверждение', review: 'Замечания ревьюера',
-  model: 'Модель приложения', heal: 'Ревью самолечения', session: 'Прерванные сессии', task: 'Мои задачи'};
+  model: 'Модель приложения', heal: 'Ревью самолечения', test_review: 'Тесты ждут ревью', session: 'Прерванные сессии', task: 'Мои задачи'};
 let INBOX = null, OTHERS = [], inboxTimer = null, BELL_HTML = '', BELL_PULSE = false;
 function waited(t) {
   const s = Date.now() / 1000 - (t || 0);
@@ -3213,7 +3213,17 @@ async function delTest(id) {
                         actions: [{label: 'Удалить тест', value: true, kind: 'danger'}]});
   if (!ok) return;
   try { await api('DELETE', `/api/tests/${id}`); }
-  catch (e) { toast(e.message, 'bad'); return; }
+  catch (e) {
+    const used = e.data?.used_by;
+    if (e.status === 409 && used?.length) {
+      // A module in use: deleting it would fail every test calling it («Модуль не найден»).
+      const go = await ask({title: 'Модуль используется — тест не удалён', subject: name, cancel: 'Закрыть',
+        text: `${e.message}. Вызывают: ${used.map(u => `«${u.name}»`).join(', ')}.`,
+        actions: used.slice(0, 3).map(u => ({label: `Открыть «${u.name}»`, value: u.id}))});
+      if (go) openTest(go);
+    } else toast(e.message, 'bad');
+    return;
+  }
   if (OPEN_TEST === id) closeDetail('#testBox');
   toast(name ? `Тест «${name}» удалён` : 'Тест удалён');
   loadTests();
@@ -3484,6 +3494,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
       ${st !== 'ready' ? `<button class="btn primary small" onclick="setStatus('${t.id}', 'ready');openTest('${t.id}', true)">Проверен — в набор</button>` : ''}
       ${st === 'draft' ? `<button class="btn small" onclick="setStatus('${t.id}', 'review');openTest('${t.id}', true)">На ревью</button>` : ''}</div>
     ${t.review ? `<div class="hint">${esc(t.review.by)} · ${fmtTime(t.review.at)}</div>` : ''}
+    ${st === 'review' && t.review_reason ? `<div class="hint"><b>Почему на ревью:</b> ${esc(t.review_reason)} — шаги изменил агент без человека; проверьте их, прежде чем вернуть тест в набор.</div>` : ''}
     <div class="hint">Тест, записанный агентом, входит в регрессию только после проверки человеком. Комментарии — к шагам или ко всему тесту.</div>
     ${[{id: '', description: 'Весь тест'}, ...t.steps].map((s, i) => {
       const cs = comments.filter(c => c.step_id === s.id);
