@@ -4,6 +4,7 @@
     python -m testgen.run --project Shop --test "Login" --test 3f9a1c2b7e --headed
     python -m testgen.run --project Shop --browser firefox --browser webkit
     python -m testgen.run --project Shop --list
+    python -m testgen.run --project Shop --base-url https://stage.shop.example
 
 Tests, settings and history come from the studio's database (TESTGEN_DATABASE_URL and
 TESTGEN_SECRET_KEY, as the studio has them); the run is recorded there too. The application
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="run in this browser (repeatable; default: the project's run.browsers)")
     ap.add_argument("--screen", default="", help="screen size of this run, e.g. 1366x768 (default: the project's "
                                                  "run.devices; desktop 1920x1080)")
+    ap.add_argument("--base-url", default="", help="the stand of this run, e.g. https://stage.example.com: "
+                    "addresses recorded on the test's site go there (default: the project's stand address)")
     ap.add_argument("--headed", action="store_true", help="show the browser windows")
     ap.add_argument("--list", action="store_true", help="only list the tests that would run")
     ap.add_argument("--include-drafts", action="store_true", help="also drafts and tests under review")
@@ -75,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     if not project:
         print(f"Project not found: {args.project}", file=sys.stderr)
         return 2
+    if args.base_url:
+        if not args.base_url.startswith(("http://", "https://")):
+            print(f"--base-url must start with http:// or https://: {args.base_url}", file=sys.stderr)
+            return 2
+        project = project | {"base_url": args.base_url}      # this run only, the project is not changed
     tests = pick_tests(project, storage.normalize_tags(args.tag), args.test, args.include_drafts)
     if not tests:
         print("No tests to run" + (f" with tags {', '.join(args.tag)}" if args.tag else ""), file=sys.stderr)
