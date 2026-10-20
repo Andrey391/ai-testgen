@@ -655,7 +655,9 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     """The way of the requirements to test design, step by step (STEPS): review - the reviewer checked the
     document and the lifecycle, both checks finished; findings - every finding that blocks test design is
     settled; lifecycle - the application model learned from the requirements ("requirements.learn_model") and a
-    person confirmed the parts of it they touch ("requirements.confirm_model"). Scenarios, and tests from them,
+    person confirmed the parts of it they touch ("requirements.confirm_model"), and every update of the model these
+    requirements proposed (knowledge.pending_from: a record the model already had) is accepted or rejected -
+    `updates`, else the scenarios are designed by the model before the text. Scenarios, and tests from them,
     are designed only when all are done: `ready`; `settled` - the review alone (findings and checks, not the
     model) is done; `blocked` - why not, for the person; `step` - the first one
     left. `units` - the parts of the model to confirm (None - all of it) with `parts` - their state."""
@@ -682,6 +684,13 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     learned = bool(a.get("learned"))
     if rv and learn and not learned:
         blocked.append("модель приложения ещё не обновлена по этим требованиям")
+    updates = []
+    if learned and a.get("project_id") and a.get("id"):
+        doc = doc or knowledge.get(a["project_id"])
+        updates = [{k: p.get(k) for k in ("id", "kind", "match", "target")} | {"name": p["item"].get("name", "")}
+                   for p in knowledge.pending_from(doc, a["id"])]
+        if updates:
+            blocked.append(f"не разобраны обновления модели из этих требований: {len(updates)}")
     confirm = bool(cfg.get("confirm_model"))
     units, parts, state = None, [], "confirmed"
     if confirm and a.get("project_id"):
@@ -698,12 +707,12 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     done = {"review": bool(rv) and not set(errors) - {LIFECYCLE_CHECK}}
     done["findings"] = done["review"] and len(left) == len(lc_left)
     done["lifecycle"] = (bool(rv) and LIFECYCLE_CHECK not in errors and not lc_left and (not learn or learned)
-                         and state == "confirmed")
+                         and not updates and state == "confirmed")
     step = next((s for s in STEPS[:-1] if not done[s]), "scenarios")
     return {"ready": not blocked, "blocked": blocked, "step": step, "done": done,
             "settled": bool(rv) and not errors and not left,
             "left": len(left) - len(lc_left), "lifecycle_left": len(lc_left),
-            "learn": learn, "learned": learned, "confirm": confirm, "units": units, "parts": parts,
+            "learn": learn, "learned": learned, "updates": updates, "confirm": confirm, "units": units, "parts": parts,
             "state": state, "missing": knowledge.missing(doc) if doc else []}
 
 

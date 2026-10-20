@@ -251,7 +251,7 @@ def test_the_last_finding_dismissed_teaches_the_model_in_the_background(monkeypa
     client = _client(monkeypatch)
     gate = threading.Event()
 
-    async def extract(project, text, user=""):
+    async def extract(project, text, user="", origin=""):
         while not gate.is_set():
             await asyncio.sleep(0.02)
         return knowledge.get(project["id"])
