@@ -122,7 +122,7 @@ def test_the_model_learns_only_when_every_finding_is_settled(monkeypatch, fake_l
     monkeypatch.setattr(auth, "ENABLED", False)
     learned = []
 
-    async def extract(project, text, user=""):
+    async def extract(project, text, user="", origin=""):
         learned.append(text)
         return knowledge.get(project["id"])
     monkeypatch.setattr(knowledge, "extract", extract)
@@ -184,7 +184,7 @@ def test_the_pipeline_teaches_the_model_only_settled_requirements(monkeypatch, f
     p = _project("Конвейер", requirements={"learn_model": True, "validate": True}, scenarios={"select": "all"})
     learned = []
 
-    async def extract(project, text, user=""):
+    async def extract(project, text, user="", origin=""):
         learned.append(text)
         return knowledge.get(project["id"])
     monkeypatch.setattr(knowledge, "extract", extract)
@@ -493,3 +493,34 @@ def test_an_answer_cut_off_keeps_the_complete_edits(monkeypatch, fake_llm):
     assert out["fixed"] == ["d0", "l0", "vq0"] and out["failed"] == {}
     assert "[d0]" not in asked[1] and "[l0]" in asked[1] and "[vq0]" in asked[1]
     assert out["requirements"].count("не редактирует") == 1 and "статус «новый»" in out["requirements"]
+
+
+def test_updates_of_the_model_from_the_requirements_hold_test_design(monkeypatch):
+    """What the requirements change in records the model already had waits in «Обновления»: test design from them
+    waits for a person to decide on it, else the scenarios would be designed by the model before the text."""
+    import server
+    monkeypatch.setattr(auth, "ENABLED", False)
+    p = _project("Обновления", requirements={"learn_model": True, "confirm_model": False})
+    knowledge.merge(p["id"], {"entities": [{"name": "Заказ", "lifecycle": "новый → оплачен"}]})
+    a = analyses.create(p["id"], SPEC, "", "ann")
+    clean = validation.Validation(summary="", score=100, verdict="ready", sections=[], findings=[], questions=[])
+    analyses.set_review(p["id"], a["id"], {"validation": clean.model_dump(),
+                                           "lifecycle": {"summary": "", "conflicts": [], "questions": []}})
+    knowledge.merge(p["id"], {"entities": [{"name": "Заказ", "lifecycle": "новый → оплачен → отправлен"}]},
+                    origin=a["id"])
+    knowledge.merge(p["id"], {"entities": [{"name": "Товар"}, {"name": "Заказ", "create": "покупатель"}]})
+    analyses.mark_learned(p["id"], a["id"])
+    [up] = knowledge.pending_from(knowledge.get(p["id"]), a["id"])      # the later finding joined the proposal
+    assert up["origins"] == [a["id"]] and knowledge.pending_from(knowledge.get(p["id"]), "другой") == []
+
+    r = analyses.readiness(analyses.get(a["id"]))
+    assert not r["ready"] and not r["done"]["lifecycle"] and r["step"] == "lifecycle" and r["settled"]
+    assert "не разобраны обновления модели из этих требований: 1" in r["blocked"]
+    assert [u["id"] for u in r["updates"]] == [up["id"]] and r["updates"][0]["name"] == "Заказ"
+
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    res = client.post(f"/api/projects/{p['id']}/knowledge/pending", json={"action": "accept", "ids": [up["id"]]})
+    assert res.status_code == 200, res.text
+    r = analyses.readiness(analyses.get(a["id"]))
+    assert r["ready"] and r["done"]["lifecycle"] and r["updates"] == []
+    assert "отправлен" in next(e for e in knowledge.get(p["id"])["entities"] if e["name"] == "Заказ")["lifecycle"]

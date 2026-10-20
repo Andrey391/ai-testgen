@@ -25,7 +25,9 @@ data/projects/<id>/knowledge.json is moved there when it is read):
     pending    updates waiting for a person (merge()): a record found again (the same or a similar name -
                a duplicate) is not changed silently, the update is proposed; a new entity or role found
                automatically once the lifecycle was confirmed (match "new") is not added silently either -
-               a person accepts or rejects each one or all of them at once (resolve())
+               a person accepts or rejects each one or all of them at once (resolve()); `origins` - the
+               analyses of requirements whose text proposed it (extract(origin=...)): test design from those
+               requirements waits until a person decides on it (pending_from(), analyses.readiness())
     confirmed  who confirmed the lifecycle of the system and when, per unit (`units`: a group of entities,
                ROLES_UNIT - the roles and their capabilities) with its signature: tests are generated only
                from a confirmed model (the setting "requirements.confirm_model", the pipeline waits), and a
@@ -232,7 +234,21 @@ def _clean_pending(p: dict) -> dict | None:
             "changes": changes, "reason": str(p.get("reason") or "")[:500],
             "roles": [str(r)[:120] for r in p.get("roles") or [] if r][:20],
             "before": {f: v for f, v in (p.get("before") or {}).items() if f in changes},
-            "source": str(p.get("source") or "")[:200], "at": p.get("at") or time.time()}
+            "source": str(p.get("source") or "")[:200],
+            "origins": [str(o)[:40] for o in p.get("origins") or [] if o][-MAX_ORIGINS:],
+            "at": p.get("at") or time.time()}
+
+
+MAX_ORIGINS = 20
+
+
+def _origins(*lists, origin: str = "") -> list[str]:
+    return list(dict.fromkeys([o for x in lists for o in x or []] + ([origin] if origin else [])))[-MAX_ORIGINS:]
+
+
+def pending_from(doc: dict, origin: str) -> list[dict]:
+    """The updates of the model a text proposed (the id of its analysis) and nobody decided on yet."""
+    return [p for p in doc.get("pending") or [] if origin and origin in (p.get("origins") or [])]
 
 
 def save(pid: str, doc: dict, user: str = "") -> dict:
@@ -1003,10 +1019,12 @@ EXPLORE = """The text is not a specification but the map of the site made by an 
 SOURCES = {"requirements": ("Requirements", "", "требования"), "explore": ("Map of the site", EXPLORE, "Planner")}
 
 
-async def extract(project: dict, requirements: str, user: str = "", source: str = "requirements") -> dict:
+async def extract(project: dict, requirements: str, user: str = "", source: str = "requirements",
+                  origin: str = "") -> dict:
     """Add what the requirements (or a map of the site, `source="explore"`) say about entities,
     dependencies, lifecycles, roles and the data on the stand to the model. The model is shown the part
-    of the current model the text names (with the index of the rest), so a large one fits the request."""
+    of the current model the text names (with the index of the rest), so a large one fits the request.
+    origin - the analysis of the requirements: the updates they propose remember it (pending_from())."""
     pid = project["id"]
     cfg = project["pipeline"]["requirements"]
     title, extra, label = SOURCES[source]
@@ -1022,7 +1040,7 @@ async def extract(project: dict, requirements: str, user: str = "", source: str 
         raise RuntimeError("Модель не смогла выделить сущности из требований")
     found = reply.parsed.model_dump()
     found["data"] = [d | {"source": label} for d in found.get("data") or []]
-    out = merge(pid, found, user, source=label)
+    out = merge(pid, found, user, source=label, origin=origin)
     try:                            # the stand data in doubt goes to its section; what is unclear asks a person
         if to_sort(out):
             await sort(project, user=user)
@@ -1403,7 +1421,8 @@ def _apply(item: dict, changes: dict) -> None:
         item[f] = list(dict.fromkeys(item[f] + list(v or [])))[-_cap(f):] if f in LISTS else v
 
 
-def _join(doc: dict, kind: str, item: dict, source: str, added: set, manual: bool = False) -> None:
+def _join(doc: dict, kind: str, item: dict, source: str, added: set, manual: bool = False,
+          origin: str = "") -> None:
     """An incoming record joins the model: a new one is added; one that repeats a stored record (the
     same or a similar name) proposes an update of it, and a person confirms it (resolve()). A new entity
     or role found automatically once the lifecycle was confirmed is proposed too (match "new"): the
@@ -1417,10 +1436,12 @@ def _join(doc: dict, kind: str, item: dict, source: str, added: set, manual: boo
             if prev:                        # found again before a person decided: one proposal
                 _apply(prev["item"], {f: v for f, v in _changes(kind, prev["item"], item).items()})
                 prev["changes"] = {f: prev["item"][f] for f in FIELDS[kind] if prev["item"][f]}
+                prev["origins"] = _origins(prev.get("origins"), origin=origin)
                 return
             doc["pending"].append({"id": _id(), "kind": kind, "target": "", "match": "new", "item": item,
                                    "changes": {f: item[f] for f in FIELDS[kind] if item[f]}, "before": {},
-                                   "source": source or item.get("source") or "", "at": time.time()})
+                                   "source": source or item.get("source") or "", "origins": _origins(origin=origin),
+                                   "at": time.time()})
             doc["pending"] = doc["pending"][-MAX_PENDING:]
             return
         doc[kind].append(item)
@@ -1440,6 +1461,7 @@ def _join(doc: dict, kind: str, item: dict, source: str, added: set, manual: boo
         _apply(old, changes)
         return
     prev = next((p for p in doc["pending"] if p["kind"] == kind and p["target"] == old["id"]), None)
+    origins = _origins((prev or {}).get("origins"), origin=origin)
     if prev:                                # one proposal per record: the newer finding joins it
         doc["pending"].remove(prev)
         joined = prev["changes"] | changes
@@ -1450,15 +1472,15 @@ def _join(doc: dict, kind: str, item: dict, source: str, added: set, manual: boo
         match = "same" if prev["match"] == match == "same" else "similar"
     doc["pending"].append({"id": _id(), "kind": kind, "target": old["id"], "match": match, "item": item,
                            "changes": changes, "before": {f: old[f] for f in changes},
-                           "source": source or item.get("source") or "", "at": time.time()})
+                           "source": source or item.get("source") or "", "origins": origins, "at": time.time()})
     doc["pending"] = doc["pending"][-MAX_PENDING:]
 
 
-def merge(pid: str, found: dict, user: str = "", source: str = "") -> dict:
+def merge(pid: str, found: dict, user: str = "", source: str = "", origin: str = "") -> dict:
     """Entities, roles and stand data found automatically join the model: new ones are added; a record
     that is already there (by name, data by entity and name; the same or a similar one - a duplicate)
     is not changed silently: its update waits in `pending` for a person (resolve()). `source` - who found
-    them (requirements, Planner, a test in Studio)."""
+    them (requirements, Planner, a test in Studio); `origin` - the analysis of requirements they come from."""
     with fs.lock(_path(pid)):
         doc = get(pid)
         if found.get("summary") and not doc["summary"]:
@@ -1470,7 +1492,7 @@ def merge(pid: str, found: dict, user: str = "", source: str = "") -> dict:
                 if item and item["name"]:
                     if kind == "data":       # one category per entity of the model, however a finding names it
                         item["entity"] = _entity_name(doc, item["entity"])
-                    _join(doc, kind, item, item.get("source") or source or user, added)
+                    _join(doc, kind, item, item.get("source") or source or user, added, origin=origin)
         out = normalize(doc) | {"updated": time.time(), "updated_by": user or doc.get("updated_by", "")}
         _write(pid, out)
     return out

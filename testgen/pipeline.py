@@ -673,7 +673,7 @@ class Job:
         learn = None
         a = analyses.get(self.analysis_id) if self.analysis_id else None
         if cfg["requirements"].get("learn_model") and learn_from and not (a or {}).get("learned")                 and self.review is None:
-            learn = asyncio.create_task(knowledge.extract(project, learn_from, self.user))
+            learn = asyncio.create_task(knowledge.extract(project, learn_from, self.user, origin=self.analysis_id))
 
         try:
             await self._scenarios(project, cfg, requirements)
@@ -990,7 +990,7 @@ class Job:
                 tried = True
                 self._log("Требования разобраны: модель приложения учится на них — новое ждёт подтверждения")
                 try:
-                    doc = await knowledge.extract(project, learn_from, self.user)
+                    doc = await knowledge.extract(project, learn_from, self.user, origin=self.analysis_id)
                     analyses.mark_learned(self.project_id, self.analysis_id)
                     self._log(f"Модель приложения обновлена: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}")
                 except Exception as e:

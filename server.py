@@ -2684,7 +2684,7 @@ async def _learn_reviewed(p: dict, aid: str, user: str, log=None) -> str:
     text = a["requirements"]
     say("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
     try:
-        doc = await knowledge.extract(p, text, user)
+        doc = await knowledge.extract(p, text, user, origin=aid)
     except Exception as e:      # the model is a help: the review is done without it
         line = f"Модель приложения не обновлена: {llm.api_error_text(e)}"
         say(line)
@@ -2836,7 +2836,7 @@ async def extract_knowledge(pid: str, body: ExtractBody, request: Request):
     if a:       # a work on the analysis: one at a time, its progress on any page (_analysis_work)
         async def learn(log):
             log("Модель приложения учится на требованиях: новое и изменения ждут подтверждения в «Тестовых данных»…")
-            doc = await knowledge.extract(p, a["requirements"], request.state.user)
+            doc = await knowledge.extract(p, a["requirements"], request.state.user, origin=a["id"])
             analyses.mark_learned(pid, a["id"])
             line = f"Модель приложения: сущностей {len(doc['entities'])}, ролей {len(doc['roles'])}"
             log(line)
@@ -2863,9 +2863,11 @@ async def resolve_knowledge(pid: str, body: PendingBody, request: Request):
     added by people): each one or all of them."""
     project(pid, "editor")
     try:
-        return knowledge.resolve(pid, None if body.all else body.ids, body.action, request.state.user)
+        out = knowledge.resolve(pid, None if body.all else body.ids, body.action, request.state.user)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _wake_jobs(pid)     # the updates from requirements a run waits for are decided (analyses.readiness)
+    return out
 
 
 class SortBody(BaseModel):
