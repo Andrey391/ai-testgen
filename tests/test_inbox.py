@@ -74,6 +74,8 @@ def test_every_kind_of_decision_is_seen(client, open_studio, monkeypatch):
                       "heal_proposals": [{"id": "x1", "step_id": "s1"}, {"id": "x2", "step_id": "s2"}]})
     storage.save({"project_id": pid, "name": "Без предложений", "url": p["base_url"], "scenario": "", "steps": [],
                   "heal_proposals": []})
+    storage.save({"project_id": pid, "name": "Доработан", "url": p["base_url"], "scenario": "", "steps": [],
+                  "status": "review"})
     fs.write_json(agent._checkpoints(pid) / "sess01.json", {"id": "sess01", "name": "Регистрация", "steps": [],
                                                            "updated": 7})
     fs.write_json(agent._checkpoints(pid) / "sess02.json", {"id": "sess02", "name": "Из конвейера", "steps": [],
@@ -97,6 +99,8 @@ def test_every_kind_of_decision_is_seen(client, open_studio, monkeypatch):
     assert routes["pending"]["count"] == 1 and "не подтверждён" in routes["overview"]["title"]
     [heal] = k["heal"]
     assert heal["count"] == 2 and heal["route"] == f"/p/{pid}/tests/{t['id']}"
+    [tr] = k["test_review"]
+    assert tr["count"] == 1 and tr["route"] == f"/p/{pid}/tests?status=review"
     [sess] = k["session"]
     assert sess["route"] == f"/p/{pid}/studio/sess01"
     assert [e["route"].rsplit("/", 1)[1] for e in k["task"]] == [mine["id"], k["task"][1]["route"].rsplit("/", 1)[1]]
