@@ -762,6 +762,10 @@ class StudioSession:
                                    "visual_threshold": self.run_cfg["visual_threshold"],
                                    "project_id": self.project_id,
                                    "base_url": self.project.get("base_url") or _origin(self.url), "own_vars": []}
+                if self.base_steps:
+                    # A saved test replays on the project's stand, wherever it was recorded (steps.rebase).
+                    self.bs.options.update(stand_url=self.project.get("base_url") or "",
+                                           recorded_origins=[_origin(self.url)])
             self.bs.credentials = self.credentials
             conns = [c for c in self.connections if c["id"] in self.cfg.get("tool_connections", [])
                      and c.get("enabled", True) and c["preset"] != "playwright"]

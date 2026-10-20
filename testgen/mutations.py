@@ -268,7 +268,7 @@ async def verify(project: dict, test: dict, log=None) -> dict:
     try:
         probe = ApiProbe()
         base = await runner.run_test(test, headless=cfg["headless"], credentials=creds, cfg=RUN_CFG,
-                                     browser=browser, hooks=probe)
+                                     browser=browser, hooks=probe, base_url=project.get("base_url", ""))
         if not base["passed"]:
             failed = next(r for r in base["results"] if r["status"] == "failed")
             result.update(status="baseline_failed", error=f"Тест падает без мутаций: {failed['description']} — "
@@ -281,7 +281,7 @@ async def verify(project: dict, test: dict, log=None) -> dict:
         for m in mutants:
             hooks = Hooks(m)
             rep = await runner.run_test(test, headless=cfg["headless"], credentials=creds, cfg=RUN_CFG,
-                                        browser=browser, hooks=hooks)
+                                        browser=browser, hooks=hooks, base_url=project.get("base_url", ""))
             failed_at = next((i for i, r in enumerate(rep["results"]) if r["status"] == "failed"), None)
             if not hooks.applied or (failed_at is not None and failed_at < m.step):
                 outcome = "invalid"      # not applied, or the run broke before the mutant took effect

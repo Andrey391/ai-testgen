@@ -34,13 +34,13 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 from pydantic import BaseModel
 
 from . import checks, fs, knowledge, llm, skills, testdata
 from .browser import BrowserSession, describe_element, group_candidates, listed
-from .steps import MAX_MODULE_DEPTH, needs_element, perform, spec
+from .steps import MAX_MODULE_DEPTH, needs_element, origin, perform, spec
 
 HEAL_SYSTEM = ("You repair broken UI test locators. The page changed and the recorded locator "
                "no longer matches. Pick the element on the current page that the test step "
@@ -316,6 +316,9 @@ async def _module(bs: BrowserSession, step: dict, cfg: dict, report: dict, res: 
     if depth + 1 > MAX_MODULE_DEPTH or module["id"] in stack:
         raise ValueError("Модули вложены слишком глубоко или вызывают сами себя")
     module["_module"] = True
+    recorded = bs.options.get("recorded_origins")
+    if recorded is not None and origin(module.get("url", "")) not in recorded:
+        recorded.append(origin(module.get("url", "")))      # the module was recorded on its own address
     params = {k: bs.expand(str(v)) for k, v in (s.get("params") or {}).items()}
     bs.params.append(params)
     sub: list[dict] = []
@@ -354,11 +357,6 @@ async def _data_block(bs: BrowserSession, steps: list[dict] | None, phase: str) 
     return out
 
 
-def origin(url: str) -> str:
-    u = urlparse(url or "")
-    return f"{u.scheme}://{u.netloc}" if u.netloc else ""
-
-
 async def run_test(test: dict, headless: bool = True, on_progress=None,
                    credentials: dict | None = None, cfg: dict | None = None, *,
                    browser=None, run_dir: Path | None = None, attempt: int = 1, hooks=None,
@@ -374,6 +372,7 @@ async def run_test(test: dict, headless: bool = True, on_progress=None,
     `engine` / `device`: chromium | firefox | webkit, a device profile ("iPhone 13").
     `storage_state`: a saved login (the suite logs in once); `capture_state`: keep the
     context's state after a passed run in report["storage_state"] (the login test).
+    `base_url`: the project's stand; addresses recorded on the test's origin go there (steps.rebase).
     The test's "before" requests run first, its "after" requests always run last.
     `hooks` (mutation testing): `setup(bs)` before the first step,
     `before_step(bs, index, step, locator)` before each one and, if defined,
@@ -405,7 +404,9 @@ async def run_test(test: dict, headless: bool = True, on_progress=None,
     bs.options = {"project_id": project_id, "test_id": test.get("id", ""), "run_dir": run_dir,
                   "attempt_prefix": prefix, "a11y_impact": cfg.get("a11y_impact", "serious"),
                   "visual_threshold": cfg.get("visual_threshold", checks.DEFAULT_VISUAL_THRESHOLD),
-                  "base_url": base_url or origin(test.get("url", "")), "own_vars": []}
+                  "base_url": base_url or origin(test.get("url", "")), "own_vars": [],
+                  # the project's stand: navigate steps on the recorded origin go there (steps.rebase)
+                  "stand_url": "" if api else base_url, "recorded_origins": [origin(test.get("url", ""))]}
     # A test that switches tabs itself is replayed exactly; older tests follow new tabs.
     bs.follow_new_tabs = not any(s["action"] == "switch_tab" for s in steps)
     trace = cfg.get("trace", "failed") if run_dir and not api else "off"

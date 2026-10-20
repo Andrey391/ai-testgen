@@ -72,6 +72,24 @@ def new_step(action: str, description: str, value: str = "", locator: list | Non
     }
 
 
+def origin(url: str) -> str:
+    u = urlparse(url or "")
+    return f"{u.scheme}://{u.netloc}" if u.netloc else ""
+
+
+def rebase(url: str, recorded, base_url: str) -> str:
+    """The address of a navigate step on the stand of this run: the origin the test was recorded on
+    (`recorded` - origins of the test and its modules) becomes the origin of the project's stand
+    (`base_url`); other sites, relative addresses and a run without a stand stay as they are."""
+    target = urlparse(base_url or "")
+    u = urlparse(url or "")
+    if not target.netloc or not u.netloc:
+        return url
+    if f"{u.scheme}://{u.netloc}".lower() not in {o.lower() for o in recorded if o}:
+        return url
+    return u._replace(scheme=target.scheme, netloc=target.netloc).geturl()
+
+
 def needs_element(step: dict) -> bool:
     return step["action"] in ELEMENT_ACTIONS or (step["action"] in OPTIONAL_ELEMENT and bool(step.get("locator")))
 
@@ -100,6 +118,7 @@ async def perform(bs: BrowserSession, step: dict, loc=None) -> dict | None:
     if a in ELEMENT_ACTIONS and a != "assert_count" and loc is None:
         raise ValueError("No element for this step")
     if a == "navigate":
+        v = rebase(v, bs.options.get("recorded_origins") or (), bs.options.get("stand_url", ""))
         await page.goto(v, wait_until="domcontentloaded", timeout=45000)
     elif a == "click":
         await loc.scroll_into_view_if_needed(timeout=5000)

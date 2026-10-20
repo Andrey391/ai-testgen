@@ -113,6 +113,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 
 ```powershell
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.run --project Shop --tag smoke --junit report.xml
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.run --project Shop --base-url https://stage.shop.example   # другой стенд
 ```
 
 Экспортированный тест: `pip install pytest pytest-playwright faker`, затем `pytest test_xxx.py`
@@ -433,7 +434,10 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `RESUME_TASK`); если воспроизведение не удалось, шаги остаются в сессии. `save_checkpoint()` сохраняет
   шаги как тест без браузера. Снимок удаляет только `close(discard=True)` (человек закрыл сессию,
   конвейер сохранил тест) или «Удалить» в списке «Прерванные сессии».
-- `testgen/runner.py` — одна попытка прогона (`run_test`): trace (`run.trace`, пароль маскируется
+- `testgen/runner.py` — одна попытка прогона (`run_test`): шаг `navigate` на origin записанного `test["url"]` (и
+  адресов модулей) идёт на origin `project.base_url` (`steps.rebase`, `bs.options`: `stand_url`, `recorded_origins`;
+  так же — воспроизведение `base_steps` в Studio; сторонние сайты — как записаны; `testgen.run --base-url` — стенд
+  одного прогона); trace (`run.trace`, пароль маскируется
   `mask_trace`), события браузера, скриншоты шагов в папку прогона, хуки для мутаций. Самолечение:
   если все локаторы шага сломались, `heal()` просит модель выбрать элемент; в режиме `run.heal_mode =
   review` локатор становится предложением (`report["proposals"]`, в тесте — `heal_proposals`) и
