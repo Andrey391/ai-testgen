@@ -86,13 +86,20 @@ def test_a_run_waits_for_the_findings_and_gives_the_answers_to_the_agent(shop, f
     arun(job._review_cases(p))                               # reviewed cases are not asked again
     assert len(fake_llm.calls) == asked
 
+    done = []
+
+    async def process(project, item, sc):
+        done.append(sc["title"])
+        item["status"] = "done"
+    job._process = process
+
     async def go():
-        task = asyncio.create_task(job._await_cases())
+        task = asyncio.create_task(job._process_all(p, [(job.items[0], sc)]))
         for _ in range(100):
             if job.status == "awaiting_cases":
                 break
             await asyncio.sleep(0.02)
-        assert job.status == "awaiting_cases"
+        assert job.status == "awaiting_cases" and job.items[0]["status"] == "waiting" and not done
         # an answer needs its text; a proposal is taken as the reviewer wrote it
         assert job.settle_cases([{"id": case_ids[1], "action": "answer", "text": ""}], "ann") == 0
         job.settle_cases([{"id": case_ids[0], "action": "accept"}], "ann")
@@ -101,7 +108,8 @@ def test_a_run_waits_for_the_findings_and_gives_the_answers_to_the_agent(shop, f
         job.settle_cases([{"id": case_ids[1], "action": "answer", "text": "Список товаров каталога"}], "ann")
         await asyncio.wait_for(task, 5)
     arun(go())
-    assert job.status == "running" and job.waits[-1]["status"] == "awaiting_cases"
+    assert job.status == "running" and done == [sc["title"]]
+    assert job.waits[-1]["status"] == "awaiting_cases" and job.waits[-1]["item"] == sc["title"]
     text = pipeline.scenario_text(sc)
     assert "Войти под учётной записью роли «Покупатель»" in text and "Список товаров каталога" in text
     assert "Роль: Покупатель" in text
@@ -109,4 +117,4 @@ def test_a_run_waits_for_the_findings_and_gives_the_answers_to_the_agent(shop, f
     rec = sc["test_data"][0]["record_id"]
     assert rec and any(d["id"] == rec for d in knowledge.get(p["id"])["data"]) and f"[id {rec}]" in text
     assert cases.tally(job.scenarios) | {"cases": 1} == {"cases": 1, "findings": 3, "blocking": 2, "unsettled": 0,
-                                                          "answered": 2, "dismissed": 0}
+                                                          "answered": 2, "dismissed": 0, "auto": 0}

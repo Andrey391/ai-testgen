@@ -54,6 +54,10 @@ ACTIONS = {
     "run.start": "Прогон теста", "suite.start": "Прогон набора", "pipeline.start": "Конвейер",
     "defect.create": "Дефект в трекер", "baseline.accept": "Новый эталон снимка",
     "sso.settings": "Группы каталога → роли",
+    "decision.cases": "Решение по замечаниям к кейсам", "decision.findings": "Решение по замечаниям к требованиям",
+    "decision.reuse": "Решение по похожим сценариям", "decision.select": "Выбор сценариев",
+    "decision.auto": "Решение принято автоматически", "test.auto_ready": "Тест в наборе по политике проекта",
+    "knowledge.confirm": "Модель приложения подтверждена", "knowledge.pending": "Обновления модели приложения",
 }
 
 
@@ -104,6 +108,25 @@ def import_files(files: list[Path]) -> int:
                                                rec=line.strip()))
                     n += 1
     return n
+
+
+def counts(project_id: str, since: float, actions) -> dict[str, int]:
+    """How many times each of `actions` succeeded in the project since then: {action: count} (the dashboard's
+    decisions of people and the automatic ones)."""
+    from sqlalchemy import select
+    t = db.audit_log
+    out = dict.fromkeys(actions, 0)
+    q = select(t.c.rec).where(t.c.project_id == project_id, t.c.ts >= since)
+    with db.engine().connect() as c:
+        for (text,) in c.execution_options(yield_per=500).execute(q):
+            try:
+                r = json.loads(text)
+            except ValueError:
+                continue
+            ok = r.get("status") == "ok" or isinstance(r.get("status"), int) and r["status"] < 400
+            if r.get("action") in out and ok:
+                out[r["action"]] += 1
+    return out
 
 
 def _db_records(month: str = "", project_id: str = "", newest_first: bool = True):

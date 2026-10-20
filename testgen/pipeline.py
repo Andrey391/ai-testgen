@@ -347,6 +347,7 @@ class Job:
         self._selected = asyncio.Event()
         self._wake = asyncio.Event()        # the application model may have been confirmed
         self._cancel = False
+        self._gate = False                  # items wait one by one (_process_all): their waits are kept, not the run's
         self._session: StudioSession | None = None
         self._task: asyncio.Task | None = None
         self._current: dict | None = None       # the item being processed: a person may cancel it alone
@@ -431,10 +432,12 @@ class Job:
     def status(self, value: str) -> None:
         # A wait for a person ends (the run goes on, waits for something else, is stopped or fails): how long it
         # took is kept - the dashboard shows the median.
+        # While items wait one by one (_process_all) their own waits are kept, not the run's.
         old = getattr(self, "_status", None)
         if old != value and old in WAITING and self.waiting_since:
-            self.waits.append({"status": old, "since": self.waiting_since, "until": time.time()})
-            self.waits = self.waits[-MAX_WAITS:]
+            if not getattr(self, "_gate", False):
+                self.waits.append({"status": old, "since": self.waiting_since, "until": time.time()})
+                self.waits = self.waits[-MAX_WAITS:]
             self.waiting_since = None
         self._status = value
 
@@ -481,9 +484,7 @@ class Job:
         if self.status != status:
             self.status = status            # the wait before this one (if any) ends
             self.waiting_since = time.time()
-        if status not in self.notified:
-            self.notified.append(status)
-            notify.event(projects.get(self.project_id), "job_waiting", job=self.state())
+        self._tell(status)
 
     def save(self) -> None:
         fs.write_json(_jobs_dir(self.project_id) / f"{self.id}.json", self.state(), indent=1)
@@ -547,26 +548,20 @@ class Job:
         if self._cancel:
             return
         if self.cases:
-            # Manual cases: the chosen ones are reviewed, a person settles what blocks automating them.
+            # Manual cases: the chosen ones are reviewed; a person settles what blocks automating each of them.
             if not self.items:
                 await self._select(cfg["scenarios"]["select"])
                 if self._cancel or not self.items:
                     return
             await self._review_cases(project)
-            await self._await_cases()
-            if self._cancel:
-                return
-        if cfg["requirements"].get("confirm_model"):
-            await self._await_model()
             if self._cancel:
                 return
         if not self.items:
             await self._select(cfg["scenarios"]["select"])
             if self._cancel or not self.items:
                 return
-        await self._await_reuse()
-        if self._cancel:
-            return
+        # Nothing holds the whole run: an item waits only for its own decisions (_holds) - the findings of its
+        # case, the parts of the model it needs, what to do with an earlier test like it; the others go to work.
         self._log(f"В работу взято {'кейсов' if self.cases else 'сценариев'}: {len(self.items)}")
 
         # 3-6. Each scenario: author -> run -> verify -> publish
@@ -738,29 +733,129 @@ class Job:
             self.items = [self._item(self.scenarios[0])]
 
     async def _process_all(self, project: dict, pairs) -> None:
-        """(item, scenario) one after another; an error of one scenario does not stop the others."""
+        """(item, scenario) one after another; an error of one scenario does not stop the others. An item held by a
+        decision of a person (_holds) waits while the others go on; when only held items are left, the run waits
+        (awaiting_* of the first of them) and goes on with each one as soon as its decision is made."""
+        todo = []
         for item, sc in pairs:
             if item["status"] in DONE_ITEMS or item.get("skipped"):
                 if item.get("skipped") and item["status"] not in DONE_ITEMS:
                     item["status"] = "cancelled"
                 continue
-            if self._cancel:
-                item["status"] = "cancelled"
+            todo.append((item, sc))
+        self._gate = True
+        said = None
+        try:
+            while todo:
+                if self._cancel:
+                    for item, _ in todo:
+                        item["status"] = "cancelled"
+                    break
+                project = projects.get(self.project_id)
+                held = self._holds(project, todo)
+                ready = [n for n, (item, _) in enumerate(todo) if id(item) not in held and not item.get("skipped")]
+                skipped = [n for n, (item, _) in enumerate(todo) if item.get("skipped")]
+                for n in reversed(skipped):
+                    todo[n][0]["status"] = "cancelled"
+                    self._mark(todo[n][0], "")
+                    todo.pop(n)
+                if skipped:
+                    self.save()
+                    continue
+                if not ready:
+                    why = min(held.values(), key=list(HOLDS).index)
+                    if (why, len(todo)) != said:
+                        said = (why, len(todo))
+                        self._log(f"Ждут решения: {len(todo)} — " + "; ".join(
+                            f"{HOLD_TITLES[k]}: {sum(1 for v in held.values() if v == k)}" for k in HOLDS
+                            if k in held.values()) + ". Запуск продолжится сам", "warn")
+                    self._waiting(HOLDS[why])
+                    self.save()
+                    self._wake.clear()
+                    try:
+                        await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
+                    except asyncio.TimeoutError:
+                        self._decisions_from_analyses()
+                    continue
+                if self.status != "running":
+                    self.status = "running"
+                said = None
+                item, sc = todo.pop(ready[0])
+                await self._process_one(project, item, sc)
+        finally:
+            self._gate = False
+
+    async def _process_one(self, project: dict, item: dict, sc: dict) -> None:
+        self._current = item
+        try:
+            await self._process(project, item, sc)
+        except Exception as e:
+            item["status"], item["error"] = "error", _err(e)
+            self._log(f"«{item['title']}»: {item['error']}", "error")
+        finally:
+            self._current = None
+        if item.get("skipped") and item["status"] not in DONE_ITEMS:
+            item["status"] = "cancelled"
+        aid, scid = item.get("analysis_id") or sc.get("analysis_id"), item.get("scenario_id") or sc.get("scenario_id")
+        if item.get("test_id") and aid and scid:
+            analyses.link_test(self.project_id, aid, scid, item["test_id"])
+        self.save()
+
+    def _holds(self, project: dict, todo: list[tuple[dict, dict]]) -> dict[int, str]:
+        """What holds each item of `todo` (HOLDS): id(item) -> the kind; an item not held is not in it. A case whose
+        findings are settled gives its test data to the application model first (knowledge.need) - the parts of the
+        model it needs may be new then."""
+        cfg = project["pipeline"]["requirements"]
+        if self.cases and cfg.get("learn_model"):
+            fresh = [sc for _, sc in todo if not sc.get("data_needed") and not case_review.unsettled([sc])]
+            data = [sc for sc in fresh if sc.get("test_data") or sc.get("role")]
+            if data:
+                knowledge.need(self.project_id, data)      # sets record_id of the test data in place
+            for sc in fresh:
+                sc["data_needed"] = True
+        doc = knowledge.get(self.project_id) if cfg.get("confirm_model") else None
+        out = {}
+        for item, sc in todo:
+            if item.get("skipped"):
                 continue
-            self._current = item
-            try:
-                await self._process(project, item, sc)
-            except Exception as e:
-                item["status"], item["error"] = "error", _err(e)
-                self._log(f"«{item['title']}»: {item['error']}", "error")
-            finally:
-                self._current = None
-            if item.get("skipped") and item["status"] not in DONE_ITEMS:
-                item["status"] = "cancelled"
-            aid, scid = item.get("analysis_id") or sc.get("analysis_id"), item.get("scenario_id") or sc.get("scenario_id")
-            if item.get("test_id") and aid and scid:
-                analyses.link_test(self.project_id, aid, scid, item["test_id"])
-            self.save()
+            why = ("cases" if self.cases and case_review.unsettled([sc]) else
+                   "model" if doc is not None and knowledge.confirmation(
+                       doc, knowledge.units_for(self.project_id, sc, doc))["state"] != "confirmed" else
+                   "reuse" if item["status"] not in DONE_ITEMS and reuse.pending(item.get("match")) else "")
+            self._mark(item, why)
+            if why:
+                out[id(item)] = why
+        return out
+
+    def _mark(self, item: dict, why: str) -> None:
+        """An item begins or stops waiting for a decision (`why` - HOLDS, "" - none): how long it waited is kept
+        (the dashboard's wait time by kind), the team is told once for each kind of wait of the run."""
+        old = item.get("wait") or ""
+        if why == old:
+            if why:
+                item["status"] = "waiting"      # a resumed run queued it again
+            return
+        now = time.time()
+        if old:
+            if item.get("waiting_since"):
+                self.waits.append({"status": HOLDS[old], "since": item["waiting_since"], "until": now,
+                                   "item": item["title"]})
+                self.waits = self.waits[-MAX_WAITS:]
+            item.pop("wait", None)
+            item.pop("waiting_since", None)
+            if item["status"] == "waiting":
+                item["status"] = "queued"
+            if not item.get("skipped"):
+                self._log(f"«{item['title']}»: {HOLD_DONE[old]} — в работу")
+        if why:
+            item.update(status="waiting", wait=why, waiting_since=now)
+            self._tell(HOLDS[why])
+
+    def _tell(self, status: str) -> None:
+        """The team is told of a kind of wait of the run once (notify "job_waiting")."""
+        if status not in self.notified:
+            self.notified.append(status)
+            notify.event(projects.get(self.project_id), "job_waiting", job=self.state() | {"status": status})
 
     async def _import_cases(self, project: dict) -> None:
         conn = mcp_hub.find(project, cid=self.cases.get("connection", ""))
@@ -802,73 +897,52 @@ class Job:
             await case_review.review(project, todo, keep=self.save, log=self._log)
         except Exception as e:
             raise RuntimeError(f"Ревью кейсов не удалось: {_err(e)} — «Продолжить» проверит оставшиеся") from e
-        t = case_review.tally([c for _, c in self._chosen_cases()])
+        chosen = [c for _, c in self._chosen_cases()]
+        t = case_review.tally(chosen)
         self._log(f"Ревью кейсов готово: замечаний {t['findings']}, блокирующих {t['blocking']}",
                   "warn" if t["blocking"] else "info")
+        # What settles without a person: the team's earlier answers to the same questions (cases.review), and the
+        # reviewer's confident proposals when the project allows it. Each is in the log and the audit, and undone
+        # by «Отменить» (reopen).
+        auto = [(c, f) for c in chosen for f in case_review.findings([c]) if (f.get("decision") or {}).get("auto")]
+        dc = project["pipeline"]["decisions"]
+        if dc["auto_accept"]:
+            auto += case_review.auto_accept(chosen, dc["auto_confidence"])
+        for c, f in auto:
+            d = f["decision"]
+            how = (f"по прежнему ответу команды: {d['text'][:200]}" if d["auto"] == "memory"
+                   else f"принято предложение ревьюера (уверенность {d.get('confidence', 0)}%)")
+            self._log(f"«{c['title']}»: замечание «{f['problem'][:120]}» — {how}; отменить — «Отменить» в ревью кейсов")
+            audit.record("decision.auto", user=d["user"], project_id=self.project_id, target={"jid": self.id},
+                         details={"finding": f["id"], "case": c["title"][:200], "how": d["auto"],
+                                  "confidence": d.get("confidence")}, via="pipeline")
+        if "themes" not in self.cases:
+            # One answer for many cases: the findings one answer settles are asked once, as a theme.
+            try:
+                self.cases["themes"] = await case_review.group(project, chosen)
+            except Exception as e:
+                self.cases["themes"] = []
+                self._log(f"Похожие замечания не сведены в темы: {_err(e)} — разберите их по кейсам", "warn")
+            if self.cases["themes"]:
+                self._log(f"Похожие замечания сведены в общие вопросы: {len(self.cases['themes'])} — "
+                          "один ответ на все кейсы темы")
         self.save()
 
     def settle_cases(self, decisions: list[dict], user: str = "") -> int:
-        """A person's decisions on the findings of the case review (call on the worker loop)."""
-        n = case_review.settle([c for _, c in self._chosen_cases()], decisions, user)
-        if n:
-            self._log(f"Решения по замечаниям к кейсам ({user or 'студия'}): {n}")
+        """A person's decisions on the findings of the case review, or on a theme of them (call on the worker loop).
+        An automatic decision is undone (reopen) only in a case not taken to work yet."""
+        cases = [c for _, c in self._chosen_cases()]
+        waiting = [self.scenarios[it["scenario_index"]] for it in self.items if "scenario_index" in it
+                   and it["status"] in ("queued", "waiting") and not it.get("skipped")]
+        done = case_review.settle(cases, [d for d in decisions if d.get("action") != "reopen"], user,
+                                  themes=(self.cases or {}).get("themes"), pid=self.project_id)
+        done += case_review.settle(waiting, [d for d in decisions if d.get("action") == "reopen"], user,
+                                   themes=(self.cases or {}).get("themes"))
+        if done:
+            self._log(f"Решения по замечаниям к кейсам ({user or 'студия'}): {len(done)}")
         self.save()
         self._wake.set()
-        return n
-
-    async def _await_cases(self) -> None:
-        """A case with a blocking finding nobody settled is not automated: the run waits for a person
-        (awaiting_cases). Then the test data of the cases joins the application model."""
-        def chosen():
-            return [c for _, c in self._chosen_cases()]
-        if case_review.unsettled(chosen()):
-            self._waiting("awaiting_cases")
-            self._log(f"Замечания к кейсам ждут решения: {len(case_review.unsettled(chosen()))} — ответьте, как должно "
-                      "быть, примите предложение ревьюера или отметьте «Не актуально»", "warn")
-            while not self._cancel and case_review.unsettled(chosen()):
-                self._wake.clear()
-                try:
-                    await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
-                except asyncio.TimeoutError:
-                    pass
-            if self._cancel:
-                return
-            self.status = "running"
-            self._log("Замечания к кейсам разобраны: автоматизация")
-        if projects.get(self.project_id)["pipeline"]["requirements"].get("learn_model"):
-            data = [c for c in chosen() if c.get("test_data") or c.get("role")]
-            if data:
-                knowledge.need(self.project_id, data)      # sets record_id of the test data in place
-        self.save()
-
-    def _model_units(self) -> list[str] | None:
-        return model_units(self.project_id, self.scenarios)
-
-    async def _await_model(self) -> None:
-        """Tests are generated only from a confirmed lifecycle of the system: entities, dependencies,
-        lifecycles, roles and their capabilities (knowledge.confirm) - the parts of it the scenarios need.
-        The run waits for a person; a confirmation made anywhere (the job, "Проект → Тестовые данные",
-        another instance) lets it go on."""
-        units = self._model_units()
-        if knowledge.is_confirmed(self.project_id, units):
-            return
-        self._waiting("awaiting_model")
-        state = knowledge.confirmation(knowledge.get(self.project_id), units)
-        todo = [u["title"] for u in state["units"] if u["state"] != "confirmed" and (units is None or u["unit"] in units)]
-        self._log("Подтвердите жизненный цикл системы перед генерацией тестов: сущности, зависимости, статусы, роли "
-                  "и их возможности («Проект → Тестовые данные»)"
-                  + (f" — нужны части: {', '.join(todo)}" if todo and units is not None else "")
-                  + (" — модель изменилась после подтверждения" if state["state"] == "changed" else "")
-                  + (f". Не хватает: {'; '.join(state['missing'])}" if state["missing"] else ""), "warn")
-        while not self._cancel and not knowledge.is_confirmed(self.project_id, units):
-            self._wake.clear()
-            try:
-                await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
-            except asyncio.TimeoutError:
-                pass
-        if not self._cancel:
-            self.status = "running"
-            self._log("Жизненный цикл системы подтверждён: генерация тестов")
+        return len(done)
 
     async def _review(self, project: dict, spec: str) -> None:
         """Stage 1: the reviewer subagent checks the specification on a clean context of its own - defects of
@@ -939,30 +1013,6 @@ class Job:
             if said:
                 self._log("Требования разобраны, жизненный цикл подтверждён: проектирование сценариев")
             self.status = "running"
-
-    def _undecided(self) -> list[dict]:
-        return [it for it in self.items if it["status"] not in DONE_ITEMS and reuse.pending(it.get("match"))]
-
-    async def _await_reuse(self) -> None:
-        """A scenario similar to an earlier test or scenario waits for a person: create a new test, reuse
-        the earlier one or refine it. A decision made in the Requirements tab counts as well."""
-        if not self._undecided():
-            return
-        self._waiting("awaiting_reuse")
-        self._log(f"Похожи на созданные ранее: {len(self._undecided())} — решите для каждого: создать новый тест, "
-                  "переиспользовать или доработать прежний", "warn")
-        while not self._cancel and self._undecided():
-            self._wake.clear()
-            try:
-                await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
-            except asyncio.TimeoutError:
-                self._decisions_from_analyses()
-        if not self._cancel:
-            self.status = "running"
-            self._log("Решения по похожим сценариям приняты: " + ", ".join(
-                f"«{it['title']}» — {reuse.DECISION_TITLES[it['match']['decision']]}"
-                for it in self.items if it.get("match") and it["match"].get("decision")))
-            self.save()
 
     def _origin(self, i: int) -> dict:
         """The scenario of a requirements analysis item `i` came from: {analysis_id, scenario_id} or {}."""
@@ -1102,7 +1152,54 @@ class Job:
             except Exception as e:
                 item["publish"] = {"status": "failed", "summary": _err(e)}
                 self._log(f"«{sc['title']}»: публикация не удалась: {_err(e)}", "error")
+        self._by_policy(project, item, test)
         item["status"] = "done"
+
+    def _by_policy(self, project: dict, item: dict, test: dict) -> None:
+        """The project's review policy for a test this item made (decisions.review_policy "risk"): strong checks by
+        mutations, no self-healing and a green run - it joins the regression suite by itself (in the audit, a person
+        can move it back); otherwise it goes to review with the reasons. A test the agent changed stays on review."""
+        dc = project["pipeline"]["decisions"]
+        if dc["review_policy"] != "risk" or not item.get("created"):
+            return
+        reasons = []
+        run, v = item.get("run") or {}, item.get("verify") or {}
+        if not run:
+            reasons.append("тест не прогонялся")
+        elif run.get("status") != "passed":
+            reasons.append("прогон нестабилен" if run.get("status") == "flaky" else "прогон не прошёл")
+        elif run.get("healed"):
+            reasons.append("в прогоне сработало самолечение")
+        if v.get("status") != "done" or v.get("score") is None:
+            reasons.append("проверки не проверены мутациями")
+        elif v["score"] * 100 < dc["min_score"]:
+            reasons.append(f"слабые проверки: обнаружено мутантов {v.get('killed')} из {v.get('total')}")
+        if v.get("improved"):
+            reasons.append("проверки усилены агентом")
+        now = time.time()
+
+        def change(t: dict) -> None:
+            if t.get("heal_proposals"):
+                reasons.append("самолечение ждёт ревью")
+            if storage.status(t) != "draft":
+                return              # a person (or the agent's change) has decided already
+            if reasons:
+                t["status"], t["review_reason"] = "review", "По политике проекта: " + "; ".join(reasons)
+                t["review"] = {"status": "review", "by": "политика проекта", "at": now, "reason": t["review_reason"]}
+            else:
+                t["status"] = "ready"
+                t.pop("review_reason", None)
+                t["review"] = {"status": "ready", "by": "политика проекта", "at": now,
+                               "reason": f"сильные проверки (мутанты: {v.get('killed')}/{v.get('total')}), прогон зелёный, без самолечения"}
+        t = storage.update(test["id"], change)
+        if not t:
+            return
+        if storage.status(t) == "ready":
+            self._log(f"«{t['name']}»: в регрессионном наборе по политике проекта — {t['review']['reason']}")
+            audit.record("test.auto_ready", user="политика проекта", project_id=self.project_id,
+                         target={"tid": t["id"]}, details={"job": self.id, "score": v.get("score")}, via="pipeline")
+        elif storage.status(t) == "review":
+            self._log(f"«{t['name']}»: на ревью — {t.get('review_reason', '')}", "warn")
 
     def _stopped(self, item: dict) -> bool:
         """The run or this scenario was cancelled: the next stages of the scenario are not started."""
@@ -1222,7 +1319,7 @@ class Job:
         test.update(priority=sc.get("priority", ""), scenario_type=sc.get("type", ""),
                     source=", ".join(self.links) or ("Planner" if self.explore else "")
                     or (sc.get("source_case") or {}).get("name", ""),
-                    gherkin_scenario=sc.get("gherkin", ""), status="draft")
+                    gherkin_scenario=sc.get("gherkin", ""), status="draft", author=self.user)
         case = sc.get("source_case")
         if case:
             # The automated test is linked to the manual case it came from.
@@ -1232,6 +1329,7 @@ class Job:
         storage.save(test)
         s.save_artifacts(test)
         s.test_id = item["test_id"] = test["id"]
+        item["created"] = True          # made by this item: the review policy decides where it goes
         self._log(f"«{sc['title']}»: тест сохранён, шагов {len(test['steps'])}")
         await s.close(discard=True)
         self.sessions.pop(s.id, None)
@@ -1297,7 +1395,14 @@ class Job:
 # A run in these states is working (or waiting for a person) in the instance that owns it.
 LIVE = ("running", "awaiting_review", "awaiting_cases", "awaiting_model", "awaiting_selection", "awaiting_reuse")
 WAITING = LIVE[1:]          # the run waits for a person's decision
-MAX_WAITS = 50              # the ended waits a run keeps
+MAX_WAITS = 300             # the ended waits a run keeps (its items' own waits among them)
+# What holds one item of a run (Job._holds), in the order a run that has only held items says it waits for them:
+# the findings of its manual case, the parts of the application model it needs, an earlier test like it.
+HOLDS = {"cases": "awaiting_cases", "model": "awaiting_model", "reuse": "awaiting_reuse"}
+HOLD_TITLES = {"cases": "замечания к кейсу", "model": "подтверждение жизненного цикла",
+               "reuse": "решение по похожему сценарию"}
+HOLD_DONE = {"cases": "замечания к кейсу разобраны", "model": "Жизненный цикл системы подтверждён",
+             "reuse": "решение по похожему сценарию принято"}
 MODEL_POLL = 3      # seconds between checks of the application model while a run waits for its confirmation
 DONE_ITEMS = ("done", "needs_attention")     # a resumed run does not redo them
 

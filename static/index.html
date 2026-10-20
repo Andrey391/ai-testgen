@@ -34,6 +34,7 @@ nav button .badge{margin-left:5px}
 #bellMenu a:hover,#bellMenu a:focus{background:var(--soft);outline:none}
 #bellMenu a .t{flex:1;overflow-wrap:anywhere}
 #bellMenu a .w{font-size:12px;color:var(--muted);white-space:nowrap}
+#bellMenu a .w.late{color:var(--bad);font-weight:600}
 #bellMenu .empty{padding:10px 6px;color:var(--muted)}
 #bellMenu .others{border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
 nav button{background:none;border:0;color:var(--muted);font:inherit;padding:6px 10px;border-radius:6px;cursor:pointer}
@@ -919,6 +920,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="card"><h3>Время регрессии</h3><div class="hint" style="margin-top:0">Длительность последних запусков набора, минут</div><div id="dashSuites"></div></div>
     <div class="card"><h3>Автоматические прогоны</h3><div class="hint" style="margin-top:0">Прогонов тестов в день</div><div id="dashRuns"></div></div>
   </div>
+  <div class="grid2">
+    <div class="card"><h3>Ожидание решений по видам</h3><div class="hint" style="margin-top:0">Медиана: сколько кейс, сценарий или запуск ждал человека</div><div id="dashWaits"></div></div>
+    <div class="card"><h3>Нагрузка на людей</h3><div class="hint" style="margin-top:0">Решения за период — по ним настраиваются «Решения команды» в «Проект → Процесс генерации»</div><div id="dashDecisions"></div></div>
+  </div>
 </section>
 
 <!-- ============ TASKS ============ -->
@@ -1629,6 +1634,36 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         </div>
 
         <div class="card stage">
+          <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Решения команды</h3></div>
+          <div class="hint">Что ждёт людей и кто это решает. Конвейер не держит весь запуск: кейсы и сценарии без открытых решений идут в работу сразу, ждут только спорные. Решения, принятые без человека, записываются в журнал действий и журнал запуска; их можно отменить.</div>
+          <div class="grid3">
+            <div><label>Тест конвейера попадает в набор</label>
+              <select data-p="decisions.review_policy">
+                <option value="all">После ревью автора — каждый</option>
+                <option value="risk">По риску: сильные проверки, зелёный прогон — сразу</option>
+              </select></div>
+            <div><label>Сильные проверки: обнаружено мутантов, % не меньше</label><input type="number" min="1" max="100" data-p="decisions.min_score" title="Нужна проверка качества мутациями (этап 5)"></div>
+            <div><label>Срок решения, часов</label><input type="number" min="1" max="720" data-p="decisions.sla_hours" title="«Мои решения» в «Ждёт вас» показывают срок и просроченные"></div>
+          </div>
+          <div class="hint">«По риску»: тест с долей обнаруженных мутантов не ниже порога, без самолечения и с прошедшим прогоном сразу попадает в регрессионный набор; остальные — на ревью с причиной. Тесты, изменённые агентом, всегда идут на ревью.</div>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="decisions.auto_accept"> Принимать уверенные предложения ревьюера кейсов сами</label>
+          </div>
+          <div class="grid3">
+            <div><label>Порог уверенности ревьюера, %</label><input type="number" min="1" max="100" data-p="decisions.auto_confidence"></div>
+          </div>
+          <div class="hint">Принимаются сами: мелкие замечания с предложением и важные, в которых ревьюер уверен не меньше порога. Блокирующие, учётные записи и необратимые действия — всегда за человеком. Вопросы, на которые команда уже отвечала, закрываются прежним ответом.</div>
+          <label>Кто решает (логин в студии; пусто — любой участник)</label>
+          <div class="grid2">
+            <div><label>Требования и замечания ревьюера — аналитик</label><input data-p="decisions.owner_requirements" list="taskPeople" placeholder="логин"></div>
+            <div><label>Модель приложения — тест-лид</label><input data-p="decisions.owner_model" list="taskPeople" placeholder="логин"></div>
+            <div><label>Замечания к ручным кейсам (пусто — аналитик)</label><input data-p="decisions.owner_cases" list="taskPeople" placeholder="логин"></div>
+            <div><label>Ревью теста без автора</label><input data-p="decisions.owner_tests" list="taskPeople" placeholder="логин"></div>
+          </div>
+          <div class="hint">Ревью теста и самолечения решает автор теста; выбор сценариев и похожие сценарии — тот, кто запустил конвейер.</div>
+        </div>
+
+        <div class="card stage">
           <div class="stage-head"><span class="num">₽</span><h3 class="grow" style="margin:0">Лимиты расхода на модели</h3></div>
           <div class="hint">0 — без лимита. Запрос сверх лимита не отправляется; на 80% приходит предупреждение (в чат сессии, журнал конвейера, уведомления проекта).</div>
           <div class="grid3">
@@ -2336,13 +2371,22 @@ function renderBell() {
   if (b) { b.textContent = jobs; b.classList.toggle('hidden', !jobs); pipe.title = jobs ? `Запусков ждут решения: ${jobs}` : ''; }
   if (!$('#bellMenu').classList.contains('hidden')) renderBellMenu();
 }
+// «Мои решения»: what the project's settings route to me (requirements - the analyst, the model - the test lead, the
+// review of a test - its author, the choices of a run - who started it), the soonest due first.
+function dueText(e) {
+  if (!e.due) return e.since ? 'ждёт ' + waited(e.since) : '';
+  const left = e.due - Date.now() / 1000;
+  return left < 0 ? `просрочено на ${waited(e.due).replace('только что', '1 мин')}` : `срок — через ${waited(Date.now() / 1000 - left).replace('только что', '1 мин')}`;
+}
 function renderBellMenu() {
   const items = INBOX?.items || [];
-  let html = '', kind = '';
-  for (const e of items) {
+  const me = ME?.user || '', mine = items.filter(e => me && e.owner === me).sort((a, b) => (a.due || Infinity) - (b.due || Infinity));
+  const row = (e, due) => `<a href="#${esc(e.route)}" role="menuitem"><span class="t">${esc(e.title)}${e.count > 1 ? ` · ${e.count}` : ''}</span>`
+    + `<span class="w${due && e.due && e.due < Date.now() / 1000 ? ' late' : ''}" title="${esc(fmtTime(e.since))}${e.due ? ` · срок ${esc(fmtTime(e.due))}` : ''}">${due ? dueText(e) : e.since ? 'ждёт ' + waited(e.since) : ''}${!due && e.owner ? ` · решает ${esc(e.owner)}` : ''}</span></a>`;
+  let html = mine.length ? `<h4>Мои решения (${mine.length})</h4>` + mine.map(e => row(e, true)).join('') : '', kind = '';
+  for (const e of items.filter(e => !mine.includes(e))) {
     if (e.kind !== kind) { kind = e.kind; html += `<h4>${esc(INBOX_KINDS[kind] || kind)}</h4>`; }
-    html += `<a href="#${esc(e.route)}" role="menuitem"><span class="t">${esc(e.title)}${e.count > 1 ? ` · ${e.count}` : ''}</span>`
-          + `<span class="w" title="${esc(fmtTime(e.since))}">${e.since ? 'ждёт ' + waited(e.since) : ''}</span></a>`;
+    html += row(e, false);
   }
   if (!items.length) html = '<div class="empty">Вашего решения ничего не ждёт</div>';
   if (OTHERS.length) html += '<div class="others"><h4>Другие проекты</h4>' + OTHERS.map(o =>
@@ -3830,9 +3874,20 @@ async function loadDash() {
     tile(waitTime(w.median_minutes), 'Конвейер ждёт решения', (w.count ? `медиана, ожиданий за ${m.days} дн.: ${w.count}` : `за ${m.days} дн. не ждал`)
          + (w.model_count ? ` · подтверждение модели — ${waitTime(w.model_median_minutes)}` : '') + (w.now ? ` · ждут сейчас: ${w.now}` : ''),
          projPath('pipe'), 'Запуски конвейера') +
+    tile(m.decisions.per_test == null ? m.decisions.people : m.decisions.per_test, m.decisions.per_test == null ? 'Решений людей' : 'Решений людей на тест',
+         `${m.decisions.people} решений, новых тестов: ${m.decisions.new_tests}` + (m.decisions.automatic ? ` · без человека: ${m.decisions.automatic}` : '')) +
     tile(`$${sp.usd.toFixed(2)}`, `Расход на модели за ${sp.month}`, `≈ ${sp.rub.toFixed(0)} ₽` + (sp.test_generation_usd != null ? ` · генерация теста ≈ $${sp.test_generation_usd}` : ''));
   $('#dashSuites').innerHTML = bars(r.suites, p => p.minutes, p => `${fmtTime(p.at)}: ${p.minutes} мин, ${p.passed ? 'успешно' : 'есть падения'}`);
   $('#dashRuns').innerHTML = bars(sv.per_day, p => p.runs, p => `${p.day}: ${p.runs} прогонов`);
+  const WAIT_KIND = {awaiting_review: 'замечания к требованиям', awaiting_cases: 'замечания к кейсам', awaiting_model: 'подтверждение модели',
+    awaiting_selection: 'выбор сценариев', awaiting_reuse: 'похожие сценарии'};
+  $('#dashWaits').innerHTML = w.by_kind?.length ? `<table><tbody>${w.by_kind.map(k => `<tr><td>${esc(WAIT_KIND[k.status] || k.status)}</td>
+      <td class="num">${waitTime(k.median_minutes)}</td><td class="muted">ожиданий: ${k.count}</td></tr>`).join('')}</tbody></table>`
+    : `<div class="hint">За ${m.days} дн. конвейер не ждал решений.</div>`;
+  const d = m.decisions;
+  $('#dashDecisions').innerHTML = (d.by_kind.length ? `<table><tbody>${d.by_kind.map(k => `<tr><td>${esc(k.title)}</td><td class="num">${k.count}</td></tr>`).join('')}</tbody></table>`
+      : `<div class="hint">За ${m.days} дн. решений людей нет.</div>`)
+    + (d.auto_by_kind.length ? `<div class="hint">Без человека: ${d.auto_by_kind.map(k => `${esc(k.title)} — ${k.count}`).join(' · ')}</div>` : '');
 }
 $('#dashDays').onchange = loadDash;
 
@@ -5068,7 +5123,11 @@ async function toStudio(sc, url = '', btn = null) {     // btn: the clicked butt
 const STAGES = [['requirements', 'Требования и ревью'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
 const JOB_STATUS = {running: 'Выполняется', awaiting_review: 'Ждёт решения по замечаниям ревьюера', awaiting_cases: 'Ждёт решения по замечаниям к кейсам', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
 const ITEM_STATUS = {queued: ['в очереди', 'off'], preflight: ['проверка перед тестом', 'warn'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
-  done: ['готово', 'ok'], needs_attention: ['нужно подтверждение', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
+  done: ['готово', 'ok'], needs_attention: ['нужно подтверждение', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off'],
+  waiting: ['ждёт решения', 'warn']};
+// What holds one item of a run (pipeline.HOLDS): the others go to work meanwhile.
+const HOLD_TITLE = {cases: 'замечания к кейсу', model: 'подтверждение жизненного цикла', reuse: 'решение по похожему сценарию'};
+const heldBy = (j, kind) => (j.items || []).some(it => it.status === 'waiting' && it.wait === kind && !it.skipped);
 let JOB = null, jobTimer = null;
 const JOB_FOLDED = new Set();      // groups of a run open by default that the person folded
 // The scenarios of a run awaiting selection, as in «Требования»: chosen and expanded rows survive the polling.
@@ -5287,7 +5346,7 @@ async function openJob(jid, quiet) {     // quiet: a refresh, or the running job
   const typing = quiet && document.activeElement?.dataset?.caseAnswer && JOB?.id === j.id && JOB.status === j.status;
   JOB = j;
   if (!typing) renderJob();        // an answer to a finding being typed is not wiped by the polling
-  if (JOB.status === 'awaiting_model') loadJobModel(jid);
+  if (JOB.status === 'awaiting_model' || heldBy(JOB, 'model')) loadJobModel(jid);
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
   else if (PIPE_BUSY?.id === JOB.id) pipeBusy(null);
   if (LIVE_JOB.includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid, true), 1500);
@@ -5303,6 +5362,7 @@ function itemKind(it, live) {
   if (['needs_attention', 'error'].includes(it.status) || (it.run && !it.run.passed)) return 'attention';
   if (ACTIVE_ITEM.includes(it.status) && live) return 'active';
   if (it.status === 'done') return 'done';
+  if (it.status === 'waiting' && live && !it.skipped) return 'held';      // waits for a decision, the others go on
   return 'waiting';     // queued, cancelled, interrupted by a stop or a restart
 }
 function jobStepper(j, live) {
@@ -5332,7 +5392,8 @@ function jobItemRow([it, i]) {
     (it.run.analysis ? `<div class="hint">${esc(VERDICT[it.run.analysis.verdict] || '')}: ${esc(it.run.analysis.summary)}</div>` : '') : '—';
   const z = it.publish ? (it.publish.status === 'ok' ? esc(it.publish.key || 'ok') + (it.publish.execution ? ` · ${esc(it.publish.execution)}` : '')
     : `<span class="err">${esc(it.publish.summary || 'ошибка')}</span>`) : '—';
-  const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужно подтверждение</span>' : '';
+  const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужно подтверждение</span>'
+    : kind === 'held' ? `<span class="badge warn" title="Ждёт с ${esc(fmtTime(it.waiting_since))}">ждёт: ${esc(HOLD_TITLE[it.wait] || it.wait)}</span>` : '';
   return `<tr class="${kind === 'bug' ? 'hl-bad' : kind === 'attention' ? 'hl-warn' : ''}"><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span> ${flag}
       ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}
       ${it.skipped ? `<div class="hint">Отменён (${esc(it.skipped)})${it.status !== 'cancelled' ? ' — остановится после текущего этапа' : ''}</div>` : ''}</td>
@@ -5364,13 +5425,13 @@ function renderJob() {
     ${!live && unautomatedItems(j).length ? `<button class="btn small" onclick="automateDuplicates()" title="Сценарии с решением «Не дублировать», которые завершились без теста: если прежний сценарий уже автоматизирован — берётся его тест, иначе тест генерируется и показывается под обоими сценариями">Автоматизировать без теста (${unautomatedItems(j).length})</button>` : ''}
     ${!live && failedItems(j).length ? `<button class="btn small" onclick="retryJob()" title="Сгенерировать заново все сценарии, где генерация упала с ошибкой агента, агент остановился или не смог пройти сценарий: каждый начинается с новой сессии">Перезапустить сбойные (${failedItems(j).length})</button>` : ''}</div>
     ${jobStepper(j, live)}`;
-  const groups = {bug: [], attention: [], active: [], done: [], waiting: []};
+  const groups = {bug: [], attention: [], held: [], active: [], done: [], waiting: []};
   j.items.forEach((it, i) => groups[itemKind(it, live)].push([it, i]));
   if (j.items.length) {
     const finished = j.items.filter(it => !ACTIVE_ITEM.includes(it.status) && it.status !== 'queued').length;
     const k = (n, label, cls) => `<div class="k${n && cls ? ' ' + cls : ''}"><b>${n}</b><span>${label}</span></div>`;
     html += `<div class="pbar" title="Обработано сценариев: ${finished} из ${j.items.length}"><i style="width:${Math.round(finished / j.items.length * 100)}%"></i></div>
-      <div class="job-sum">${k(groups.attention.length, 'нужно подтверждение', 'warn')}${k(groups.bug.length, 'возможные дефекты', 'bad')}
+      <div class="job-sum">${k(groups.attention.length, 'нужно подтверждение', 'warn')}${k(groups.held.length, 'ждут решения', 'warn')}${k(groups.bug.length, 'возможные дефекты', 'bad')}
         ${k(groups.active.length, 'в работе')}${k(groups.done.length, 'готово', 'ok')}${k(groups.waiting.length, live ? 'в очереди' : 'не начато или прервано')}</div>`;
   }
   if (j.error) html += `<div class="err">${esc(j.error)}</div>`;
@@ -5381,20 +5442,21 @@ function renderJob() {
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
       ${j.analysis_id ? `<button class="btn primary" onclick="showAnalysis('${j.analysis_id}')">Разобрать требования →</button>` : ''}</div>
       ${j.review ? `<details class="opt" style="margin:0 10px 8px"><summary>Отчёт ревьюера</summary>${reviewHtml(j.review)}</details>` : ''}</div>`;
-  } else if (j.status === 'awaiting_model') {
+  } else if (j.status === 'awaiting_model' || heldBy(j, 'model')) {
     const m = JOB_MODEL.id === j.id ? JOB_MODEL.data : null, todo = (m?.units || []).filter(u => u.state !== 'confirmed');
-    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите ${m?.all ? 'жизненный цикл системы' : 'части модели приложения, которые нужны сценариям запуска'} — статусы и переходы сущностей, роли и их возможности. Тесты генерируются только по подтверждённой модели; запуск продолжится сам.</span>
+    const some = j.status !== 'awaiting_model';
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: проверьте и подтвердите ${m?.all ? 'жизненный цикл системы' : 'части модели приложения, которые нужны сценариям'}${some ? ', которые ждут' : ' запуска'} — статусы и переходы сущностей, роли и их возможности. Тесты генерируются только по подтверждённой модели; ${some ? 'остальные сценарии уже в работе, эти продолжатся сами.' : 'запуск продолжится сам.'}</span>
       <button class="btn" onclick="editModelFromJob()" title="Открыть «Проект → Тестовые данные»; оттуда — «Вернуться к запуску»">Изменить в модели</button>
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
       <button class="btn primary" onclick="confirmModelFromJob(null, this)" ${m?.missing?.length ? 'disabled' : ''}>${todo.length > 1 ? `Подтвердить все нужные (${todo.length})` : 'Подтвердить'}</button></div>
       <div id="jobModel" style="margin:0 10px 8px">${m ? jobModelHtml(m) : '<div class="muted">Загрузка частей модели…</div>'}</div>
       ${JOB_MODEL.id === j.id && JOB_MODEL.msg ? `<div class="err" style="margin:0 10px 8px">${esc(JOB_MODEL.msg)}</div>` : ''}</div>`;
   }
-  if (j.status === 'awaiting_cases') html += jobCasesHtml(j, false, opened);
+  if (j.status === 'awaiting_cases' || heldBy(j, 'cases') || (live && caseFindings(j).some(x => x.f.decision?.auto))) html += jobCasesHtml(j, false, opened);
   else if (j.cases && j.scenarios?.some(s => s.case_review)) html += `<details class="opt" data-g="cases" ${opened.has('cases') ? 'open' : ''}><summary>Ревью кейсов — ${esc(caseTally(j))}</summary>${jobCasesHtml(j, true, opened)}</details>`;
-  if (j.status === 'awaiting_reuse') {
+  if (j.status === 'awaiting_reuse' || heldBy(j, 'reuse')) {
     const rows = j.items.map((it, i) => [it, i]).filter(([it]) => it.match && !it.match.decision && !['done', 'needs_attention'].includes(it.status));
-    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: эти сценарии похожи на созданные ранее — создать новый тест, переиспользовать или доработать прежний?</span>
+    html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: эти сценарии похожи на созданные ранее — создать новый тест, переиспользовать или доработать прежний?${j.status !== 'awaiting_reuse' ? ' Остальные сценарии уже в работе.' : ''}</span>
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
       <button class="btn primary" onclick="applyReuse()">Применить</button></div>
       <table class="scen-list"><thead><tr><th>#</th><th>Новый сценарий</th><th>Похож на</th><th>Решение</th></tr></thead><tbody>${rows.map(([it, i]) => `<tr>
@@ -5420,7 +5482,8 @@ function renderJob() {
   if (groups.attention.length) html += `<details class="job-group warn" data-g="attention" ${JOB_FOLDED.has('attention') ? '' : 'open'}
     ontoggle="this.open ? JOB_FOLDED.delete('attention') : JOB_FOLDED.add('attention')"><summary>Нужно подтверждение (${groups.attention.length})
     <span class="muted" style="font-weight:400;font-size:12px">— откройте сессию в Studio или разберите упавший прогон</span></summary>${jobItemsTable(groups.attention, 'job-attention')}</details>`;
-  html += group('bug', 'bad', 'Возможные дефекты', 'приложение ведёт себя не так, как ожидает сценарий: проверьте и заведите дефект') +
+  html += group('held', 'warn', 'Ждут вашего решения', 'остальные сценарии в работе; эти продолжатся сами, как только решение принято — разберите его выше') +
+    group('bug', 'bad', 'Возможные дефекты', 'приложение ведёт себя не так, как ожидает сценарий: проверьте и заведите дефект') +
     group('active', '', 'В работе', '');
   const fold = (g, title) => groups[g].length ? `<details class="job-group" data-g="${g}" ${opened.has(g) ? 'open' : ''}><summary>${title} (${groups[g].length})</summary>${jobItemsTable(groups[g], 'job-' + g)}</details>` : '';
   html += fold('done', 'Готово') + fold('waiting', live ? 'В очереди или отменено' : 'Не начато, прервано или отменено');
@@ -5444,6 +5507,8 @@ const CASE_KIND = {ambiguous: 'неоднозначный шаг', expected: 'н
   irreversible: 'необратимое действие', other: 'другое'};
 const CASE_SEV = {blocker: ['блокирует', 'bad'], major: ['важное', 'warn'], minor: ['мелкое', 'off']};
 const CASE_DEC = {answer: 'ответ', accept: 'предложение ревьюера', dismiss: 'не актуально'};
+// a decision made without a person (cases.review / cases.auto_accept): what it was made by
+const caseAuto = d => d.auto === 'memory' ? `по прежнему ответу команды${d.by ? ` (${esc(d.by)})` : ''}` : `автоматически: ревьюер уверен на ${d.confidence || 0}%`;
 const CASE_DRAFT = {};       // finding id -> the answer being typed (survives the polling of the run)
 function caseFindings(j) { return (j.scenarios || []).flatMap((s, i) => ((s.case_review || {}).findings || []).map(f => ({f, s, i}))); }
 function caseTally(j) {
@@ -5460,8 +5525,10 @@ function jobCasesHtml(j, done, opened = new Set()) {
   const shown = !!document.querySelector('#jobBox details[data-g^="case-"]');
   const open = rows.filter(x => !x.f.decision && x.f.severity !== 'minor');
   const proposals = rows.filter(x => !x.f.decision && x.f.suggestion);
-  const head = done ? '' : `<div class="gh"><span class="grow">Нужно ваше решение: ревьюер нашёл в кейсах то, что мешает автоматизировать их так, как задумали авторы.
-      Ответьте, как должно быть, примите предложение ревьюера или отметьте «Не актуально» — ответы получит агент. Ждут решения: ${open.length}.</span>
+  const auto = rows.filter(x => x.f.decision?.auto);
+  const head = done ? '' : `<div class="gh"><span class="grow">${open.length ? `Нужно ваше решение: ревьюер нашёл в кейсах то, что мешает автоматизировать их так, как задумали авторы.
+      Ответьте, как должно быть, примите предложение ревьюера или отметьте «Не актуально» — ответы получит агент и запомнит команда. Ждут решения: ${open.length}; кейсы без замечаний уже в работе.`
+      : 'Блокирующие замечания разобраны: кейсы в работе.'}${auto.length ? ` Решено без вас: ${auto.length} — проверьте и при необходимости отмените.` : ''}</span>
       <button class="btn" onclick="cancelJob()">Отменить запуск</button>
       ${proposals.length ? `<button class="btn primary" onclick="acceptCaseProposals()">Принять предложения ревьюера (${proposals.length})</button>` : ''}</div>`;
   const finding = f => {
@@ -5469,8 +5536,10 @@ function jobCasesHtml(j, done, opened = new Set()) {
     const dec = f.decision;
     return `<div class="case-f"><span class="badge ${cls}">${sev}</span> <span class="muted">${esc(CASE_KIND[f.kind] || f.kind)}${f.step ? ` · шаг ${f.step}` : ''}</span>
       <div>${esc(f.problem)}</div>${f.quote ? `<div class="hint">«${esc(f.quote)}»</div>` : ''}${f.question ? `<div class="hint"><b>Вопрос авторам:</b> ${esc(f.question)}</div>` : ''}
-      ${f.suggestion ? `<div class="hint"><b>Предложение ревьюера:</b> ${esc(f.suggestion)}</div>` : ''}
-      ${dec ? `<div class="hint ok">✓ ${CASE_DEC[dec.action] || dec.action}${dec.text && dec.action !== 'accept' ? `: ${esc(dec.text)}` : ''} <span class="muted">— ${esc(dec.user || '')}</span></div>`
+      ${f.suggestion ? `<div class="hint"><b>Предложение ревьюера:</b> ${esc(f.suggestion)}${f.confidence ? ` <span class="muted">(уверенность ${f.confidence}%)</span>` : ''}</div>` : ''}
+      ${f.theme && !dec ? `<div class="hint">Общий вопрос «${esc(caseTheme(f.theme)?.title || '')}» — можно ответить один раз выше</div>` : ''}
+      ${dec ? `<div class="hint ok">✓ ${CASE_DEC[dec.action] || dec.action}${dec.text && dec.action !== 'accept' ? `: ${esc(dec.text)}` : ''} <span class="muted">— ${dec.auto ? caseAuto(dec) : esc(dec.user || '')}</span>
+          ${dec.auto && !done && caseOpen(f.id) ? `<button class="btn small" onclick="settleCase('${esc(f.id)}', 'reopen')" title="Вернуть замечание на ваше решение: кейс подождёт его">Отменить</button>` : ''}</div>`
         : done ? '' : `<textarea data-case-answer="${esc(f.id)}" placeholder="Как должно быть (для «Ответить») или почему не актуально">${esc(CASE_DRAFT[f.id] || '')}</textarea>
       <div class="row"><span class="grow"></span>
         <button class="btn small" onclick="settleCase('${esc(f.id)}', 'dismiss')">Не актуально</button>
@@ -5486,7 +5555,31 @@ function jobCasesHtml(j, done, opened = new Set()) {
       <div style="margin:0 10px 8px">${s.role ? `<div class="hint"><b>Роль:</b> ${esc(s.role)}</div>` : ''}${data ? `<div class="hint"><b>Тестовые данные:</b> ${esc(data)}</div>` : ''}
       ${fs.map(finding).join('')}</div></details>`;
   }).join('');
-  return done ? body : `<div class="job-group warn">${head}${body}</div>`;
+  return done ? body : `<div class="job-group warn">${head}${caseThemesHtml(j)}${body}</div>`;
+}
+const caseTheme = id => (JOB?.cases?.themes || []).find(t => t.id === id);
+// a case not taken to work yet: an automatic decision on it can still be undone
+function caseOpen(fid) {
+  const i = +String(fid).match(/^c(\d+)f/)?.[1];
+  return (JOB?.items || []).some(it => it.scenario_index === i && ['queued', 'waiting'].includes(it.status) && !it.skipped);
+}
+// One answer for many cases (cases.group): the findings one answer settles, asked once.
+function caseThemesHtml(j) {
+  const byId = Object.fromEntries(caseFindings(j).map(x => [x.f.id, x]));
+  const themes = (j.cases?.themes || []).map(t => ({...t, rows: t.ids.map(id => byId[id]).filter(Boolean)}))
+    .filter(t => t.rows.some(x => !x.f.decision));
+  if (!themes.length) return '';
+  return `<div style="margin:0 10px 8px"><b>Общие вопросы — один ответ на все кейсы темы</b>` + themes.map(t => {
+    const left = t.rows.filter(x => !x.f.decision), cases = [...new Set(left.map(x => x.s.title))];
+    return `<div class="case-f"><span class="badge warn">${left.length} замеч. в ${cases.length} кейсах</span> <b>${esc(t.title)}</b>
+      ${t.question ? `<div>${esc(t.question)}</div>` : ''}<div class="hint">Кейсы: ${cases.map(esc).join(', ')}</div>
+      ${t.suggestion ? `<div class="hint"><b>Предложение ревьюера:</b> ${esc(t.suggestion)}</div>` : ''}
+      <textarea data-case-answer="${esc(t.id)}" placeholder="Как должно быть — ответ получат все кейсы темы (или почему не актуально)">${esc(CASE_DRAFT[t.id] || '')}</textarea>
+      <div class="row"><span class="grow"></span>
+        <button class="btn small" onclick="settleCase('${esc(t.id)}', 'dismiss')">Не актуально для всех</button>
+        ${t.suggestion || left.every(x => x.f.suggestion) ? `<button class="btn small" onclick="settleCase('${esc(t.id)}', 'accept')">Принять предложение</button>` : ''}
+        <button class="btn small primary" onclick="settleCase('${esc(t.id)}', 'answer')">Ответить всем (${left.length})</button></div></div>`;
+  }).join('') + '</div>';
 }
 document.addEventListener('input', e => { if (e.target.dataset?.caseAnswer) CASE_DRAFT[e.target.dataset.caseAnswer] = e.target.value; });
 async function sendCaseDecisions(decisions) {
@@ -5626,7 +5719,19 @@ async function loadJobModel(jid) {
     const data = await api('GET', `/api/jobs/${jid}/model`);
     JOB_MODEL = {id: jid, at: Date.now(), data, msg: JOB_MODEL.id === jid ? JOB_MODEL.msg : ''};
   } catch (e) { JOB_MODEL = {id: jid, at: Date.now(), data: {units: [], missing: [], all: true}, msg: e.message}; }
-  if (JOB?.id === jid && JOB.status === 'awaiting_model') renderJob();
+  if (JOB?.id === jid && (JOB.status === 'awaiting_model' || heldBy(JOB, 'model'))) renderJob();
+}
+// What changed in a part of the model since a person confirmed it (knowledge.unit_changes): only that is shown.
+const KN_FIELD = {depends_on: 'нужно раньше', lifecycle: 'жизненный цикл', create: 'кто создаёт', rules: 'правила',
+  capabilities: 'может', restrictions: 'не может'};
+function modelChangesHtml(ch) {
+  const val = v => Array.isArray(v) ? (v.length ? v.join(', ') : '—') : (v || '—');
+  const rows = [
+    ...ch.added.map(n => `<div class="jm-ent"><span class="badge ok">новое</span> <b>${esc(n)}</b></div>`),
+    ...ch.removed.map(n => `<div class="jm-ent"><span class="badge bad">удалено</span> <b>${esc(n)}</b></div>`),
+    ...ch.changed.map(c => `<div class="jm-ent"><span class="badge warn">изменено</span> <b>${esc(c.name)}</b>${c.fields.map(f =>
+      `<div class="hint">${esc(KN_FIELD[f.field] || f.field)}: <s>${esc(val(f.before))}</s> → ${esc(val(f.after))}</div>`).join('')}</div>`)];
+  return rows.length ? rows.join('') : '<div class="muted">Изменились только формулировки</div>';
 }
 function jobModelHtml(m) {
   if (m.missing?.length) return `<div class="err">Модель нельзя подтвердить: ${esc(m.missing.join('; '))} — дополните её («Изменить в модели»).</div>`;
@@ -5639,7 +5744,9 @@ function jobModelHtml(m) {
       <span class="badge ${u.state === 'confirmed' ? 'ok' : u.state === 'changed' ? 'warn' : 'off'}">${esc(MODEL_STATE[u.state] || u.state)}</span>
       <b>${esc(u.title)}</b>${u.items ? ` <span class="muted">· сущностей: ${u.items.length}</span>` : ''}
       ${u.state !== 'confirmed' ? `<button class="btn small" onclick="event.preventDefault(); confirmModelFromJob([this.closest('[data-unit]').dataset.unit], this)">Подтвердить часть</button>` : ''}</summary>
-      ${(u.items || []).map(ent).join('') || (u.roles || []).map(role).join('') || '<div class="muted">пусто</div>'}</details>`).join('');
+      ${u.changes ? `<div class="hint"><b>Что изменилось с подтверждения${u.by ? ` (подтвердил ${esc(u.by)}, ${fmtTime(u.at)})` : ''}:</b></div>${modelChangesHtml(u.changes)}
+        <details class="opt"><summary>Вся часть модели</summary>${(u.items || []).map(ent).join('') || (u.roles || []).map(role).join('') || '<div class="muted">пусто</div>'}</details>`
+        : (u.items || []).map(ent).join('') || (u.roles || []).map(role).join('') || '<div class="muted">пусто</div>'}</details>`).join('');
 }
 // units: null - all the parts the run needs (the whole model when it names no entity)
 async function confirmModelFromJob(units, btn) {
@@ -6956,6 +7063,12 @@ function renderKnConfirm() {
         <td style="text-align:right">${u.state === 'confirmed' ? '' : `<button class="btn small" onclick="knConfirmUnits(${esc(JSON.stringify([u.unit]))})">Подтвердить</button>`}</td></tr>`;
     }).join('')}</tbody></table>
     <div class="hint">Тест сценария ждёт подтверждения только тех частей, которые нужны его сущностям (с тем, что они требуют), и ролей.</div>`;
+  // changed since confirmed: what changed, not the whole diagram again
+  const changed = units.filter(u => u.changes);
+  if (changed.length) $('#knUnits').innerHTML += `<div class="box next" style="margin-top:10px"><b>Что изменилось с прошлого подтверждения</b>
+    <div class="hint">Проверьте только изменения и подтвердите часть — диаграмма ниже показывает модель целиком.</div>${changed.map(u => `<details class="opt" open><summary><b>${esc(u.title)}</b>
+      <span class="muted">— подтверждено ${fmtTime(u.at)}${u.by ? ' · ' + esc(u.by) : ''}</span>
+      <button class="btn small" onclick="event.preventDefault(); knConfirmUnits(${esc(JSON.stringify([u.unit]))})">Подтвердить изменения</button></summary>${modelChangesHtml(u.changes)}</details>`).join('')}</div>`;
   $('#knConfirmState').innerHTML = `<span class="badge ${cls}">Жизненный цикл ${label}</span>` +
     (c.at ? ` <span class="muted" style="font-size:12px">${fmtTime(c.at)}${c.by ? ' · ' + esc(c.by) : ''}</span>` : '') +
     (c.missing?.length ? `<div class="hint">Не хватает: ${c.missing.map(esc).join('; ')}</div>` : '') +

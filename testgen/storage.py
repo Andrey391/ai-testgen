@@ -45,6 +45,8 @@ def _history_dir(pid: str, tid: str):
 def _stamp(old: dict | None, test: dict) -> dict:
     """The test about to replace `old`: a version of `old` kept if it changed, who and when."""
     test["updated"] = time.time()
+    # when the test was made (the dashboard's decisions per test); a test of an older version - its last change
+    test["created"] = (old or {}).get("created") or (old or {}).get("updated") or test.get("created") or test["updated"]
     if old and any(old.get(k) != test.get(k) for k in VERSIONED):
         _keep_version(old)
     test["updated_by"] = ACTOR.get() or test.get("updated_by", "")
