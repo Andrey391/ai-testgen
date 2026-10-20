@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import datetime
-import time
 import types
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import speed
 from testgen import agent, analyses, auth, db, fs, inbox, knowledge, notify, pipeline, projects, storage, tasks
 from testgen.repo import tests as tests_repo
 from testgen.steps import new_step
@@ -123,11 +123,11 @@ def test_the_inbox_answers_fast_on_a_thousand_tests(open_studio):
             for i in range(1000)]
     with db.engine().begin() as c:
         c.execute(db.tests.insert(), rows)
-    inbox.project_inbox(pid)            # warm: the first query of a process prepares the connection
-    start = time.perf_counter()
     entries = inbox.project_inbox(pid)
-    assert time.perf_counter() - start < 0.2
     assert sum(1 for e in entries if e["kind"] == "heal") == 10
+    took, queries = speed(lambda: inbox.project_inbox(pid))
+    assert queries <= 20, f"{queries} SQL queries for the inbox of 1000 tests"
+    assert took < 0.2, f"{took:.3f} s"
 
 
 def test_a_waiting_run_notifies_once(monkeypatch):
@@ -187,9 +187,9 @@ def test_the_inbox_reads_again_only_what_changed(open_studio, monkeypatch):
     first = inbox.project_inbox(pid)
     counted = []
     monkeypatch.setattr(knowledge, "duplicates", lambda doc: counted.append(1) or [])
-    start = time.perf_counter()
     assert inbox.project_inbox(pid) == first
-    assert time.perf_counter() - start < 0.2 and not counted     # the model did not change: not counted again
+    took, queries = speed(lambda: inbox.project_inbox(pid))
+    assert queries <= 20 and took < 0.2 and not counted     # the model did not change: not counted again
     knowledge.confirm(pid, "ann")
     counted.clear()
     assert "model" not in _kinds({"items": inbox.project_inbox(pid)}) and counted == [1]   # changed: counted again

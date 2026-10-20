@@ -84,6 +84,27 @@ from testgen import llm, projects, storage, vault  # noqa: E402
 vault.LOCAL_KEY = _TMP / "secret.key"       # tests never make the key of local development of this computer
 
 
+def speed(fn, times: int = 5) -> tuple[float, int]:
+    """A speed check that a loaded machine does not break: -> (the best of `times` runs in seconds, the SQL queries
+    of one run). The query count catches «a query per test» exactly; the best time - only a gross slowdown."""
+    import time
+    from sqlalchemy import event
+    from testgen import db
+    fn()                                    # warm: the first query of a process prepares the connection
+    queries, best = [], float("inf")
+    count = lambda *a, **k: queries.append(1)                       # noqa: E731
+    event.listen(db.engine(), "before_cursor_execute", count)
+    try:
+        for _ in range(times):
+            queries.clear()
+            start = time.perf_counter()
+            fn()
+            best = min(best, time.perf_counter() - start)
+    finally:
+        event.remove(db.engine(), "before_cursor_execute", count)
+    return best, len(queries)
+
+
 def pytest_collection_modifyitems(items):
     for item in items:
         if {"stand", "_stand"} & set(getattr(item, "fixturenames", ())):

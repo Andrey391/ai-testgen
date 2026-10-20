@@ -7,6 +7,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import speed
 from testgen import auth, projects, runs, storage, tasks, traffic
 
 
@@ -89,9 +90,8 @@ def test_a_thousand_tests_are_listed_quickly(client, open_studio):
             repo.Sql.put(c, {"project_id": pid, "id": f"t{i:04}", "name": f"Тест {i}", "url": "http://x/",
                              "updated": now - i, "steps": [{"action": "click"}] * 10,
                              "last_run": {"status": "failed" if i % 10 == 0 else "passed"}})
-    client.get("/api/tests", params={"project_id": pid, "health": "failing"})      # warm up
-    started = time.perf_counter()
-    r = client.get("/api/tests", params={"project_id": pid, "health": "failing"})
-    took = time.perf_counter() - started
-    assert len(r.json()) == 100
+    listed = lambda: client.get("/api/tests", params={"project_id": pid, "health": "failing"}).json()  # noqa: E731
+    assert len(listed()) == 100
+    took, queries = speed(listed)
+    assert queries <= 10, f"{queries} SQL queries for a list of 100 tests"
     assert took < 0.2, f"{took:.3f} s"
