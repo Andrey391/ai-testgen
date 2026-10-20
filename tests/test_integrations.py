@@ -11,11 +11,11 @@ import zipfile
 import httpx
 import pytest
 
-from fakes import tool
+from fakes import Resp, tool
 from helpers import arun, record
 from test_agent_invariants import _agent
-from testgen import (defects, exporters, mcp_hub, notify, pipeline, projects, publisher, sources, storage, suite,
-                     testit, trackers)
+from testgen import (cases, defects, exporters, mcp_hub, notify, pipeline, projects, publisher, sources, storage,
+                     suite, testit, trackers)
 from testgen.steps import new_step
 
 
@@ -85,17 +85,21 @@ def test_testit_cases_become_linked_autotests_with_results(stand, project, fake_
     p["pipeline"]["publish"].update(enabled=True, connection=conn["id"], report_runs=True)
     p = projects.update(p["id"], {"pipeline": p["pipeline"]})
 
-    fake_llm.script = _agent([
+    agent = _agent([
         ("fill", {"text": "{{username}}", "press_enter": False, "description": "Ввести логин"}, "Логин"),
         ("fill", {"text": "{{password}}", "press_enter": False, "description": "Ввести пароль"}, "Пароль"),
         ("click", {"description": "Нажать «Войти»"}, "Войти"),
         ("assert_element_text", {"text": "Всего: 2", "description": "Открыт список"}, "Всего: 2"),
         ("finish", {"status": "passed", "summary": "ok", "evidence": "проверка результата"}, None)])
+    # the review of the cases (cases.review) finds nothing; the rest is the authoring agent
+    fake_llm.script = lambda kind, kw: (Resp(parsed=cases.XCases(cases=[cases.XCase(index=0)])) if kind == "parse"
+                                        else agent(kind, kw))
     job = pipeline.Job(p, [], "", f"{stand.url}/login.html", {}, cases={"connection": conn["id"], "ids": []})
     arun(job.run())
     assert job.status == "done", (job.error, job.log)
     item = job.items[0]
     assert item["status"] == "done" and item["title"] == "Вход в систему", item
+    assert job.scenarios[0]["case_review"]["findings"] == []
     assert "Открыт список: Всего: 2" in job.scenarios[0]["expected_result"]       # HTML stripped
     t = storage.load(item["test_id"])
     ext = t["external"]["testit"]

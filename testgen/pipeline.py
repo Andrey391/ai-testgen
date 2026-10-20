@@ -27,7 +27,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from . import (analyses, audit, explorer, fs, knowledge, llm, mcp_hub, mutations, notify, projects, publisher, reuse,
+from . import (analyses, audit, cases as case_review, explorer, fs, knowledge, llm, mcp_hub, mutations, notify, projects, publisher, reuse,
                review, runner, runs, scenarios, sources, storage, vault)
 from . import agent
 from .agent import StudioSession, has_assertion
@@ -302,7 +302,8 @@ class Job:
         self.links = [l.strip() for l in links if l.strip()]
         self.text, self.url, self.user = text.strip(), url.strip() or project.get("base_url", ""), user
         self.explore = explore
-        # Manual test cases to automate: {"connection": id, "ids": [...]} (no ids = every case, Test IT)
+        # Manual test cases to automate: {"connection": id, "ids": [...]} (no ids = every case, Test IT), or
+        # {"connection": id, "import_id": ..., "picks": [...]} - the cases a person chose in an import (cases.py)
         self.cases = cases or None
         # Scenarios prepared (and edited) in the Requirements tab: no requirements or test design stage.
         self.given = [dict(s) for s in scenarios or []]
@@ -329,7 +330,8 @@ class Job:
         self.sessions = sessions
         self.waiting_since = None       # since when the run waits for a person (an awaiting_* status)
         self.waits: list[dict] = []     # the waits that ended: {status, since, until} - the dashboard's wait time
-        # running | awaiting_review | awaiting_model | awaiting_selection | awaiting_reuse | done | error | cancelled
+        # running | awaiting_review | awaiting_cases | awaiting_model | awaiting_selection | awaiting_reuse | done |
+        # error | cancelled
         self.status = "running"
         self.notified: list[str] = []   # the waits the team was told of (notify "job_waiting"): once each
         self.stage = "requirements"
@@ -544,6 +546,16 @@ class Job:
                 return
         if self._cancel:
             return
+        if self.cases:
+            # Manual cases: the chosen ones are reviewed, a person settles what blocks automating them.
+            if not self.items:
+                await self._select(cfg["scenarios"]["select"])
+                if self._cancel or not self.items:
+                    return
+            await self._review_cases(project)
+            await self._await_cases()
+            if self._cancel:
+                return
         if cfg["requirements"].get("confirm_model"):
             await self._await_model()
             if self._cancel:
@@ -754,15 +766,80 @@ class Job:
         conn = mcp_hub.find(project, cid=self.cases.get("connection", ""))
         if not conn:
             raise ValueError("Подключение системы управления тестами для импорта кейсов не найдено")
-        ids = [str(i) for i in self.cases.get("ids") or []]
-        self._log(f"Импорт ручных кейсов из «{conn['name']}»" + (f": {', '.join(ids[:20])}" if ids else " (все кейсы)"))
-        self.scenarios = await publisher.import_cases(project, conn, ids, log=self._log)
+        if self.cases.get("import_id"):
+            # Imported and chosen by a person in the Tests tab: not read from the system again, no selection.
+            imp = case_review.get_import(self.project_id, self.cases["import_id"])
+            if not imp:
+                raise ValueError("Импорт кейсов не найден: загрузите кейсы заново")
+            picks = [i for i in dict.fromkeys(self.cases.get("picks") or []) if 0 <= i < len(imp["cases"])]
+            self.scenarios = [dict(imp["cases"][i]) for i in picks]
+            self.items = [self._item(s) | {"scenario_index": i} for i, s in enumerate(self.scenarios)]
+            self._log(f"Ручные кейсы из «{conn['name']}», выбранные в импорте: {len(self.scenarios)}")
+        else:
+            ids = [str(i) for i in self.cases.get("ids") or []]
+            self._log(f"Импорт ручных кейсов из «{conn['name']}»" + (f": {', '.join(ids[:20])}" if ids else " (все кейсы)"))
+            self.scenarios = await publisher.import_cases(project, conn, ids, log=self._log)
         self.requirements.append({"source": conn["name"], "title": f"Ручные кейсы: {len(self.scenarios)}",
                                   "chars": 0})
         self.feature = f"Автоматизация ручных кейсов ({conn['name']})"
         self._log(f"Кейсов для автоматизации: {len(self.scenarios)}")
         if not self.scenarios:
             self._log("Кейсы не найдены", "warn")
+
+    def _chosen_cases(self) -> list[tuple[int, dict]]:
+        return [(it["scenario_index"], self.scenarios[it["scenario_index"]]) for it in self.items
+                if "scenario_index" in it and it["status"] not in DONE_ITEMS and not it.get("skipped")]
+
+    async def _review_cases(self, project: dict) -> None:
+        """The reviewer reads the chosen cases (cases.review): the role and test data of each, and the findings
+        that keep the agent from automating it as the authors meant. Cases reviewed before are not asked again."""
+        todo = [(i, c) for i, c in self._chosen_cases() if not c.get("case_review")]
+        if not todo:
+            return
+        self.stage = "requirements"
+        self._log(f"Ревью кейсов: {len(todo)} — тестовые данные и что мешает автоматизировать кейс")
+        try:
+            await case_review.review(project, todo, keep=self.save, log=self._log)
+        except Exception as e:
+            raise RuntimeError(f"Ревью кейсов не удалось: {_err(e)} — «Продолжить» проверит оставшиеся") from e
+        t = case_review.tally([c for _, c in self._chosen_cases()])
+        self._log(f"Ревью кейсов готово: замечаний {t['findings']}, блокирующих {t['blocking']}",
+                  "warn" if t["blocking"] else "info")
+        self.save()
+
+    def settle_cases(self, decisions: list[dict], user: str = "") -> int:
+        """A person's decisions on the findings of the case review (call on the worker loop)."""
+        n = case_review.settle([c for _, c in self._chosen_cases()], decisions, user)
+        if n:
+            self._log(f"Решения по замечаниям к кейсам ({user or 'студия'}): {n}")
+        self.save()
+        self._wake.set()
+        return n
+
+    async def _await_cases(self) -> None:
+        """A case with a blocking finding nobody settled is not automated: the run waits for a person
+        (awaiting_cases). Then the test data of the cases joins the application model."""
+        def chosen():
+            return [c for _, c in self._chosen_cases()]
+        if case_review.unsettled(chosen()):
+            self._waiting("awaiting_cases")
+            self._log(f"Замечания к кейсам ждут решения: {len(case_review.unsettled(chosen()))} — ответьте, как должно "
+                      "быть, примите предложение ревьюера или отметьте «Не актуально»", "warn")
+            while not self._cancel and case_review.unsettled(chosen()):
+                self._wake.clear()
+                try:
+                    await asyncio.wait_for(self._wake.wait(), MODEL_POLL)
+                except asyncio.TimeoutError:
+                    pass
+            if self._cancel:
+                return
+            self.status = "running"
+            self._log("Замечания к кейсам разобраны: автоматизация")
+        if projects.get(self.project_id)["pipeline"]["requirements"].get("learn_model"):
+            data = [c for c in chosen() if c.get("test_data") or c.get("role")]
+            if data:
+                knowledge.need(self.project_id, data)      # sets record_id of the test data in place
+        self.save()
 
     def _model_units(self) -> list[str] | None:
         return model_units(self.project_id, self.scenarios)
@@ -1218,7 +1295,7 @@ class Job:
 
 
 # A run in these states is working (or waiting for a person) in the instance that owns it.
-LIVE = ("running", "awaiting_review", "awaiting_model", "awaiting_selection", "awaiting_reuse")
+LIVE = ("running", "awaiting_review", "awaiting_cases", "awaiting_model", "awaiting_selection", "awaiting_reuse")
 WAITING = LIVE[1:]          # the run waits for a person's decision
 MAX_WAITS = 50              # the ended waits a run keeps
 MODEL_POLL = 3      # seconds between checks of the application model while a run waits for its confirmation
@@ -1313,6 +1390,9 @@ def scenario_text(sc: dict) -> str:
                 f"интерфейсе.\n{text}")
     if sc.get("expected_result"):
         text += f"\nОжидаемый результат: {sc['expected_result']}"
+    if sc.get("clarifications"):
+        # a manual case: the team's answers to the findings of its review (cases.settle)
+        text += "\nУточнения команды к кейсу:\n" + "\n".join(f"- {c}" for c in sc["clarifications"])
     return text
 
 

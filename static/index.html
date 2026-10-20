@@ -106,6 +106,10 @@ textarea.big{min-height:14em;resize:vertical}
 .acc-param input[type=text],.acc-param input[type=password]{margin:0}
 #credDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:520px;width:calc(100% - 32px)}
 #credDlg::backdrop{background:rgba(0,0,0,.35)}
+#casesDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:900px;width:calc(100% - 32px)}
+#casesDlg::backdrop{background:rgba(0,0,0,.35)}
+.case-f{border-top:1px solid var(--line);padding:8px 0}.case-f:first-child{border-top:0}
+.case-f textarea{width:100%;min-height:54px;margin-top:6px}
 #askDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:460px;width:calc(100% - 32px);padding:18px}
 #askDlg::backdrop{background:rgba(0,0,0,.35)}
 #askDlg h3{margin:0 0 8px;font-size:16px}
@@ -512,6 +516,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <button data-tab="proj" data-needs-project>Проект</button>
   </nav>
   <span class="grow"></span>
+  <a class="btn" id="helpBtn" href="/guide" target="_blank" rel="noopener" title="Руководство пользователя: знакомство со студией, пошаговые сценарии работы и словарь терминов">Справка</a>
   <span class="muted hidden" id="whoami"></span>
   <button class="btn hidden" id="logoutBtn">Выйти</button>
   <!-- «Ждёт вас» - in the top right corner, the list opens to the left -->
@@ -639,13 +644,16 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="row"><button class="btn" data-wzgo="3">← Назад</button>
           <h3 class="grow" style="margin:0">Готово. С чего начать?</h3><span class="err" id="wz3Err"></span></div>
         <div class="start-choice" id="wzStart">
+          <button data-start="explore"><b>Познакомиться с системой</b> <span class="badge ok">для начала</span>
+            <span>Planner обойдёт приложение по ссылкам (только просмотр) и построит черновик модели: сущности, статусы, роли. Требования, кейсы и тесты потом её дополнят</span></button>
           <button data-start="req"><b>Проверить требования</b>
             <span>ТЗ из трекера, файла или текстом: ревьюер найдёт дефекты, затем конвейер спроектирует сценарии и тесты</span></button>
+          <button data-start="cases"><b>Автоматизировать ручные кейсы</b>
+            <span>Кейсы из Test IT, Allure TestOps или Zephyr Scale: ревьюер разберёт тестовые данные и замечания, агент запишет тесты</span></button>
           <button data-start="studio"><b>Записать тест в Studio</b>
             <span>Опишите сценарий обычным языком — агент пройдёт его в браузере на адресе проекта и запишет тест</span></button>
-          <button data-start="explore"><b>Исследовать сайт и предложить сценарии</b>
-            <span>Planner обойдёт приложение по ссылкам, конвейер предложит сценарии по карте страниц — когда ТЗ нет</span></button>
         </div>
+        <div class="hint">Не знаете, с чего начать? Руководство пользователя — <a href="/guide" target="_blank" rel="noopener">«Справка»</a> в шапке.</div>
         <div class="hint">Выбор запоминается в проекте: в первый раз проект откроется здесь, дальше — на вкладке, где вы остановились.</div>
       </div>
     </div>
@@ -843,6 +851,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <button type="button" role="tab" aria-selected="false" tabindex="-1" data-sec="coverage">Покрытие экранов</button>
       </div>
       <span class="grow"></span>
+      <button class="btn" id="casesBtn" title="Подтянуть ручные тест-кейсы из Test IT, Allure TestOps или Zephyr Scale и автоматизировать выбранные: ИИ-ревьюер разберёт тестовые данные и замечания, агент запишет тесты">Импорт кейсов</button>
       <select id="runScreen" style="width:auto" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
         <option value="">Экран: как в проекте</option>
         <option value="1920x1080">1920×1080</option>
@@ -1349,6 +1358,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="card">
             <h3>Модель приложения и тестовые данные</h3>
             <div class="muted">Из чего состоит приложение и какие данные есть на стенде — чтобы тесты учитывали зависимости, которые влияют на результат. Модель строится сама: из требований, из карты сайта (Planner) и при записи тестов (инструмент агента <code>test_data</code>). Запись, которая уже есть (то же или похожее имя), не дублируется и не меняется молча: обновление ждёт подтверждения в разделе «Обновления».</div>
+            <div class="box next" id="knMeet"><b>Познакомиться с системой.</b> Planner обойдёт приложение по ссылкам — только просмотр, без форм, выхода и удаления — и построит черновик модели: сущности, их статусы и зависимости, роли, данные на страницах. Потом модель дополняют требования, ручные кейсы и записанные тесты; изменения подтверждённого ждут вас в «Обновлениях».
+              <div class="row" style="margin-top:6px"><input id="knMeetUrl" class="grow" placeholder="Адрес, с которого начать — по умолчанию адрес проекта">
+                <button class="btn primary" id="knMeetBtn">Исследовать сайт</button></div>
+              <div class="muted" id="knMeetMsg"></div></div>
             <div class="kn-tiles" id="knTiles"></div>
             <div id="knLimits"></div>
             <label>О приложении</label><textarea id="knSummary" rows="2" placeholder="Интернет-магазин: каталог, категории, товары, корзина, заказы, оплата, доставка, покупатели"></textarea>
@@ -1724,6 +1737,23 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="row" style="margin-top:12px"><span class="err grow" id="cdErr"></span>
     <button class="btn" onclick="$('#credDlg').close()">Отмена</button>
     <button class="btn primary" id="cdSave">Сохранить</button></div>
+</dialog>
+
+<dialog id="casesDlg" aria-labelledby="casesTitle">
+  <h3 style="margin-top:0" id="casesTitle">Импорт ручных кейсов</h3>
+  <div class="hint">Кейсы из системы управления тестами станут автотестами: ИИ-ревьюер вытащит из каждого роль и тестовые данные
+    и отметит, что мешает автоматизировать (неоднозначный шаг, нет ожидаемого результата, не хватает данных). Блокирующие
+    замечания разберёте вы — в запуске конвейера; потом агент запишет тесты, они привяжутся к исходным кейсам.</div>
+  <div class="grid2">
+    <div><label for="csConn">Откуда</label><select id="csConn"></select></div>
+    <div><label for="csIds">Номера кейсов через запятую</label><input id="csIds" placeholder="101, 102, 115 — пусто: все кейсы проекта (только Test IT)"></div>
+  </div>
+  <div class="row" style="margin-top:8px"><span class="err grow" id="csErr"></span>
+    <button class="btn" id="csFetch">Загрузить кейсы</button></div>
+  <div id="csList" style="max-height:420px;overflow:auto;margin-top:8px"></div>
+  <div class="row" style="margin-top:12px"><span class="muted grow" id="csNote"></span>
+    <button class="btn" onclick="$('#casesDlg').close()">Отмена</button>
+    <button class="btn primary" id="csStart" disabled>Автоматизировать</button></div>
 </dialog>
 
 <dialog id="askDlg" aria-labelledby="askTitle" aria-describedby="askText">
@@ -5036,7 +5066,7 @@ async function toStudio(sc, url = '', btn = null) {     // btn: the clicked butt
 
 // ---- pipeline
 const STAGES = [['requirements', 'Требования и ревью'], ['scenarios', 'Сценарии'], ['authoring', 'Генерация'], ['running', 'Прогон'], ['verifying', 'Проверка качества'], ['publishing', 'Публикация']];
-const JOB_STATUS = {running: 'Выполняется', awaiting_review: 'Ждёт решения по замечаниям ревьюера', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
+const JOB_STATUS = {running: 'Выполняется', awaiting_review: 'Ждёт решения по замечаниям ревьюера', awaiting_cases: 'Ждёт решения по замечаниям к кейсам', awaiting_model: 'Ждёт подтверждения жизненного цикла', awaiting_selection: 'Ждёт выбора сценариев', awaiting_reuse: 'Ждёт решения по похожим сценариям', done: 'Завершён', error: 'Ошибка', cancelled: 'Остановлен'};
 const ITEM_STATUS = {queued: ['в очереди', 'off'], preflight: ['проверка перед тестом', 'warn'], authoring: ['генерация', 'warn'], running: ['прогон', 'warn'], verifying: ['проверка качества', 'warn'], publishing: ['публикация', 'warn'],
   done: ['готово', 'ok'], needs_attention: ['нужно подтверждение', 'warn'], error: ['ошибка', 'bad'], cancelled: ['остановлен', 'off']};
 let JOB = null, jobTimer = null;
@@ -5071,7 +5101,7 @@ async function loadPipe() {
   if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id, true);
 }
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
-const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
+const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_cases', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
 let PIPE_BUSY = null;
 function pipeBusy(job) {
   PIPE_BUSY = job || null;
@@ -5254,8 +5284,9 @@ async function openJob(jid, quiet) {     // quiet: a refresh, or the running job
   let j;
   try { j = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   if (j.project_id !== PID) return;      // a refresh late after another project was chosen
+  const typing = quiet && document.activeElement?.dataset?.caseAnswer && JOB?.id === j.id && JOB.status === j.status;
   JOB = j;
-  renderJob();
+  if (!typing) renderJob();        // an answer to a finding being typed is not wiped by the polling
   if (JOB.status === 'awaiting_model') loadJobModel(jid);
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
   else if (PIPE_BUSY?.id === JOB.id) pipeBusy(null);
@@ -5275,7 +5306,7 @@ function itemKind(it, live) {
   return 'waiting';     // queued, cancelled, interrupted by a stop or a restart
 }
 function jobStepper(j, live) {
-  const cur = live ? (j.status === 'awaiting_review' ? 'requirements' : ['awaiting_selection', 'awaiting_model', 'awaiting_reuse'].includes(j.status) ? 'scenarios' : j.stage) : '';
+  const cur = live ? (['awaiting_review', 'awaiting_cases'].includes(j.status) ? 'requirements' : ['awaiting_selection', 'awaiting_model', 'awaiting_reuse'].includes(j.status) ? 'scenarios' : j.stage) : '';
   const at = STAGES.findIndex(([k]) => k === cur);
   const now = {};
   j.items.forEach(it => { if (live && ACTIVE_ITEM.includes(it.status)) now[it.status] = (now[it.status] || 0) + 1; });
@@ -5359,6 +5390,8 @@ function renderJob() {
       <div id="jobModel" style="margin:0 10px 8px">${m ? jobModelHtml(m) : '<div class="muted">Загрузка частей модели…</div>'}</div>
       ${JOB_MODEL.id === j.id && JOB_MODEL.msg ? `<div class="err" style="margin:0 10px 8px">${esc(JOB_MODEL.msg)}</div>` : ''}</div>`;
   }
+  if (j.status === 'awaiting_cases') html += jobCasesHtml(j, false, opened);
+  else if (j.cases && j.scenarios?.some(s => s.case_review)) html += `<details class="opt" data-g="cases" ${opened.has('cases') ? 'open' : ''}><summary>Ревью кейсов — ${esc(caseTally(j))}</summary>${jobCasesHtml(j, true, opened)}</details>`;
   if (j.status === 'awaiting_reuse') {
     const rows = j.items.map((it, i) => [it, i]).filter(([it]) => it.match && !it.match.decision && !['done', 'needs_attention'].includes(it.status));
     html += `<div class="job-group warn"><div class="gh"><span class="grow">Нужно ваше решение: эти сценарии похожи на созданные ранее — создать новый тест, переиспользовать или доработать прежний?</span>
@@ -5405,6 +5438,138 @@ function renderJob() {
     j.log.slice(-200).reverse().map(l => `<div class="${l.level}">${new Date(l.at * 1000).toLocaleTimeString('ru-RU')} — ${esc(l.text)}</div>`).join('') + '</div></details>';
   box.innerHTML = html;
 }
+// ---------- manual cases: import and the findings of their review ----------
+const CASE_KIND = {ambiguous: 'неоднозначный шаг', expected: 'нет ожидаемого результата', data: 'не хватает данных',
+  precondition: 'неясное предусловие', account: 'учётная запись', lifecycle: 'расходится с моделью приложения',
+  irreversible: 'необратимое действие', other: 'другое'};
+const CASE_SEV = {blocker: ['блокирует', 'bad'], major: ['важное', 'warn'], minor: ['мелкое', 'off']};
+const CASE_DEC = {answer: 'ответ', accept: 'предложение ревьюера', dismiss: 'не актуально'};
+const CASE_DRAFT = {};       // finding id -> the answer being typed (survives the polling of the run)
+function caseFindings(j) { return (j.scenarios || []).flatMap((s, i) => ((s.case_review || {}).findings || []).map(f => ({f, s, i}))); }
+function caseTally(j) {
+  const all = caseFindings(j), blocking = all.filter(x => x.f.severity !== 'minor');
+  if (!all.length) return 'замечаний нет';
+  const open = blocking.filter(x => !x.f.decision).length;
+  return `замечаний ${all.length}, блокирующих ${blocking.length}` + (open ? `, ждут решения ${open}` : ', разобраны');
+}
+function jobCasesHtml(j, done, opened = new Set()) {
+  const rows = caseFindings(j);
+  const byCase = {};
+  rows.forEach(x => (byCase[x.i] = byCase[x.i] || []).push(x.f));
+  const withData = (j.scenarios || []).map((s, i) => [s, i]).filter(([s]) => s.case_review);
+  const shown = !!document.querySelector('#jobBox details[data-g^="case-"]');
+  const open = rows.filter(x => !x.f.decision && x.f.severity !== 'minor');
+  const proposals = rows.filter(x => !x.f.decision && x.f.suggestion);
+  const head = done ? '' : `<div class="gh"><span class="grow">Нужно ваше решение: ревьюер нашёл в кейсах то, что мешает автоматизировать их так, как задумали авторы.
+      Ответьте, как должно быть, примите предложение ревьюера или отметьте «Не актуально» — ответы получит агент. Ждут решения: ${open.length}.</span>
+      <button class="btn" onclick="cancelJob()">Отменить запуск</button>
+      ${proposals.length ? `<button class="btn primary" onclick="acceptCaseProposals()">Принять предложения ревьюера (${proposals.length})</button>` : ''}</div>`;
+  const finding = f => {
+    const [sev, cls] = CASE_SEV[f.severity] || [f.severity, 'off'];
+    const dec = f.decision;
+    return `<div class="case-f"><span class="badge ${cls}">${sev}</span> <span class="muted">${esc(CASE_KIND[f.kind] || f.kind)}${f.step ? ` · шаг ${f.step}` : ''}</span>
+      <div>${esc(f.problem)}</div>${f.quote ? `<div class="hint">«${esc(f.quote)}»</div>` : ''}${f.question ? `<div class="hint"><b>Вопрос авторам:</b> ${esc(f.question)}</div>` : ''}
+      ${f.suggestion ? `<div class="hint"><b>Предложение ревьюера:</b> ${esc(f.suggestion)}</div>` : ''}
+      ${dec ? `<div class="hint ok">✓ ${CASE_DEC[dec.action] || dec.action}${dec.text && dec.action !== 'accept' ? `: ${esc(dec.text)}` : ''} <span class="muted">— ${esc(dec.user || '')}</span></div>`
+        : done ? '' : `<textarea data-case-answer="${esc(f.id)}" placeholder="Как должно быть (для «Ответить») или почему не актуально">${esc(CASE_DRAFT[f.id] || '')}</textarea>
+      <div class="row"><span class="grow"></span>
+        <button class="btn small" onclick="settleCase('${esc(f.id)}', 'dismiss')">Не актуально</button>
+        ${f.suggestion ? `<button class="btn small" onclick="settleCase('${esc(f.id)}', 'accept')">Принять предложение</button>` : ''}
+        <button class="btn small primary" onclick="settleCase('${esc(f.id)}', 'answer')">Ответить</button></div>`}</div>`;
+  };
+  const body = withData.map(([s, i]) => {
+    const fs = byCase[i] || [];
+    const data = scDataText(s);
+    // the first time the cases needing a decision are open; then each keeps what the person made of it
+    const open = opened.has('case-' + i) || (!done && !shown && fs.some(f => !f.decision && f.severity !== 'minor'));
+    return `<details class="opt" data-g="case-${i}" ${open ? 'open' : ''}><summary>${esc(s.title)} <span class="muted">— ${fs.length ? `замечаний: ${fs.length}` : 'замечаний нет'}${s.source_case?.id ? ` · кейс ${esc(String(s.source_case.global_id || s.source_case.id))}` : ''}</span></summary>
+      <div style="margin:0 10px 8px">${s.role ? `<div class="hint"><b>Роль:</b> ${esc(s.role)}</div>` : ''}${data ? `<div class="hint"><b>Тестовые данные:</b> ${esc(data)}</div>` : ''}
+      ${fs.map(finding).join('')}</div></details>`;
+  }).join('');
+  return done ? body : `<div class="job-group warn">${head}${body}</div>`;
+}
+document.addEventListener('input', e => { if (e.target.dataset?.caseAnswer) CASE_DRAFT[e.target.dataset.caseAnswer] = e.target.value; });
+async function sendCaseDecisions(decisions) {
+  try {
+    await api('POST', `/api/jobs/${JOB.id}/cases`, {decisions});
+    decisions.forEach(d => delete CASE_DRAFT[d.id]);
+    openJob(JOB.id, true);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function settleCase(id, action) {
+  const text = (CASE_DRAFT[id] || '').trim();
+  if (action === 'answer' && !text) { toast('Напишите, как должно быть', 'warn'); return; }
+  sendCaseDecisions([{id, action, text}]);
+}
+async function acceptCaseProposals() {
+  const rows = caseFindings(JOB).filter(x => !x.f.decision && x.f.suggestion);
+  const go = await ask({title: `Принять предложения ревьюера (${rows.length})?`,
+    text: 'Предложенные ревьюером формулировки станут уточнениями к кейсам — их получит агент. Замечания без предложения останутся за вами.',
+    actions: [{label: 'Принять', value: true, kind: 'primary'}]});
+  if (go) sendCaseDecisions(rows.map(x => ({id: x.f.id, action: 'accept'})));
+}
+
+let CASE_IMPORT = null, CASE_SEL = new Set();
+$('#casesBtn').onclick = async () => {
+  const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
+  if (!tms.length) {
+    const go = await ask({title: 'Нет подключения к системе управления тестами',
+      text: 'Подключите Test IT, Allure TestOps или Zephyr Scale в «Проект → Подключения», затем импортируйте кейсы.',
+      actions: [{label: 'Открыть подключения', value: true, kind: 'primary'}]});
+    if (go) openSettings('conns');
+    return;
+  }
+  $('#csConn').innerHTML = tms.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('#csErr').textContent = ''; CASE_IMPORT = null; CASE_SEL = new Set(); renderCaseImport();
+  $('#casesDlg').showModal();
+};
+$('#csFetch').onclick = async () => {
+  $('#csErr').textContent = ''; $('#csFetch').disabled = true;
+  $('#csList').innerHTML = '<div class="muted">Загрузка кейсов…</div>';
+  try {
+    CASE_IMPORT = await api('POST', `/api/projects/${PID}/cases/fetch`, {connection: $('#csConn').value, ids: $('#csIds').value});
+    CASE_SEL = new Set(CASE_IMPORT.cases.filter(c => !c.test).map(c => c.index));
+  } catch (e) { CASE_IMPORT = null; $('#csErr').textContent = e.message; }
+  finally { $('#csFetch').disabled = false; renderCaseImport(); }
+};
+function renderCaseImport() {
+  const imp = CASE_IMPORT;
+  if (!imp) {
+    if (!$('#csErr').textContent) $('#csList').innerHTML = '';
+    $('#csStart').disabled = true; $('#csStart').textContent = 'Автоматизировать'; $('#csNote').textContent = '';
+    return;
+  }
+  const all = imp.cases.length, n = CASE_SEL.size;
+  $('#csList').innerHTML = `<table class="scen-list"><thead><tr><th class="chk"><input type="checkbox" id="csAll" ${n && n === all ? 'checked' : ''} title="Отметить все"></th>
+    <th>Кейс</th><th>Приоритет</th><th>Автотест</th></tr></thead><tbody>${imp.cases.map(c => `<tr>
+    <td class="chk"><input type="checkbox" data-case-pick="${c.index}" ${CASE_SEL.has(c.index) ? 'checked' : ''}></td>
+    <td><details><summary>${esc(c.title)} ${c.case?.global_id || c.case?.id ? `<span class="muted">· ${esc(String(c.case.global_id || c.case.id))}</span>` : ''}</summary>
+      ${c.preconditions ? `<div class="hint"><b>Предусловия:</b> ${esc(c.preconditions)}</div>` : ''}<div class="hint" style="white-space:pre-wrap">${esc(c.instructions || 'шагов нет')}</div>
+      ${c.expected_result ? `<div class="hint"><b>Ожидается:</b> ${esc(c.expected_result)}</div>` : ''}</details></td>
+    <td>${esc(SC_PRIOS[c.priority] || c.priority || '')}</td>
+    <td>${c.test ? `<span class="badge ok" title="Кейс уже автоматизирован">тест «${esc(c.test.name)}»</span>` : '<span class="muted">нет</span>'}</td></tr>`).join('')}</tbody></table>`;
+  const dup = imp.cases.filter(c => c.test && CASE_SEL.has(c.index)).length;
+  $('#csNote').textContent = `Кейсов: ${all}, выбрано: ${n}` + (dup ? ` — у ${dup} уже есть автотест, будет создан ещё один` : '');
+  $('#csStart').disabled = !n;
+  $('#csStart').textContent = n ? `Автоматизировать (${n})` : 'Автоматизировать';
+}
+$('#csList').addEventListener('change', e => {
+  const el = e.target;
+  if (el.id === 'csAll') CASE_SEL = new Set(el.checked ? CASE_IMPORT.cases.map(c => c.index) : []);
+  else if (el.dataset.casePick) el.checked ? CASE_SEL.add(+el.dataset.casePick) : CASE_SEL.delete(+el.dataset.casePick);
+  renderCaseImport();
+});
+$('#csStart').onclick = async () => {
+  if (!PROJ.base_url) { $('#csErr').textContent = 'Задайте URL приложения в «Проект → Общие»'; return; }
+  $('#csStart').disabled = true;
+  try {
+    const r = await api('POST', `/api/projects/${PID}/jobs`, {case_import: CASE_IMPORT.id, case_picks: [...CASE_SEL]});
+    $('#casesDlg').close();
+    toast('Кейсы отправлены на ревью и автоматизацию');
+    openJob(r.id);
+  } catch (e) { $('#csErr').textContent = e.message; renderCaseImport(); }
+};
+
 function jobScenRow(s, i) {
   const open = JOB_PICK.open.has(i);
   const row = `<tr class="sc-row${open ? ' open' : ''}" onclick="if (!event.target.closest('input')) toggleJobScen(${i})">
@@ -5572,7 +5737,7 @@ async function renderHome() {
 }
 // Entering a project: the tab the person left it on, the first time - the first step chosen after the wizard
 // (PROJ.start); the bell draws the eye when decisions wait.
-const START_TAB = {req: 'req', studio: 'studio', explore: 'pipe'};
+const START_TAB = {req: 'req', studio: 'studio', explore: 'req', cases: 'tests'};
 async function openProject(pid) {
   if (pid !== PID) await switchProject(pid);
   const last = store.get('tg_tab_' + pid);
@@ -5730,9 +5895,12 @@ function beginWith(start) {
     $('#fUrl').value = PROJ.base_url || ''; $('#fUrl').dataset.auto = '1';
     $('#fScenario').focus();
   } else if (start === 'explore') {
-    showTab('pipe', true);
-    setPipeSrc('explore');
-    $('#pipeStart').focus();
+    // acquaintance with the system: the map and a draft of the application model, then the rest adds to it
+    openSettings('data', 'overview');
+    meetSystem();
+  } else if (start === 'cases') {
+    showTab('tests', true);
+    $('#casesBtn').click();
   } else {
     showTab('req', true);
     $('#reqNew').open = true;
@@ -7525,6 +7693,38 @@ $('#knSave').onclick = async () => {
     $('#knMsg').innerHTML = fresh ? `Сохранено. Добавленные записи уже есть в модели (${fresh}): <a href="#" onclick="showSub('data', 'pending'); return false">подтвердите обновления</a>` : 'Сохранено';
   } catch (e) { $('#knMsg').textContent = e.message; }
 };
+// «Познакомиться с системой»: Planner's map and a draft of the model (POST /explore learns the model from the map)
+let KN_MEET = null;
+$('#knMeetBtn').onclick = () => meetSystem();
+async function meetSystem() {
+  const msg = $('#knMeetMsg'), btn = $('#knMeetBtn');
+  if (KN_MEET?.pid === PID) return;
+  btn.disabled = true; msg.textContent = 'Planner начинает обход…';
+  try {
+    const r = await api('POST', `/api/projects/${PID}/explore`, {url: $('#knMeetUrl').value.trim()});
+    KN_MEET = {id: r.id, pid: PID};
+    watchMeet();
+  } catch (e) { notice(msg, e.message); btn.disabled = false; }
+}
+async function watchMeet() {
+  const m = KN_MEET;
+  if (!m) return;
+  let r;
+  try { r = await api('GET', `/api/projects/${m.pid}/explore/${m.id}`); }
+  catch (e) { KN_MEET = null; $('#knMeetBtn').disabled = false; $('#knMeetMsg').textContent = e.message; return; }
+  if (m.pid !== PID) { if (r.status === 'running') setTimeout(watchMeet, 3000); else KN_MEET = null; return; }
+  const last = (r.log || []).slice(-1)[0] || '';
+  if (r.status === 'running') {
+    $('#knMeetMsg').textContent = `Обход: страниц ${r.pages.length}${last ? ' — ' + last : ''}`;
+    setTimeout(watchMeet, 2000);
+    return;
+  }
+  KN_MEET = null; $('#knMeetBtn').disabled = false;
+  if (r.status !== 'done') { $('#knMeetMsg').textContent = r.error || 'Обход не удался'; return; }
+  $('#knMeetMsg').textContent = `Готово: страниц ${r.pages.length}. ${last} Проверьте черновик ниже и подтвердите жизненный цикл — требования, кейсы и тесты дополнят модель.`;
+  loadKnowledge();
+}
+
 $('#knExtract').onclick = async () => {
   const btn = $('#knExtract'), msg = $('#knExtractMsg');
   let body = {requirements: $('#knReq').value.trim()};
