@@ -164,6 +164,7 @@ def screen(pid: str, *parts: str) -> str:
 
 # What a run of the pipeline waits for (its awaiting_* status), for people.
 WAITS = {"awaiting_review": "разбора замечаний к требованиям",
+         "awaiting_cases": "разбора замечаний к ручным кейсам",
          "awaiting_model": "подтверждения жизненного цикла системы",
          "awaiting_selection": "выбора сценариев для автоматизации",
          "awaiting_reuse": "решения по сценариям, похожим на прежние"}

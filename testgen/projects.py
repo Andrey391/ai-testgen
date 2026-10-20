@@ -283,7 +283,7 @@ def set_access(pid: str, visibility: str, members: dict) -> dict:
     return save(p)
 
 
-START = ("req", "studio", "explore")
+START = ("req", "studio", "explore", "cases")
 
 
 def update(pid: str, patch: dict) -> dict:

@@ -22,7 +22,7 @@ from urllib.parse import quote, urlparse
 import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
 
@@ -31,6 +31,8 @@ from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, 
                      publisher, reports, reuse, review, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
 from testgen import worker as worker_mod
+from testgen import cases as cases_mod
+from testgen import guide
 from testgen import agent as agent_mod
 from testgen.agent import StudioSession
 from testgen.browser import screen_size
@@ -115,7 +117,7 @@ async def _keep_owners() -> None:
         await asyncio.sleep(30)
 
 
-PUBLIC = {"/", "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout", "/api/health",
+PUBLIC = {"/", "/guide", "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout", "/api/health",
           "/api/ready", "/metrics", "/api/auth/oidc/login", "/api/auth/oidc/callback"}
 OIDC_COOKIE = "tg_oidc"
 
@@ -156,7 +158,7 @@ def _elsewhere(request: Request) -> str | None:
     if m and m.group(1) not in SESSIONS:
         url = workqueue.owner("session", m.group(1))
     else:
-        m = re.match(r"/api/jobs/([^/]+)/(select|cancel|reuse)$", request.url.path)
+        m = re.match(r"/api/jobs/([^/]+)/(select|cancel|reuse|cases)$", request.url.path)
         url = workqueue.owner("job", m.group(1)) if m and m.group(1) not in pipeline.JOBS else None
     return url if url and url != INSTANCE_URL else None
 
@@ -3350,6 +3352,8 @@ class JobBody(BaseModel):
     explore: bool = False
     case_connection: str = ""   # automate manual test cases of this connection (Test IT, Allure, Zephyr)
     case_ids: str = ""          # their ids; empty = every test case (Test IT)
+    case_import: str = ""       # or the cases a person chose in an import («Импорт кейсов», cases.save_import)
+    case_picks: list[int] = []
     scenarios: list[ScenarioIn] = []   # ready scenarios: straight to authoring
     feature: str = ""
     analysis_id: str = ""               # or scenarios of a requirements analysis (all, or `scenario_ids`)
@@ -3369,6 +3373,16 @@ async def start_job(pid: str, body: JobBody, request: Request):
         if not any(c["id"] == body.case_connection for c in p["connections"]):
             raise HTTPException(400, "Подключение для импорта кейсов не найдено")
         cases = {"connection": body.case_connection, "ids": publisher.parse_ids(body.case_ids)}
+    if body.case_import:
+        imp = cases_mod.get_import(p["id"], body.case_import)
+        if not imp:
+            raise HTTPException(404, "Импорт кейсов не найден: загрузите кейсы заново")
+        if not any(c["id"] == imp["connection"] for c in p["connections"]):
+            raise HTTPException(400, "Подключение для импорта кейсов не найдено")
+        picks = [i for i in body.case_picks if 0 <= i < len(imp["cases"])]
+        if not picks:
+            raise HTTPException(400, "Отметьте кейсы для автоматизации")
+        cases = {"connection": imp["connection"], "import_id": imp["id"], "picks": picks}
     ready = [s.model_dump() for s in body.scenarios if s.title.strip() and s.instructions.strip()]
     feature = body.feature
     wanted: dict[str, list[str]] = {}       # analysis -> its chosen scenarios (empty: all of them)
@@ -3499,6 +3513,70 @@ async def retry_job(jid: str, body: RetryBody, request: Request):
     return {"id": job.id, "retried": len(indices)}
 
 
+class CaseFetchBody(BaseModel):
+    connection: str
+    ids: str = ""               # ids of the cases; empty = every test case (Test IT)
+
+
+@app.post("/api/projects/{pid}/cases/fetch")
+async def fetch_cases(pid: str, body: CaseFetchBody, request: Request):
+    """«Импорт кейсов»: the manual cases of a test management system for a person to look at and choose."""
+    p = project(pid)
+    conn = mcp_hub.find(p, cid=body.connection)
+    if not conn or not conn.get("enabled", True):
+        raise HTTPException(400, "Подключение системы управления тестами не найдено")
+    ids = publisher.parse_ids(body.ids)
+    if not ids and publisher.system_of(conn) != "testit":
+        raise HTTPException(400, "Укажите номера кейсов: загрузить все кейсы проекта можно только из Test IT")
+    if publisher.system_of(conn) != "testit":
+        _require_model(p)           # the cases of an MCP system are read by the model with its tools
+    try:
+        found = await call(publisher.import_cases(p, conn, ids))
+    except publisher.PublishError as e:
+        raise HTTPException(400, str(e))
+    if not found:
+        raise HTTPException(404, "Кейсы не найдены")
+    return cases_mod.import_view(pid, cases_mod.save_import(pid, conn, found, request.state.user or ""))
+
+
+@app.get("/api/projects/{pid}/cases/imports/{iid}")
+async def get_case_import(pid: str, iid: str):
+    project(pid)
+    imp = cases_mod.get_import(pid, iid)
+    if not imp:
+        raise HTTPException(404, "Импорт кейсов не найден")
+    return cases_mod.import_view(pid, imp)
+
+
+class CaseDecision(BaseModel):
+    id: str
+    action: str             # answer | accept | dismiss (cases.ACTIONS)
+    text: str = ""
+
+
+class CaseDecisionsBody(BaseModel):
+    decisions: list[CaseDecision]
+
+
+@app.post("/api/jobs/{jid}/cases")
+async def settle_case_findings(jid: str, body: CaseDecisionsBody, request: Request):
+    """A person settles the findings of the review of manual cases: an answer, the reviewer's proposal or
+    «Не актуально». The run goes on when no blocking finding is left."""
+    job = pipeline.JOBS.get(jid)
+    if not job or job.status != "awaiting_cases":
+        raise HTTPException(409, "Запуск не ждёт решений по замечаниям к кейсам")
+    if any(d.action not in cases_mod.ACTIONS for d in body.decisions):
+        raise HTTPException(400, "Решение: answer, accept или dismiss")
+    if any(d.action == "answer" and not d.text.strip() for d in body.decisions):
+        raise HTTPException(400, "Напишите, как должно быть")
+    n = await call(_settle(job, [d.model_dump() for d in body.decisions], request.state.user or ""))
+    return {"settled": n}
+
+
+async def _settle(job, decisions: list[dict], user: str) -> int:
+    return job.settle_cases(decisions, user)
+
+
 class ReuseBody(BaseModel):
     decisions: dict[int, str]       # item index -> new | reuse | refine (reuse.DECISIONS)
 
@@ -3587,6 +3665,12 @@ async def cancel_job_item(jid: str, index: int, request: Request):
 @app.get("/")
 async def index():
     return FileResponse(ROOT / "static" / "index.html")
+
+
+@app.get("/guide")
+async def user_guide():
+    """«Справка»: the user guide (docs/user-guide.md and the glossary) as a page of the studio."""
+    return HTMLResponse(guide.page())
 
 
 # Last: the MCP app's own route is /mcp; everything else was matched above.
