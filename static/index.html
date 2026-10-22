@@ -378,7 +378,7 @@ details.how>div{margin-top:4px}
 .stage{border-left:3px solid var(--accent)}
 .stage.disabled{border-left-color:var(--line);opacity:.8}
 .stage-head{display:flex;align-items:center;gap:10px}
-.stage-head .num{width:24px;height:24px;border-radius:50%;background:var(--soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.stage-head .num,.proc-row .num{width:24px;height:24px;border-radius:50%;background:var(--soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
 .flow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}
 .flow .chip{padding:4px 10px;border-radius:14px;border:1px solid var(--line);font-size:12px;color:var(--muted)}
 .flow .chip.on{border-color:var(--accent);color:var(--accent)}
@@ -1082,16 +1082,17 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="subnav" role="tree">
       <div class="subnav-group">Проект</div>
       <button data-sub="general" class="on">Общие</button>
-      <button data-sub="model">Модель</button>
       <button data-sub="access">Участники и доступ</button>
+      <div class="subnav-group">Подключения</div>
+      <button data-sub="model">Модель</button>
       <button data-sub="conns">Подключения (MCP)</button>
       <button data-sub="api">API приложения</button>
       <button data-sub="ide">Доступ из IDE (MCP)</button>
-      <div class="subnav-group">Генерация тестов</div>
+      <div class="subnav-group">Тест-дизайн</div>
       <button data-sub="reqs">Требования</button>
       <button data-sub="scen">Сценарии</button>
       <button data-sub="data" class="has-tree"><span class="caret">▸</span>Тестовые данные <span class="nb" id="knNavAlert"></span></button>
-      <div class="subtree" id="knTree">
+      <div class="subtree" id="knTree" data-tree="data">
         <button data-sub="data" data-sec="overview">Обзор и подтверждение</button>
         <button data-sub="data" data-sec="pending">Обновления <span class="nb" data-kn-count="pending"></span></button>
         <button data-sub="data" data-sec="dups">Дубли <span class="nb" data-kn-count="dups"></span></button>
@@ -1101,9 +1102,19 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <button data-sub="data" data-sec="data">Данные стенда <span class="nb" data-kn-count="data"></span></button>
         <button data-sub="data" data-sec="memory">Память <span class="nb" data-kn-count="memory"></span></button>
       </div>
-      <button data-sub="blocks">Повторяющиеся шаги</button>
-      <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
+      <div class="subnav-group">Генерация и прогоны</div>
+      <button data-sub="process" class="has-tree"><span class="caret">▸</span>Процесс генерации</button>
+      <div class="subtree" id="procTree" data-tree="process">
+        <button data-sub="process" data-sec="overview">Обзор этапов</button>
+        <button data-sub="process" data-sec="authoring">Генерация теста</button>
+        <button data-sub="process" data-sec="run">Прогон</button>
+        <button data-sub="process" data-sec="verify">Качество (мутации)</button>
+        <button data-sub="process" data-sec="publish">Публикация</button>
+        <button data-sub="process" data-sec="decisions">Решения команды</button>
+        <button data-sub="process" data-sec="budget">Лимиты расхода</button>
+      </div>
+      <button data-sub="blocks">Повторяющиеся шаги</button>
     </div>
     <div>
       <!-- General -->
@@ -1493,24 +1504,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="card" id="blocksBox"></div>
       </div>
       <div data-subpanel="process" class="hidden">
-        <div class="card">
+        <div class="card" data-proc="overview">
           <h3>Процесс генерации тест-кейсов</h3>
-          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — как в «Проект → Модель» (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+          <div class="muted">Этапы конвейера по порядку: откройте этап, чтобы настроить его. Модель и effort этапа пустые — как в «Проект → Модель» (<span id="defModel"></span>).</div>
+          <div id="procStages" style="margin-top:8px"></div>
         </div>
 
-        <div class="card stage">
-          <div class="stage-head"><span class="num">1</span><h3 class="grow" style="margin:0">Требования</h3>
-            <button class="btn small" onclick="showSub('reqs')">Настроить →</button></div>
-          <div class="hint">Источники требований, Planner, проверка ТЗ по стандарту документации и модель приложения — в разделе «Требования».</div>
-        </div>
-
-        <div class="card stage">
-          <div class="stage-head"><span class="num">2</span><h3 class="grow" style="margin:0">Сценарии</h3>
-            <button class="btn small" onclick="showSub('scen')">Настроить →</button></div>
-          <div class="hint">Виды проверок, слои UI / API, техники тест-дизайна, отбор и скиллы сценариев — в разделе «Сценарии».</div>
-        </div>
-
-        <div class="card stage">
+        <div class="card stage" data-proc="authoring">
           <div class="stage-head"><span class="num">3</span><h3 class="grow" style="margin:0">Генерация теста в браузере</h3></div>
           <div class="grid3">
             <div><label>Движок браузера</label>
@@ -1529,6 +1529,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <label>Инструменты подключений для агента (только чтение)</label>
           <div class="checks" data-list="authoring.tool_connections" data-kind="toolconns"></div>
           <div class="hint">Например, агент сможет сам прочитать задачу Jira или существующие тест-кейсы Zephyr во время генерации.</div>
+          <label>Скиллы</label>
+          <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
+          <details class="opt"><summary>Модель этапа и режим для моделей слабее</summary>
           <div class="grid2">
             <div><label>Промпт агента</label>
               <select data-p="authoring.prompt">
@@ -1543,15 +1546,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               </select></div>
           </div>
           <div class="hint">Ошибки ответа модели (неверный ref, несуществующий инструмент, битый JSON) возвращаются ей на исправление — не больше двух раз на шаг.</div>
-          <label>Скиллы</label>
-          <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
           <div class="grid2">
             <div><label>Модель</label><input data-p="authoring.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="authoring.effort" class="effortSel"></select></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card stage" data-stage="run">
+        <div class="card stage" data-stage="run" data-proc="run">
           <div class="stage-head"><span class="num">4</span><h3 class="grow" style="margin:0">Прогон</h3>
             <label class="inline"><input type="checkbox" data-p="run.enabled"> включён в конвейере</label></div>
           <div class="checks" style="margin-top:8px">
@@ -1566,6 +1567,21 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
                 <option value="review">На ревью человеку</option>
                 <option value="auto">Сохранять сразу</option>
               </select></div>
+            <div><label>Тестов параллельно в наборе</label><input type="number" min="1" max="8" data-p="run.parallel"></div>
+            <div><label>Порог нестабильности, % смен результата</label><input type="number" min="1" max="100" data-p="run.flaky_threshold"></div>
+            <div><label>&nbsp;</label><label class="inline"><input type="checkbox" data-p="run.auto_quarantine"> Карантин автоматически</label></div>
+          </div>
+          <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
+          <label>Браузеры наборов</label>
+          <div class="checks" data-list="run.browsers" data-kind="browsers"></div>
+          <label>Экраны и устройства (через запятую; desktop — экран 1920×1080, размер окна — 1366x768)</label>
+          <input data-csv="run.devices" placeholder="desktop, 1366x768, iPhone 13, Pixel 7">
+          <div class="hint">Набор прогоняет каждый тест во всех выбранных браузерах и на всех устройствах. Firefox и WebKit нужно установить: <code>playwright install firefox webkit</code>.</div>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
+          </div>
+          <details class="opt"><summary>Дополнительно: trace, хранение, доступность, визуальная проверка, язык и часовой пояс</summary>
+          <div class="grid3">
             <div><label>Playwright trace</label>
               <select data-p="run.trace">
                 <option value="failed">Только для упавших</option>
@@ -1573,9 +1589,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
                 <option value="off">Не записывать</option>
               </select></div>
             <div><label>Хранить прогонов на тест</label><input type="number" min="1" max="200" data-p="run.keep_runs"></div>
-            <div><label>Тестов параллельно в наборе</label><input type="number" min="1" max="8" data-p="run.parallel"></div>
-            <div><label>Порог нестабильности, % смен результата</label><input type="number" min="1" max="100" data-p="run.flaky_threshold"></div>
-            <div><label>&nbsp;</label><label class="inline"><input type="checkbox" data-p="run.auto_quarantine"> Карантин автоматически</label></div>
             <div><label>Доступность: падать начиная с</label>
               <select data-p="run.a11y_impact">
                 <option value="critical">critical</option>
@@ -1588,24 +1601,17 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div><label>Часовой пояс</label><input data-p="run.timezone" placeholder="Europe/Moscow"></div>
             <div><label>Ручной прогон кейса, минут</label><input type="number" min="1" max="200" data-p="run.manual_minutes" title="Для оценки сэкономленного времени на дашборде"></div>
           </div>
-          <label>Браузеры наборов</label>
-          <div class="checks" data-list="run.browsers" data-kind="browsers"></div>
-          <label>Экраны и устройства (через запятую; desktop — экран 1920×1080, размер окна — 1366x768)</label>
-          <input data-csv="run.devices" placeholder="desktop, 1366x768, iPhone 13, Pixel 7">
-          <div class="hint">Набор прогоняет каждый тест во всех выбранных браузерах и на всех устройствах. Firefox и WebKit нужно установить: <code>playwright install firefox webkit</code>.</div>
-          <div class="checks" style="margin-top:8px">
-            <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
-          </div>
-          <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
+          </details>
           <label>Скиллы</label>
           <div class="checks" data-list="run.skills" data-kind="skills" data-stage="run"></div>
+          <details class="opt"><summary>Модель этапа (самолечение и анализ падений)</summary>
           <div class="grid2">
             <div><label>Модель</label><input data-p="run.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="run.effort" class="effortSel"></select></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card stage" data-stage="verify">
+        <div class="card stage" data-stage="verify" data-proc="verify">
           <div class="stage-head"><span class="num">5</span><h3 class="grow" style="margin:0">Проверка качества теста (мутации)</h3>
             <label class="inline"><input type="checkbox" data-p="verify.enabled"> включена в конвейере</label></div>
           <div class="hint">Новый тест прогоняется на «испорченной» странице: действие не срабатывает, результат скрыт или изменён, API отвечает 500. Тест обязан упасть на каждом мутанте; если прошёл — проверки слабые. Без LLM и без самолечения.</div>
@@ -1618,7 +1624,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           </div>
         </div>
 
-        <div class="card stage" data-stage="publish">
+        <div class="card stage" data-stage="publish" data-proc="publish">
           <div class="stage-head"><span class="num">6</span><h3 class="grow" style="margin:0">Публикация в систему управления тестами</h3>
             <label class="inline"><input type="checkbox" data-p="publish.enabled"> включена</label></div>
           <div class="grid2">
@@ -1632,13 +1638,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="checks" data-list="publish.skills" data-kind="skills" data-stage="publish"></div>
           <label>Скиллы отправки результата прогона</label>
           <div class="checks" data-list="publish.run_skills" data-kind="skills" data-stage="publish"></div>
+          <details class="opt"><summary>Модель этапа</summary>
           <div class="grid2">
             <div><label>Модель</label><input data-p="publish.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="publish.effort" class="effortSel"></select></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card stage">
+        <div class="card stage" data-proc="decisions">
           <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Решения команды</h3></div>
           <div class="hint">Что ждёт людей и кто это решает. Конвейер не держит весь запуск: кейсы и сценарии без открытых решений идут в работу сразу, ждут только спорные. Решения, принятые без человека, записываются в журнал действий и журнал запуска; их можно отменить.</div>
           <div class="grid3">
@@ -1647,11 +1654,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
                 <option value="all">После ревью автора — каждый</option>
                 <option value="risk">По риску: сильные проверки, зелёный прогон — сразу</option>
               </select></div>
-            <div><label>Сильные проверки: обнаружено мутантов, % не меньше</label><input type="number" min="1" max="100" data-p="decisions.min_score" title="Нужна проверка качества мутациями (этап 5)"></div>
+            <div><label>Сильные проверки: обнаружено мутантов, % не меньше</label><input type="number" min="1" max="100" data-p="decisions.min_score" title="Нужна проверка качества мутациями (этап «Качество (мутации)»)"></div>
             <div><label>Срок решения, часов</label><input type="number" min="1" max="720" data-p="decisions.sla_hours" title="«Мои решения» в «Ждёт вас» показывают срок и просроченные"></div>
           </div>
           <div class="hint">«По риску»: тест с долей обнаруженных мутантов не ниже порога, без самолечения и с прошедшим прогоном сразу попадает в регрессионный набор; остальные — на ревью с причиной. Тесты, изменённые агентом, всегда идут на ревью.</div>
-          <div class="hint hidden" id="riskWarn" style="color:var(--warn)">Этап «Проверка качества теста (мутации)» выключен: без него силу проверок не измерить, и «По риску» отправит на ревью каждый тест. Включите этап выше.</div>
+          <div class="hint hidden" id="riskWarn" style="color:var(--warn)">Этап «Проверка качества теста (мутации)» выключен: без него силу проверок не измерить, и «По риску» отправит на ревью каждый тест. Включите его в «Качество (мутации)».</div>
           <div class="checks" style="margin-top:8px">
             <label class="inline"><input type="checkbox" data-p="decisions.auto_accept"> Принимать уверенные предложения ревьюера кейсов сами</label>
           </div>
@@ -1669,7 +1676,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="hint">Ревью теста и самолечения решает автор теста; выбор сценариев и похожие сценарии — тот, кто запустил конвейер.</div>
         </div>
 
-        <div class="card stage">
+        <div class="card stage" data-proc="budget">
           <div class="stage-head"><span class="num">₽</span><h3 class="grow" style="margin:0">Лимиты расхода на модели</h3></div>
           <div class="hint">0 — без лимита. Запрос сверх лимита не отправляется; на 80% приходит предупреждение (в чат сессии, журнал конвейера, уведомления проекта).</div>
           <div class="grid3">
@@ -1682,7 +1689,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="sub" id="usageBox"></div>
         </div>
 
-        <div class="card row" style="position:sticky;bottom:10px">
+        <div class="card row" style="position:sticky;bottom:10px" data-proc="authoring run verify publish decisions budget">
           <span class="muted grow" id="procMsg" data-proc-msg></span>
           <button class="btn primary" id="procSave" data-save-process>Сохранить процесс</button>
         </div>
@@ -2274,11 +2281,14 @@ function parseRoute(hash) {
 }
 const routeTab = r => r.tab || (r.pid ? VIEW_TAB[r.view] : '');
 const projPath = (...parts) => `/p/${PID}/` + parts.filter(Boolean).join('/');
-function settingsPath(sub, sec) { return projPath('settings', sub, sub === 'data' ? sec : ''); }
+// the settings with a subtree (Тестовые данные, Процесс генерации): their sections have addresses
+const SUB_SECS = {data: {key: 'tg_kn_sec', def: 'overview'}, process: {key: 'tg_proc_sec', def: 'overview'}};
+const subSec = (sub, sec) => SUB_SECS[sub] ? sec || store.get(SUB_SECS[sub].key) || SUB_SECS[sub].def : '';
+function settingsPath(sub, sec) { return projPath('settings', sub, subSec(sub, sec)); }
 function tabPath(t) {
   if (t === 'home' || !PID) return '/projects';
   if (t === 'studio' && SID) return projPath('studio', SID);
-  if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general', store.get('tg_kn_sec') || 'overview');
+  if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general');
   if (t === 'tests') return testsPath();
   return projPath(t);
 }
@@ -2327,7 +2337,7 @@ async function openRoute(r) {
   if (!tab) return showMissing();
   if (r.view === 'setup') { showTab('home'); return openWizard(PID); }
   if (r.view === 'settings') {
-    if (id) { store.set('tg_settings_sub', id); if (id === 'data' && r.sec) store.set('tg_kn_sec', r.sec); }
+    if (id) { store.set('tg_settings_sub', id); if (SUB_SECS[id] && r.sec) store.set(SUB_SECS[id].key, r.sec); }
     if (r.back) KN_BACK = {pid: r.pid, path: r.back};
     if (r.query.get('from')) KN_FROM = r.query.get('from');      // the updates one analysis proposed
     renderKnBack();
@@ -5340,7 +5350,7 @@ function flowHtml(current) {
 }
 async function loadPipe() {
   if (!PID) return;
-  $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process');return false">настроить</a>`;
+  $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process', 'overview');return false">настроить</a>`;
   const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
   $('#pipeCasesSrc').classList.toggle('hidden', !tms.length);
   if (!tms.length && PIPE_SRC === 'cases') setPipeSrc('review');
@@ -6223,21 +6233,21 @@ function beginWith(start) {
 
 // ---- project settings
 function openSettings(sub, sec) {
-  store.set('tg_settings_sub', sub); if (sub === 'data' && sec) store.set('tg_kn_sec', sec);   // one history entry
+  store.set('tg_settings_sub', sub); if (SUB_SECS[sub] && sec) store.set(SUB_SECS[sub].key, sec);   // one history entry
   showTab('proj'); showSub(sub, sec);
 }
 $$('.subnav button').forEach(b => b.onclick = () => showSub(b.dataset.sub, b.dataset.sec));
-// the settings tree: a section with blocks (Тестовые данные) opens its subtree; the last place is remembered
+// the settings tree: a section with blocks (Тестовые данные, Процесс генерации) opens its subtree; the last place is remembered
 function showSub(sub, sec) {
-  if (sub === 'data') sec = sec || store.get('tg_kn_sec') || 'overview';
+  sec = subSec(sub, sec) || undefined;
   $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub && (b.dataset.sec || '') === (b.dataset.sec ? sec : '') && !(b.classList.contains('has-tree') && sec)));
   $$('.subnav .has-tree').forEach(b => b.classList.toggle('open', b.dataset.sub === sub));
-  $('#knTree').classList.toggle('open', sub === 'data');
+  $$('.subtree').forEach(t => t.classList.toggle('open', t.dataset.tree === sub));
   $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
   store.set('tg_settings_sub', sub);
   if (curTab() === 'proj') setRoute(settingsPath(sub, sec));
   if (sub === 'ide') loadTokens();
-  if (sub === 'process') loadUsage();
+  if (sub === 'process') { store.set(SUB_SECS.process.key, sec); showProcSec(sec); if (sec === 'budget') loadUsage(); }
   if (sub === 'access') loadAccess();
   if (sub === 'api') loadApi();
   if (sub === 'blocks') loadBlocks();
@@ -6914,6 +6924,29 @@ function riskWarn() {
 document.addEventListener('change', e => {
   if (e.target.matches?.('[data-p="decisions.review_policy"], [data-p="verify.enabled"]')) riskWarn();
 });
+// «Процесс генерации»: one stage on the screen; the overview lists the stages in order, on or off
+const PROC_STAGES = [
+  {title: 'Требования', sub: 'reqs', about: 'источники, Planner, проверка ТЗ, модель приложения'},
+  {title: 'Сценарии', sub: 'scen', about: 'виды проверок, слои, техники, отбор'},
+  {title: 'Генерация теста в браузере', sec: 'authoring', about: 'движок, Auto-Pilot, лимит шагов, скиллы'},
+  {title: 'Прогон', sec: 'run', on: 'run.enabled', about: 'самолечение, браузеры и устройства наборов, нестабильные'},
+  {title: 'Проверка качества (мутации)', sec: 'verify', on: 'verify.enabled', about: 'мутанты, усиление слабых проверок'},
+  {title: 'Публикация', sec: 'publish', on: 'publish.enabled', about: 'система управления тестами, результаты прогонов'},
+  {title: 'Решения команды', sec: 'decisions', about: 'ревью по риску, автопринятие, кто решает'},
+  {title: 'Лимиты расхода', sec: 'budget', about: 'на сессию, запуск и месяц'}];
+function showProcSec(sec) {
+  $$('[data-subpanel="process"] [data-proc]').forEach(c => c.classList.toggle('hidden', !c.dataset.proc.split(' ').includes(sec)));
+  if (sec === 'overview') renderProcStages();
+}
+function renderProcStages() {
+  $('#procStages').innerHTML = PROC_STAGES.map((st, i) => {
+    const box = st.on && $(`[data-p="${st.on}"]`), off = box && !box.checked;
+    return `<div class="row proc-row" style="padding:6px 0;border-top:1px solid var(--line)"><span class="num">${i < 6 ? i + 1 : i === 6 ? '✓' : '₽'}</span>
+      <span class="grow"><b>${esc(st.title)}</b>${box ? ` <span class="badge ${off ? 'off' : 'ok'}">${off ? 'выключен' : 'включён'}</span>` : ''}
+        <div class="hint">${esc(st.about)}</div></span>
+      <button class="btn small" onclick="showSub('${st.sub || 'process'}'${st.sec ? `, '${st.sec}'` : ''})">Настроить →</button></div>`;
+  }).join('');
+}
 function fillProcess() {
   setTimeout(riskWarn);      // after the fields are filled
   const L = PROJ.llm;
@@ -7297,7 +7330,7 @@ function knExploredHtml(x) {
   if (x.deeper) why.push(`глубже ${x.max_depth} уровней осталось ссылок: ${x.deeper}`);
   if (!x.logged_in) why.push('без входа в приложение — страницы за входом не видны');
   return `<div class="box next" style="margin-top:8px"><b>Черновик модели неполный.</b> Planner обошёл ${x.pages} стр.${why.length ? ': ' + why.map(esc).join('; ') : ''}.
-    <div class="hint">Чего Planner не видел, в модели нет — тесты по этим частям получат неверную модель. Перед подтверждением дополните модель требованиями (вкладка «Требования») или сущностями вручную, либо увеличьте лимиты и задайте тест входа в <a href="#" onclick="openSettings('process');return false">«Процесс генерации → Planner»</a> и исследуйте сайт заново.</div></div>`;
+    <div class="hint">Чего Planner не видел, в модели нет — тесты по этим частям получат неверную модель. Перед подтверждением дополните модель требованиями (вкладка «Требования») или сущностями вручную, либо увеличьте лимиты и задайте тест входа в <a href="#" onclick="openSettings('reqs');return false">«Требования → Planner»</a> и исследуйте сайт заново.</div></div>`;
 }
 function renderKnConfirm() {
   const c = KN.confirmation || {state: 'none', missing: [], units: []};
