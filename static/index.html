@@ -469,6 +469,7 @@ details.menu summary{list-style:none;cursor:pointer}
 details.menu summary::-webkit-details-marker{display:none}
 details.menu .items{position:absolute;right:0;z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;min-width:220px;box-shadow:0 6px 20px rgba(0,0,0,.15);display:flex;flex-direction:column}
 details.menu .items a,details.menu .items button{text-align:left;border:0;background:none;color:var(--ink);font:inherit;font-size:13px;padding:6px 8px;border-radius:6px;cursor:pointer;text-decoration:none}
+details.menu .items.run-opts{padding:10px;gap:6px;min-width:260px}
 details.menu .items a:hover,details.menu .items button:hover{background:var(--soft)}
 .imgs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px}
 .imgs figure{margin:0}.imgs figcaption{font-size:11px;color:var(--muted)}
@@ -679,8 +680,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <label>Сценарий</label>
     <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
     <div class="hint hidden" id="fModel" aria-live="polite"></div>
-    <div class="hint" id="fFree" title="Сценарий из вкладки «Требования» («Тест в Studio») проходит эти проверки">Свой сценарий записывается сразу: студия не проверяет его по требованиям и не ждёт подтверждения модели и учётной записи роли — тест сохранится черновиком, его проверит человек.</div>
-    <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div>
+    <details class="opt" id="fFree"><summary class="hint">Свой сценарий не проверяется по требованиям — тест сохранится черновиком</summary>
+      <div class="hint">Студия не проверяет его по требованиям и не ждёт подтверждения модели и учётной записи роли — тест проверит человек. Сценарий из вкладки «Требования» («Тест в Studio») проходит эти проверки.</div>
+      <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div></details>
     <div class="grid2">
       <div><label>Движок браузера</label>
         <select id="fEngine">
@@ -710,10 +712,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </div>
 
   <div id="resumeBox" class="card start hidden">
-    <h3 style="margin-top:0">Прерванные сессии</h3>
-    <div class="hint">Студия перезапускалась, пока шла генерация. Шаги сохраняются после каждого действия: сессию можно продолжить (шаги воспроизведутся в новом браузере, затем агент продолжит сценарий) или сразу сохранить записанные шаги как тест.</div>
-    <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Изменена</th><th></th></tr></thead>
-      <tbody id="resumeBody"></tbody></table>
+    <div class="row"><b class="grow" id="resumeHead">Прерванные сессии</b>
+      <button class="btn small" onclick="$('#resumeDlg').showModal()">Все прерванные</button></div>
+    <div id="resumeLast"></div>
   </div>
 
   <div id="workspace" class="studio hidden">
@@ -860,7 +861,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
       <span class="grow"></span>
       <button class="btn" id="casesBtn" title="Подтянуть ручные тест-кейсы из Test IT, Allure TestOps или Zephyr Scale и автоматизировать выбранные: ИИ-ревьюер разберёт тестовые данные и замечания, агент запишет тесты">Импорт кейсов</button>
-      <select id="runScreen" style="width:auto" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
+      <details class="menu" id="runOpts"><summary class="btn" title="Экран, видимое окно браузера, черновики — для «Запустить» и «Запустить набор»">Параметры прогона <span id="runOptsMark"></span>▾</summary>
+        <div class="items run-opts">
+          <label for="runScreen">Экран</label><select id="runScreen" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
         <option value="">Экран: как в проекте</option>
         <option value="1920x1080">1920×1080</option>
         <option value="2560x1440">2560×1440</option>
@@ -874,13 +877,16 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <option value="Pixel 7">Pixel 7</option>
         <option value="custom">Другой…</option>
       </select>
-      <label class="inline"><input type="checkbox" id="runHeaded"> в видимом окне</label>
-      <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="runDrafts"> с черновиками</label>
-      <button class="btn primary" id="suiteBtn">Запустить набор</button>
-      <a class="btn" id="zipBtn" title="Все тесты (или тесты выбранного тега) как проект pytest: conftest.py, tests/, features/">Экспорт .zip</a>
-      <a class="btn hidden" id="zipTestit" title="С декораторами testit-adapter-pytest: результаты прогонов в CI уходят в Test IT">.zip для Test IT</a>
+          <label class="inline"><input type="checkbox" id="runHeaded"> в видимом окне браузера</label>
+          <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="runDrafts"> набор — с черновиками</label>
+        </div></details>
+      <button class="btn primary" id="suiteBtn" title="Набор — все тесты или тесты выбранного тега: параллельно, в одном браузере, как в CI (python -m testgen.run). Упавший тест перезапускается один раз: прошёл со второй попытки — «нестабилен». Тесты в карантине запускаются, но не валят набор">Запустить набор</button>
+      <details class="menu"><summary class="btn">Экспорт ▾</summary><div class="items">
+        <a id="zipBtn" title="Все тесты (или тесты выбранного тега) как проект pytest: conftest.py, tests/, features/">Проект pytest (.zip)</a>
+        <a class="hidden" id="zipTestit" title="С декораторами testit-adapter-pytest: результаты прогонов в CI уходят в Test IT">.zip для Test IT</a>
+      </div></details>
     </div>
-    <div class="hint">Набор — все тесты или тесты выбранного тега: параллельно, в одном браузере, как в CI (<code>python -m testgen.run --project … --tag … --junit report.xml</code>). Упавший тест перезапускается один раз: прошёл со второй попытки — «нестабилен». Тесты в карантине запускаются, но не валят набор.</div>
+  </div>
   </div>
   <!-- the list of the section on the left, the open test, run or suite on the right (over the list when narrow) -->
   <div class="split" id="testsSplit">
@@ -1024,7 +1030,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 <section id="tab-pipe" class="hidden">
   <div class="card hidden" id="pipeBusy"></div>
   <div class="card" id="pipeForm">
-    <h2>Запуск конвейера</h2>
+    <div class="row"><h2 class="grow" style="margin:0">Запуск конвейера</h2>
+      <button class="btn" onclick="openJobsHistory()">История запусков</button>
+      <button class="btn primary hidden" id="pipeNew" onclick="foldPipeForm(false)">Новый запуск</button></div>
+    <div id="pipeFormBody">
     <details class="how" data-how="pipe" open><summary>Как это работает</summary><div class="muted">Генерация тест-кейсов и тестов по настройкам проекта: требования → ревью → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div></details>
     <div class="flow" id="pipeFlow"></div>
     <label>Источник</label>
@@ -1061,15 +1070,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="design-choice" id="pipeChoice" data-pipe-design></div>
     <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
       <button class="btn primary" id="pipeStart">Запустить</button></div>
+    </div>
   </div>
 
   <div class="card hidden" id="jobBox"></div>
-
-  <div class="card">
-    <h3>История запусков</h3>
-    <table><thead><tr><th>Запуск</th><th>Статус</th><th>Тестов</th><th>Кто</th></tr></thead>
-    <tbody id="jobsBody"></tbody></table>
-  </div>
 </section>
 
 <!-- ============ PROJECT SETTINGS ============ -->
@@ -1813,6 +1817,21 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="hist-body"><table><thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Итог</th></tr></thead><tbody id="auList"></tbody></table></div>
 </dialog>
 
+<dialog id="resumeDlg" class="hist-dlg" aria-labelledby="resumeTitle">
+  <div class="row"><h3 class="grow" id="resumeTitle">Прерванные сессии</h3>
+    <button class="btn small" onclick="$('#resumeDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hint">Студия перезапускалась, пока шла генерация. Шаги сохраняются после каждого действия: сессию можно продолжить (шаги воспроизведутся в новом браузере, затем агент продолжит сценарий) или сразу сохранить записанные шаги как тест.</div>
+  <div class="hist-body"><table><thead><tr><th>Тест</th><th>Шагов</th><th>Изменена</th><th></th></tr></thead>
+    <tbody id="resumeBody"></tbody></table></div>
+</dialog>
+
+<dialog id="jobsDlg" class="hist-dlg" aria-labelledby="jobsTitle">
+  <div class="row"><h3 class="grow" id="jobsTitle">История запусков конвейера</h3>
+    <button class="btn small" onclick="$('#jobsDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hist-body"><table><thead><tr><th>Запуск</th><th>Статус</th><th>Тестов</th><th>Кто</th></tr></thead>
+    <tbody id="jobsBody"></tbody></table></div>
+</dialog>
+
 <dialog id="askDlg" aria-labelledby="askTitle" aria-describedby="askText">
   <h3 id="askTitle"></h3>
   <div class="ask-text" id="askText"></div>
@@ -2177,7 +2196,7 @@ async function switchProject(pid) {
 const REQ_DRAFTS = {};      // new requirements typed and not reviewed yet: each project its own
 function leaveProject(prev, pid) {
   // Конвейер: the run open and its polling, the banner of a run going on, what was typed for the other application
-  clearTimeout(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null);
+  clearTimeout(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null); foldPipeForm(false);
   $('#pipeUrl').value = $('#pipeCaseIds').value = ''; $('#pipeErr').textContent = '';
   PIPE_REVIEWS = []; PIPE_ANS = []; PIPE_SCEN = []; $('#pipeReview').innerHTML = ''; $('#pipeLeft').innerHTML = '';
   // Тесты: the run or suite open stops refreshing
@@ -2616,6 +2635,13 @@ async function loadInterrupted() {
   if (!PID) return;
   const cps = await api('GET', `/api/projects/${PID}/sessions`).catch(() => []);
   $('#resumeBox').classList.toggle('hidden', !cps.length || !!SID);
+  if (!cps.length && $('#resumeDlg').open) $('#resumeDlg').close();
+  // the page shows the latest one; all of them - in a popup
+  const last = cps.reduce((a, c) => !a || c.updated > a.updated ? c : a, null);
+  $('#resumeHead').textContent = `Прерванные сессии: ${cps.length}`;
+  $('#resumeLast').innerHTML = last ? `<div class="row" style="margin-top:6px"><span class="grow">Последняя: <b>${esc(last.name)}</b>
+      <span class="muted">· шагов: ${last.steps} · ${fmtTime(last.updated)}</span></span>
+      <button class="btn primary small" onclick="restoreSession('${last.id}')">Продолжить</button></div>` : '';
   $('#resumeBody').innerHTML = cps.map(c => `<tr>
     <td><b>${esc(c.name)}</b>${c.origin?.job ? ' <span class="badge">конвейер</span>' : ''}${c.test_id ? ' <span class="badge ok">тест сохранён</span>' : ''}
       <div class="hint">${esc((c.scenario || '').slice(0, 160))}</div></td>
@@ -2625,6 +2651,7 @@ async function loadInterrupted() {
       <button class="btn small danger" onclick="discardInterrupted('${c.id}')">Удалить</button></td></tr>`).join('');
 }
 async function restoreSession(sid) {
+  if ($('#resumeDlg').open) $('#resumeDlg').close();
   try { if (await startSession(() => api('POST', `/api/projects/${PID}/sessions/${sid}/restore`, {}))) openSession(sid); }
   catch (e) { toast(e.message, 'bad'); }
 }
@@ -3141,7 +3168,7 @@ function strip(recent) {
 }
 function verifyCell(t) {
   const v = t.verify;
-  if (!v) return `<button class="btn small" onclick="verifyTest('${t.id}', this)" title="Прогнать тест на «испорченных» версиях страницы">Проверить мутациями</button>`;
+  if (!v) return '<span class="muted" title="Мутационная проверка — в меню «Ещё»">—</span>';
   if (v.status === 'running') return '<span class="badge warn">проверка…</span>';
   if (v.status === 'done') return `<span class="badge ${v.weak ? 'warn' : 'ok'}" title="Доля обнаруженных мутантов">мутанты: ${v.killed}/${v.total}</span>` +
     (v.weak ? '<div class="hint">слабые проверки</div>' : '');
@@ -3177,7 +3204,7 @@ async function loadTests() {
         ${t.proposals ? `<span class="badge warn" title="Самолечение ждёт ревью">ревью локаторов: ${t.proposals}</span>` : ''}
         ${(t.outdated || []).length ? `<span class="badge warn" title="${esc(t.outdated.map(o => o.why).join('\n'))}">устарел</span>` : ''}
         <div class="muted" style="font-size:12px">${esc(t.url)}</div>
-        <div class="chips" style="margin-top:3px">${t.tags.map(x => `<span class="badge">#${esc(x)}</span>`).join('')}<button class="linkbtn" onclick="editTags('${t.id}')">${t.tags.length ? 'теги' : '+ тег'}</button></div></td>
+        <div class="chips" style="margin-top:3px">${t.tags.map(x => `<span class="badge">#${esc(x)}</span>`).join('')}</div></td>
       <td class="wide">${t.steps}</td>
       <td>${t.recent.length ? strip(t.recent) : '—'}
         ${t.flip_rate != null && t.flip_rate > 0 ? `<div class="hint">смена результата: ${Math.round(t.flip_rate * 100)}%</div>` : ''}
@@ -3186,10 +3213,12 @@ async function loadTests() {
       <td class="wide">${verifyCell(t)}</td>
       <td class="wide">${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
-        ${canRole('editor') ? `<button class="btn small wide" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
-        <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
+        <details class="menu"><summary class="btn small" aria-label="Ещё действия с тестом">Ещё ▾</summary><div class="items">
+          ${canRole('editor') ? `<button onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
           <button onclick="openTest('${t.id}').then(() => editSteps('${t.id}'))">Редактировать шаги</button>
+          <button onclick="editTags('${t.id}')">Теги…</button>
+          ${!t.verify || t.verify.status !== 'running' ? `<button onclick="verifyTest('${t.id}', this)" title="Прогнать тест на «испорченных» версиях страницы">${t.verify ? 'Проверить мутациями снова' : 'Проверить мутациями'}</button>` : ''}
           ${t.status !== 'ready' ? `<button onclick="setStatus('${t.id}', 'ready')" title="Тест проверен человеком и входит в регрессионный набор">В набор (проверен)</button>` : ''}
           ${t.status === 'draft' ? `<button onclick="setStatus('${t.id}', 'review')">Отправить на ревью</button>` : ''}
           ${t.status !== 'draft' ? `<button onclick="setStatus('${t.id}', 'draft')">В черновики</button>` : ''}
@@ -3371,13 +3400,21 @@ async function runTest(id, browser) {
 function runScreen() { return $('#runScreen').value === 'custom' ? ($('#runScreen').dataset.custom || '') : $('#runScreen').value; }
 $('#runScreen').onchange = async e => {
   const box = e.target;
-  if (box.value !== 'custom') return;
+  if (box.value !== 'custom') return markRunOpts();
   const v = (await ask({title: 'Другой экран', text: 'Размер окна браузера для «Запустить» и «Запустить набор» или устройство Playwright.',
                         field: {label: 'Ширина×высота или устройство', value: box.dataset.custom || '', placeholder: '1680x1050 или iPad Mini'},
                         actions: [{label: 'Выбрать экран', kind: 'primary'}]}))?.trim();
   if (v) { box.dataset.custom = v; box.selectedOptions[0].textContent = `Другой: ${v}`; }
   else if (!box.dataset.custom) box.value = '';
+  markRunOpts();
 };
+// the run options sit in a menu: its button shows what is not the default, so a changed screen is not forgotten
+function markRunOpts() {
+  const on = [runScreen() && (runScreen() === 'custom' ? '' : runScreen().replace('x', '×')), $('#runHeaded').checked && 'окно', $('#runDrafts').checked && 'черновики'].filter(Boolean);
+  $('#runOptsMark').textContent = on.length ? `(${on.join(', ')}) ` : '';
+}
+$('#runHeaded').addEventListener('change', markRunOpts);
+$('#runDrafts').addEventListener('change', markRunOpts);
 const RETRYABLE = ['failed', 'error', 'flaky'];
 async function retryRun(rid, btn) {
   if (btn) btn.disabled = true;
@@ -3599,8 +3636,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   html += `<div class="sub" id="stepsBox">${stepsViewHtml(t)}</div>`;
 
   const props = t.heal_proposals || [];
-  html += `<div class="sub"><b>Ревью самолечения</b>`;
-  html += props.length ? props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
+  if (props.length) html += `<div class="sub"><b>Ревью самолечения</b>` + props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
       <div><b>Шаг ${stepN(p.step_id)}:</b> ${esc(p.description)}</div>
       <div class="hint">ИИ: ${esc(p.reason)}</div>
       <div class="grid2"><div><label>Было</label><div class="loc">${p.old.map(c => esc(candText(c))).join('<br>') || '—'}</div></div>
@@ -3608,17 +3644,14 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
       ${p.screenshot ? `<img class="shot" style="margin-top:6px" src="/api/runs/${p.run_id}/files/${p.screenshot}" alt="Найденный элемент обведён">` : ''}
       <div class="row" style="margin-top:8px"><span class="muted grow" style="font-size:12px">прогон ${fmtTime(p.at)}</span>
         <button class="btn" onclick="healDecision('${t.id}', '${p.id}', 'reject')">Отклонить</button>
-        <button class="btn primary" onclick="healDecision('${t.id}', '${p.id}', 'accept')">Принять</button></div></div>`).join('')
-    : '<div class="hint">Нет предложений. Когда сломанный локатор чинит ИИ, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
-  html += '</div>';
+        <button class="btn primary" onclick="healDecision('${t.id}', '${p.id}', 'accept')">Принять</button></div></div>`).join('') + '</div>';
 
   const st = t.status || 'ready', comments = t.comments || [];
-  html += `<div class="sub"><div class="row"><b class="grow">Ревью теста: ${{draft: 'черновик', review: 'на ревью', ready: 'в наборе'}[st]}</b>
+  html += `<div class="sub"><div class="row"><b class="grow" title="Тест, записанный агентом, входит в регрессию только после проверки человеком. Комментарии — к шагам или ко всему тесту">Ревью теста: ${{draft: 'черновик', review: 'на ревью', ready: 'в наборе'}[st]}</b>
       ${st !== 'ready' ? `<button class="btn primary small" onclick="setStatus('${t.id}', 'ready');openTest('${t.id}', true)">Проверен — в набор</button>` : ''}
       ${st === 'draft' ? `<button class="btn small" onclick="setStatus('${t.id}', 'review');openTest('${t.id}', true)">На ревью</button>` : ''}</div>
     ${t.review ? `<div class="hint">${esc(t.review.by)} · ${fmtTime(t.review.at)}</div>` : ''}
     ${st === 'review' && t.review_reason ? `<div class="hint"><b>Почему на ревью:</b> ${esc(t.review_reason)} — шаги изменил агент без человека; проверьте их, прежде чем вернуть тест в набор.</div>` : ''}
-    <div class="hint">Тест, записанный агентом, входит в регрессию только после проверки человеком. Комментарии — к шагам или ко всему тесту.</div>
     ${[{id: '', description: 'Весь тест'}, ...t.steps].map((s, i) => {
       const cs = comments.filter(c => c.step_id === s.id);
       return (i === 0 || cs.length) ? `<div style="margin-top:4px"><b style="font-size:12px">${i ? `Шаг ${i}. ` : ''}${esc(s.description)}</b>` +
@@ -3628,13 +3661,15 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
     <div class="row" style="margin-top:6px"><select id="cmStep" style="width:auto"><option value="">весь тест</option>${t.steps.map((s, i) => `<option value="${s.id}">шаг ${i + 1}: ${esc(s.description.slice(0, 50))}</option>`).join('')}</select>
       <input id="cmText" class="grow" placeholder="Комментарий"><button class="btn small" onclick="addComment('${t.id}')">Добавить</button></div></div>`;
 
-  html += `<div class="sub"><div class="row"><b class="grow">Подготовка и очистка данных</b>
+  const prepared = (t.before || []).length + (t.after || []).length;
+  html += `<details class="sub opt" ${prepared ? 'open' : ''}><summary><b>Подготовка и очистка данных</b>${prepared ? ` · запросов: ${prepared}` : ' · нет'}</summary>
+    <div class="row" style="margin-top:6px"><span class="grow"></span>
       <button class="btn small" onclick="dataRow('before')">+ запрос до теста</button>
       <button class="btn small" onclick="dataRow('after')">+ запрос после теста</button>
       <button class="btn primary small" onclick="saveData('${t.id}', this)">Сохранить</button></div>
     <div class="hint">Запросы к API тестируемого приложения (с куками браузера теста). «До теста» создаёт данные и сохраняет поля ответа в переменные — в шагах они доступны как <code>{{vars.имя}}</code>; «после теста» выполняется всегда, даже при падении. Удалять (DELETE) можно только после теста и только созданное в этом прогоне. Эти запросы пишет человек — агент их не генерирует.</div>
     <div id="dataEditor">${['before', 'after'].map(ph => `<div data-phase="${ph}"><b style="font-size:12px">${ph === 'before' ? 'До теста' : 'После теста'}</b>${(t[ph] || []).map(s => dataRowHtml(s)).join('')}</div>`).join('')}</div>
-    <span class="muted" id="dataMsg"></span></div>`;
+    <span class="muted" id="dataMsg"></span></details>`;
 
   const v = t.verify;
   html += `<div class="sub"><div class="row"><b class="grow">Качество проверок (мутационное тестирование)</b>
@@ -3643,27 +3678,17 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   if (!v) html += '<div class="hint">Тест ещё не проверялся. Он будет прогнан на «испорченных» версиях страницы и обязан на каждой упасть.</div>';
   else if (v.status === 'running') html += '<div class="hint">Идёт проверка…</div>';
   else if (v.status !== 'done') html += `<div class="hint err">${esc(v.error || v.status)}</div>`;
-  else html += `<div class="hint">Обнаружено мутантов: <b>${v.killed} из ${v.total}</b>${v.weak ? ' — тест прошёл на сломанной странице, проверки слабые' : ' — проверки ловят поломки'} · ${fmtTime(v.finished)}</div>` +
-    v.mutants.map(m => `<div class="hint" style="margin:2px 0">${m.result === 'killed' ? '<span class="ok">✔ обнаружен</span>' : m.result === 'survived' ? '<span class="err">✘ не обнаружен</span>' : '<span class="muted">— не применим</span>'} ${esc(m.description)}${m.error ? ` <span class="muted">(${esc(m.error)})</span>` : ''}</div>`).join('');
+  else html += `<details class="opt"><summary>Обнаружено мутантов: <b>${v.killed} из ${v.total}</b>${v.weak ? ' — тест прошёл на сломанной странице, проверки слабые' : ' — проверки ловят поломки'} · ${fmtTime(v.finished)}</summary>` +
+    v.mutants.map(m => `<div class="hint" style="margin:2px 0">${m.result === 'killed' ? '<span class="ok">✔ обнаружен</span>' : m.result === 'survived' ? '<span class="err">✘ не обнаружен</span>' : '<span class="muted">— не применим</span>'} ${esc(m.description)}${m.error ? ` <span class="muted">(${esc(m.error)})</span>` : ''}</div>`).join('') + '</details>';
   html += '</div>';
 
-  html += `<div class="sub"><b>История прогонов</b>` + (history.length ? `<table><thead><tr><th>Когда</th><th>Итог</th><th>Попытки</th><th>Самолечение</th><th>Запуск</th><th></th></tr></thead><tbody>` +
-    history.map(h => `<tr class="click" onclick="openRun('${h.id}')"><td>${fmtTime(h.started)}</td><td>${runBadge(h.status)}${h.quarantined ? ' <span class="badge off">карантин</span>' : ''}</td>
-      <td>${(h.outcomes || []).map(o => o ? '✔' : '✘').join(' ')}</td><td>${h.healed || ''}${h.proposals ? ` (на ревью: ${h.proposals})` : ''}</td><td class="muted">${esc({manual: 'вручную', pipeline: 'конвейер', suite: 'набор', cli: 'CLI', mcp: 'IDE (MCP)'}[h.trigger] || h.trigger)}</td>
-      <td>${RETRYABLE.includes(h.status) ? `<button class="btn small" onclick="event.stopPropagation();retryRun('${h.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить</button>` : ''}</td></tr>`).join('') + '</tbody></table>'
-    : '<div class="hint">Запусков ещё не было — нажмите «Запустить».</div>') + '</div>';
+  html += `<div class="sub"><div class="row"><b class="grow">Последние прогоны</b>
+      ${history.length > RUNS_INLINE ? `<button class="btn small" onclick="openRunsHistory('${t.id}')">Все прогоны (${history.length})</button>` : ''}</div>` +
+    (history.length ? runsTable(history.slice(0, RUNS_INLINE)) : '<div class="hint">Запусков ещё не было — нажмите «Запустить».</div>') + '</div>';
 
-  if (traffic.length) {
-    html += `<div class="sub"><div class="row"><b class="grow">Запросы сценария (записаны при генерации)</b>
-        <a class="btn small" target="_blank" href="/api/tests/${t.id}/export?format=api">API-тесты (.py)</a>
-        <a class="btn small" href="/api/tests/${t.id}/export?format=har">.har</a></div>
-      <div class="hint">«Замокать» добавляет в начало теста шаг, который отвечает на этот запрос записанным ответом, — для нестабильных внешних сервисов. Секреты в записи замаскированы.</div>
-      <table><thead><tr><th>Запрос</th><th>Ответ</th><th>Шаг</th><th></th></tr></thead><tbody>` +
-      traffic.map(e => `<tr><td class="loc">${esc(e.method)} ${esc(e.url.length > 110 ? e.url.slice(0, 110) + '…' : e.url)}${e.third_party ? ' <span class="badge warn">внешний сервис</span>' : ''}</td>
-        <td>${e.status} <span class="muted">${esc(e.mime || '')}</span></td><td>${e.step >= 0 ? e.step + 1 : '—'}</td>
-        <td class="row"><button class="btn small" onclick="mockRequest('${t.id}', ${e.index})">Замокать</button>
-          ${e.method !== 'DELETE' && !e.third_party ? `<button class="btn small" onclick="toBefore('${t.id}', ${e.index})" title="Выполнять этот запрос перед тестом для подготовки данных">В подготовку</button>` : ''}</td></tr>`).join('') + '</tbody></table></div>';
-  }
+  if (traffic.length) html += `<div class="sub"><div class="row"><b class="grow">Запросы сценария</b>
+      <span class="muted">записано при генерации: ${traffic.length}</span>
+      <button class="btn small" onclick="openTraffic('${t.id}')">Открыть</button></div></div>`;
   // a refresh (a run finished) keeps the step editor and what was typed in it
   if (STEP_EDIT?.tid === t.id && $('#stepsBox [data-si]')) readStepEditor();
   box.innerHTML = html;
@@ -3768,6 +3793,29 @@ async function loadTestLinks(tid) {
     ...l.jobs.map(x => 'запуск конвейера ' + a(['pipe', x.id], `от ${fmtTime(x.created)}`))];
   box.innerHTML = parts.length ? 'Связано: ' + parts.join(' · ') : '';
 }
+// The test card shows the last runs; all of them and the recorded requests open in a popup.
+const RUNS_INLINE = 3;
+const runsTable = (history, popup) => `<table><thead><tr><th>Когда</th><th>Итог</th><th>Попытки</th><th>Самолечение</th><th>Запуск</th><th></th></tr></thead><tbody>` +
+  history.map(h => `<tr class="click" onclick="${popup ? "$('#histDlg').close();" : ''}openRun('${h.id}')"><td>${fmtTime(h.started)}</td><td>${runBadge(h.status)}${h.quarantined ? ' <span class="badge off">карантин</span>' : ''}</td>
+    <td>${(h.outcomes || []).map(o => o ? '✔' : '✘').join(' ')}</td><td>${h.healed || ''}${h.proposals ? ` (на ревью: ${h.proposals})` : ''}</td><td class="muted">${esc({manual: 'вручную', pipeline: 'конвейер', suite: 'набор', cli: 'CLI', mcp: 'IDE (MCP)'}[h.trigger] || h.trigger)}</td>
+    <td>${RETRYABLE.includes(h.status) ? `<button class="btn small" onclick="event.stopPropagation();${popup ? "$('#histDlg').close();" : ''}retryRun('${h.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить</button>` : ''}</td></tr>`).join('') + '</tbody></table>';
+async function openRunsHistory(tid) {
+  const body = openHistory('История прогонов', '<div class="hint">…</div>');
+  const history = await api('GET', `/api/tests/${tid}/runs`).catch(() => []);
+  body.innerHTML = history.length ? runsTable(history, true) : '<div class="hint">Запусков ещё не было.</div>';
+}
+async function openTraffic(tid) {
+  const body = openHistory('Запросы сценария (записаны при генерации)', '<div class="hint">…</div>');
+  const traffic = await api('GET', `/api/tests/${tid}/traffic`).catch(() => []);
+  body.innerHTML = `<div class="row"><span class="hint grow">«Замокать» добавляет в начало теста шаг, который отвечает на этот запрос записанным ответом, — для нестабильных внешних сервисов. «В подготовку» — выполнять запрос перед тестом. Секреты замаскированы.</span>
+      <a class="btn small" target="_blank" href="/api/tests/${tid}/export?format=api">API-тесты (.py)</a>
+      <a class="btn small" href="/api/tests/${tid}/export?format=har">.har</a></div>
+    <table><thead><tr><th>Запрос</th><th>Ответ</th><th>Шаг</th><th></th></tr></thead><tbody>` +
+    traffic.map(e => `<tr><td class="loc">${esc(e.method)} ${esc(e.url.length > 110 ? e.url.slice(0, 110) + '…' : e.url)}${e.third_party ? ' <span class="badge warn">внешний сервис</span>' : ''}</td>
+      <td>${e.status} <span class="muted">${esc(e.mime || '')}</span></td><td>${e.step >= 0 ? e.step + 1 : '—'}</td>
+      <td class="row"><button class="btn small" onclick="mockRequest('${tid}', ${e.index})">Замокать</button>
+        ${e.method !== 'DELETE' && !e.third_party ? `<button class="btn small" onclick="toBefore('${tid}', ${e.index})" title="Выполнять этот запрос перед тестом для подготовки данных">В подготовку</button>` : ''}</td></tr>`).join('') + '</tbody></table>';
+}
 async function openVersions(tid) {
   const body = openHistory('История изменений теста', '<div class="hint">…</div>');
   const list = await api('GET', `/api/tests/${tid}/versions`).catch(() => []);
@@ -3830,7 +3878,7 @@ async function saveData(tid, btn) {
   finally { btn.disabled = false; }
 }
 async function toBefore(tid, index) {
-  try { await api('POST', `/api/tests/${tid}/traffic/${index}/before`); openTest(tid, true); }
+  try { await api('POST', `/api/tests/${tid}/traffic/${index}/before`); toast('Запрос добавлен в подготовку данных.'); openTest(tid, true); }
   catch (e) { toast(e.message, 'bad'); }
 }
 async function healDecision(tid, pid, decision) {
@@ -5150,13 +5198,14 @@ async function toPipeline() {
   await loadPipeReviews();
   setPipeSrc('review');
   $('#pipeReview').value = AN.id; pipeReviewChanged();
-  $('#pipeForm').scrollIntoView({behavior: 'smooth'});
+  foldPipeForm(false);
 }
 function pickInPipeline() {     // the scenarios of this analysis, checked in the pipeline's common list
   PIPE_SEL = new Set(SCEN.filter(isReady).map(s => AN.id + ':' + s.id)); PIPE_SCEN_PID = PID;
   showTab('pipe');
   setPipeSrc('picks');
   loadPipeScen();
+  foldPipeForm(false);
 }
 
 // ---- the review: an analysis at the top of the history, its report filled in live
@@ -5299,15 +5348,22 @@ async function loadPipe() {
   loadPipeScen(); loadPipeReviews();
   const pid = PID, jobs = await api('GET', `/api/projects/${pid}/jobs`);
   if (pid !== PID) return;      // another project was chosen meanwhile
-  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
+  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="$('#jobsDlg').close();openJob('${j.id}')">
     <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
     <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">Запусков пока не было: выберите источник выше и нажмите «Запустить».</td></tr>';
+    || '<tr><td colspan="4" class="muted">Запусков пока не было: выберите источник и нажмите «Запустить».</td></tr>';
   if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
   const busy = jobs.find(j => LIVE_JOB.includes(j.status));
   pipeBusy(busy && !(JOB?.id === busy.id && !LIVE_JOB.includes(JOB.status)) ? busy : null);
   if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id, true);
 }
+// An open run takes the page: the launch form folds to its title, «Новый запуск» unfolds it.
+function foldPipeForm(fold) {
+  $('#pipeFormBody').classList.toggle('hidden', fold);
+  $('#pipeNew').classList.toggle('hidden', !fold);
+  if (!fold) $('#pipeForm').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function openJobsHistory() { $('#jobsDlg').showModal(); loadPipe(); }
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
 const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_cases', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
 let PIPE_BUSY = null;
@@ -5488,7 +5544,7 @@ async function startPicked() {
 }
 async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
   clearTimeout(jobTimer);
-  if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); }
+  if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); foldPipeForm(true); }
   let j;
   try { j = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   if (j.project_id !== PID) return;      // a refresh late after another project was chosen
@@ -6346,7 +6402,7 @@ async function loadAudit() {
 }
 $('#auLoad').onclick = loadAudit;
 $('#auOpen').onclick = () => { $('#auditDlg').showModal(); loadAudit(); };
-closeOnBackdrop($('#histDlg')); closeOnBackdrop($('#auditDlg'));
+closeOnBackdrop($('#histDlg')); closeOnBackdrop($('#auditDlg')); closeOnBackdrop($('#resumeDlg')); closeOnBackdrop($('#jobsDlg'));
 $('#auExport').onclick = () => { const m = $('#auMonth').value || new Date().toISOString().slice(0, 7); location.href = `/api/audit/export?month=${m}`; };
 $('#auVerify').onclick = async () => {
   try { const r = await api('GET', '/api/audit/verify');
