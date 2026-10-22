@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -36,7 +37,7 @@ from testgen import guide
 from testgen import agent as agent_mod
 from testgen.agent import StudioSession
 from testgen.browser import screen_size
-from testgen.paths import utf8_console
+from testgen.paths import DATA, utf8_console
 from testgen.steps import ALL_ACTIONS, DATA_ACTIONS, check_api, new_step
 
 ROOT = Path(__file__).resolve().parent
@@ -3798,7 +3799,28 @@ async def user_guide():
 app.mount("/", MCP_APP)
 
 
+STUDIO_DOC = DATA / "studio.json"     # the studio running on this database: address, computer, process
+
+
+def _only_one() -> None:
+    """One studio per database: its Studio sessions and pipeline jobs live in its memory, so a second one
+    would not see them. The lock is held while the studio runs, with no time limit. Several instances
+    (TESTGEN_INSTANCE_URL) pass requests to each other and may run side by side."""
+    if INSTANCE_URL:
+        return
+    if db.hold("testgen:studio"):
+        fs.write_json(STUDIO_DOC, {"url": f"http://{HOST}:{PORT}", "host": socket.gethostname(),
+                                   "pid": os.getpid(), "since": time.time()})
+        return
+    was = fs.read_json(STUDIO_DOC, {}) or {}
+    where = f"{was.get('url', '?')} (компьютер {was.get('host', '?')}, процесс {was.get('pid', '?')})"
+    utf8_console()
+    sys.exit(f"Студия уже запущена на этой базе: {where}. Откройте её; вторая студия на той же базе не "
+             "запускается (несколько экземпляров — TESTGEN_INSTANCE_URL, docs/deploy.md).")
+
+
 if __name__ == "__main__":
+    _only_one()
     auth.ensure_admin()
     # the studio's own log (testgen.*: what a work did and why - review.distribute and the like) in the console
     _console = logging.StreamHandler()

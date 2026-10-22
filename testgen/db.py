@@ -21,7 +21,8 @@ start under a lock unless TESTGEN_DB_MIGRATE=off):
     work       the queue of runs, suites, mutation checks and explorations (workqueue.py)
     workers    workers alive: heartbeat, running items
     owners     which instance of the studio holds a live Studio session or pipeline job
-Locks between processes are PostgreSQL advisory locks (fs.lock).
+Locks between processes are PostgreSQL advisory locks (fs.lock); `hold` - one held for the life of the
+process (one studio per database, server.py).
 
 Data of older versions kept in folders: `python -m testgen.db import-files <data> <secrets>` copies
 them into the database (and S3); `export-files <dir>` writes the database out as folders of the same
@@ -242,6 +243,51 @@ def upsert(conn, table: Table, values: dict) -> None:
 def lock_id(name: str) -> int:
     """A stable signed 64-bit number for pg_advisory_lock."""
     return int.from_bytes(hashlib.sha256(name.encode()).digest()[:8], "big", signed=True)
+
+
+def _take(name: str):
+    """A connection of its own holding the session-level advisory lock `name`, or None when another
+    process holds it."""
+    conn = engine().connect().execution_options(isolation_level="AUTOCOMMIT")
+    if conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_id(name)}).scalar():
+        return conn
+    conn.close()
+    return None
+
+
+def hold(name: str, every: float = 60) -> bool:
+    """Hold the advisory lock `name` for as long as this process lives - no time limit: a connection of
+    its own keeps it, checked every `every` seconds and taken again on a new connection if the database
+    dropped the old one. False - another process holds it."""
+    conn = _take(name)
+    if not conn:
+        return False
+
+    def keep():
+        nonlocal conn
+        while True:
+            time.sleep(every)
+            try:
+                conn.execute(text("SELECT 1"))
+                continue
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+            while True:
+                try:
+                    conn = _take(name)
+                except Exception:
+                    conn = None
+                if conn:
+                    break
+                print(f"Блокировка {name} потеряна вместе с подключением к базе, повтор через {every:.0f} с")
+                time.sleep(every)
+
+    threading.Thread(target=keep, daemon=True, name=f"hold-{name}").start()
+    return True
 
 
 def upgrade(e: Engine | None = None, revision: str = "head", down: bool = False) -> None:
