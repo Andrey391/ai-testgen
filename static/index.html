@@ -109,6 +109,11 @@ textarea.big{min-height:14em;resize:vertical}
 #credDlg::backdrop{background:rgba(0,0,0,.35)}
 #casesDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:900px;width:calc(100% - 32px)}
 #casesDlg::backdrop{background:rgba(0,0,0,.35)}
+/* the history of changes: a popup, not a block of the page */
+.hist-dlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:960px;width:calc(100% - 32px);padding:18px}
+.hist-dlg::backdrop{background:rgba(0,0,0,.35)}
+.hist-dlg h3{margin:0;font-size:16px}
+.hist-dlg .hist-body{max-height:70vh;overflow:auto;margin-top:10px}
 .case-f{border-top:1px solid var(--line);padding:8px 0}.case-f:first-child{border-top:0}
 .case-f textarea{width:100%;min-height:54px;margin-top:6px}
 #askDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:460px;width:calc(100% - 32px);padding:18px}
@@ -1230,16 +1235,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div id="acGroups" style="margin-top:8px"></div>
         </div>
         <div class="card ownerOnly">
-          <h3>Журнал действий</h3>
+          <div class="row"><h3 class="grow" style="margin:0">Журнал действий</h3>
+            <button class="btn" id="auOpen">Открыть журнал</button></div>
           <div class="muted">Кто и когда менял тесты, принимал самолечение, запускал прогоны, менял подключения и права. Записи только дописываются и связаны цепочкой хэшей; администратор выгружает журнал в SIEM.</div>
-          <div class="row" style="margin-top:8px">
-            <input id="auUser" placeholder="пользователь" style="width:auto">
-            <select id="auAction" style="width:auto"><option value="">все действия</option><option value="test.">тесты</option><option value="heal.">самолечение</option><option value="run.">прогоны</option><option value="suite.">наборы</option><option value="connection.">подключения</option><option value="project.">проект и права</option></select>
-            <button class="btn" id="auLoad">Показать</button><span class="grow"></span>
-            <span class="adminOnly"><input id="auMonth" type="month" style="width:auto"> <button class="btn" id="auExport">Выгрузить месяц</button> <button class="btn" id="auVerify">Проверить целостность</button></span>
-          </div>
-          <div id="auMsg" class="muted" style="margin-top:6px"></div>
-          <div style="max-height:420px;overflow:auto;margin-top:8px"><table><thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Итог</th></tr></thead><tbody id="auList"></tbody></table></div>
         </div>
         <div class="card adminOnly">
           <h3>Группы → роли (вся студия, администратор)</h3>
@@ -1796,6 +1794,25 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <button class="btn primary" id="csStart" disabled>Автоматизировать</button></div>
 </dialog>
 
+<dialog id="histDlg" class="hist-dlg" aria-labelledby="histTitle">
+  <div class="row"><h3 class="grow" id="histTitle"></h3>
+    <button class="btn small" onclick="$('#histDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hist-body" id="histBody"></div>
+</dialog>
+
+<dialog id="auditDlg" class="hist-dlg" aria-labelledby="auTitle">
+  <div class="row"><h3 class="grow" id="auTitle">Журнал действий</h3>
+    <button class="btn small" onclick="$('#auditDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="row" style="margin-top:10px">
+    <input id="auUser" placeholder="пользователь" style="width:auto">
+    <select id="auAction" style="width:auto"><option value="">все действия</option><option value="test.">тесты</option><option value="heal.">самолечение</option><option value="run.">прогоны</option><option value="suite.">наборы</option><option value="connection.">подключения</option><option value="project.">проект и права</option></select>
+    <button class="btn" id="auLoad">Показать</button><span class="grow"></span>
+    <span class="adminOnly"><input id="auMonth" type="month" style="width:auto"> <button class="btn" id="auExport">Выгрузить месяц</button> <button class="btn" id="auVerify">Проверить целостность</button></span>
+  </div>
+  <div id="auMsg" class="muted" style="margin-top:6px"></div>
+  <div class="hist-body"><table><thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Итог</th></tr></thead><tbody id="auList"></tbody></table></div>
+</dialog>
+
 <dialog id="askDlg" aria-labelledby="askTitle" aria-describedby="askText">
   <h3 id="askTitle"></h3>
   <div class="ask-text" id="askText"></div>
@@ -1920,6 +1937,21 @@ function ask({title = '', text = '', subject = '', actions = [{label: 'OK', valu
     const danger = actions.some(a => a.kind === 'danger');
     if (control) { control.focus(); if (!pick) inp.select(); }
     else (primary || (danger ? no : made.at(-1)) || no)?.focus();
+  });
+}
+// openHistory(title, html) - the history of changes (test versions, earlier texts of the requirements, the action log)
+// opens in a popup: the page keeps only what the person works with now. Esc or a click beside it closes the popup.
+function openHistory(title, html) {
+  const dlg = $('#histDlg');
+  $('#histTitle').textContent = title;
+  $('#histBody').innerHTML = html;
+  if (!dlg.open) dlg.showModal();
+  return $('#histBody');
+}
+function closeOnBackdrop(dlg) {
+  dlg.addEventListener('click', e => {
+    const r = dlg.getBoundingClientRect();
+    if (e.target === dlg && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) dlg.close();
   });
 }
 // sure(title, action, text, subject) - ask() about an irreversible action: one red button named by the action.
@@ -3552,6 +3584,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   const box = $('#testBox'); box.classList.remove('hidden');
   const stepN = sid => t.steps.findIndex(s => s.id === sid) + 1;
   let html = `<div class="row"><h3 class="grow" style="margin:0">${esc(t.name)}</h3>
+      <button class="btn small" onclick="openVersions('${t.id}')" title="Прежние версии теста: сравнить с текущей или откатить">История изменений</button>
       ${linkBtn(projPath('tests', t.id))}
       <button class="btn small" onclick="closeDetail('#testBox')" aria-label="Закрыть">✕</button></div>
     <div class="muted" style="font-size:12px">${esc(t.url)} · шагов: ${t.steps.length}${t.authoring_usage?.requests ? ' · генерация' + usageText(t.authoring_usage) : ''}</div>
@@ -3595,8 +3628,6 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
     <div class="row" style="margin-top:6px"><select id="cmStep" style="width:auto"><option value="">весь тест</option>${t.steps.map((s, i) => `<option value="${s.id}">шаг ${i + 1}: ${esc(s.description.slice(0, 50))}</option>`).join('')}</select>
       <input id="cmText" class="grow" placeholder="Комментарий"><button class="btn small" onclick="addComment('${t.id}')">Добавить</button></div></div>`;
 
-  html += `<div class="sub"><div class="row"><b class="grow">Версии</b></div><div id="versions" class="hint">…</div></div>`;
-
   html += `<div class="sub"><div class="row"><b class="grow">Подготовка и очистка данных</b>
       <button class="btn small" onclick="dataRow('before')">+ запрос до теста</button>
       <button class="btn small" onclick="dataRow('after')">+ запрос после теста</button>
@@ -3638,7 +3669,6 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   box.innerHTML = html;
   if (STEP_EDIT?.tid === t.id) renderStepEditor(); else STEP_EDIT = null;
   if (!quiet) box.scrollIntoView({behavior: 'smooth', block: 'start'});
-  loadVersions(t.id);
   loadTestLinks(t.id);
 }
 // the steps of a saved test: viewed, edited in place (a new version) or re-recorded in the Studio
@@ -3738,12 +3768,13 @@ async function loadTestLinks(tid) {
     ...l.jobs.map(x => 'запуск конвейера ' + a(['pipe', x.id], `от ${fmtTime(x.created)}`))];
   box.innerHTML = parts.length ? 'Связано: ' + parts.join(' · ') : '';
 }
-async function loadVersions(tid) {
+async function openVersions(tid) {
+  const body = openHistory('История изменений теста', '<div class="hint">…</div>');
   const list = await api('GET', `/api/tests/${tid}/versions`).catch(() => []);
-  $('#versions').innerHTML = list.length ? list.map(v => `<div class="row" style="margin:2px 0"><span class="grow">Версия ${v.version} · ${fmtTime(v.at)}${v.by ? ' · ' + esc(v.by) : ''} · шагов: ${v.steps}</span>
+  body.innerHTML = list.length ? list.map(v => `<div class="row" style="margin:2px 0"><span class="grow">Версия ${v.version} · ${fmtTime(v.at)}${v.by ? ' · ' + esc(v.by) : ''} · шагов: ${v.steps}</span>
       <button class="btn small" onclick="showDiff('${tid}', ${v.version})">Сравнить с текущей</button>
       <button class="btn small" onclick="restoreVersion('${tid}', ${v.version})">Откатить</button></div><div id="diff-${v.version}"></div>`).join('')
-    : 'Изменений ещё не было: версия сохраняется, когда меняются шаги, данные, название или адрес.';
+    : '<div class="hint">Изменений ещё не было: версия сохраняется, когда меняются шаги, данные, название или адрес.</div>';
 }
 async function showDiff(tid, n) {
   const v = await api('GET', `/api/tests/${tid}/versions/${n}`);
@@ -3756,7 +3787,7 @@ async function showDiff(tid, n) {
 async function restoreVersion(tid, n) {
   if (!await ask({title: `Вернуть тест к версии ${n}?`, text: 'Текущее состояние сохранится как новая версия.',
                   actions: [{label: 'Вернуть версию', value: true, kind: 'primary'}]})) return;
-  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); openTest(tid, true); loadTests(); } catch (e) { toast(e.message, 'bad'); }
+  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); $('#histDlg').close(); openTest(tid, true); loadTests(); } catch (e) { toast(e.message, 'bad'); }
 }
 async function addComment(tid) {
   const text = $('#cmText').value.trim(); if (!text) return;
@@ -4301,6 +4332,18 @@ function pathHtml(r) {
 }
 const nextBtn = (k, label) => `<button class="btn primary small" onclick="anTab('${k}')">${label} →</button>`;
 const lockBox = text => `<div class="box lock">${text}</div>`;
+// The earlier texts of the requirements (agent fixes and new versions), newest first - in a popup.
+function openReqHistory() {
+  const revs = [...(AN.revisions || [])].reverse();
+  openHistory('История изменений ТЗ', revs.length ? revs.map((r, i) => `<details class="opt" ${i ? '' : 'open'}>
+      <summary>${r.kind === 'version' ? 'Новая версия ТЗ' : 'Исправление агентом'} — ${fmtTime(r.at)}${r.by ? `, ${esc(r.by)}` : ''}</summary>
+      ${r.summary ? `<div class="hint">${esc(r.summary)}</div>` : ''}
+      ${(r.edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
+        <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}
+      ${r.requirements ? `<details class="opt"><summary>Текст до изменения</summary>
+        <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(r.requirements)}</pre></details>` : ''}</details>`).join('')
+    : '<div class="hint">ТЗ ещё не менялось.</div>');
+}
 // Step 1: the requirements and the reviewer's check of them.
 function reqTabHtml(r, busy) {
   const rv = AN.review, v = rv?.validation, revs = AN.revisions || [], last = revs[revs.length - 1];
@@ -4328,11 +4371,8 @@ function reqTabHtml(r, busy) {
   return versionBox(busy) + head + sourcesLine() + fit + `
     <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${fixes ? ` · исправлен агентом: ${fixes}` : ''}${versions ? ` · новых версий: ${versions}` : ''}</summary>
       <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
-      ${last ? `<details class="opt"><summary>${last.kind === 'version' ? 'Новая версия ТЗ' : 'Последнее исправление'} — ${fmtTime(last.at)}${last.by ? `, ${esc(last.by)}` : ''}</summary>
-        <div class="hint">${esc(last.summary || '')}</div>
-        ${(last.edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
-          <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}</details>` : ''}
-      <button class="btn small" style="margin-top:6px" onclick="reuseRequirements()">Вставить в поле новых требований</button></details>
+      <div class="row" style="margin-top:6px"><button class="btn small" onclick="reuseRequirements()">Вставить в поле новых требований</button>
+        ${last ? `<button class="btn small" onclick="openReqHistory()" title="Исправления агентом и новые версии ТЗ: что и когда изменилось">История изменений ТЗ (${revs.length})</button>` : ''}</div></details>
     ${v ? `<details class="opt"><summary>Подробности проверки документа — ${v.score}/100${before ? ' до исправлений' : ''}</summary>${validationHtml(v, true)}</details>` : ''}`;
 }
 // Step 2: the findings on the document (the conflicts with the lifecycle - step 3).
@@ -6272,8 +6312,7 @@ async function loadAccess() {
   $('#acVis').disabled = !owner;
   $$('.ownerOnly').forEach(x => x.classList.toggle('hidden', !owner));
   $('#acMsg').textContent = owner ? '' : `Ваша роль — ${roleTitle(PROJ.role)}; участников меняет владелец.`;
-  $$('[data-subpanel="access"] .adminOnly').forEach(x => x.classList.toggle('hidden', !ME.is_admin));
-  if (owner) loadAudit();
+  $$('[data-subpanel="access"] .adminOnly, #auditDlg .adminOnly').forEach(x => x.classList.toggle('hidden', !ME.is_admin));
   if (ME.is_admin) api('GET', '/api/sso').then(s => {
     $('#ssoRules').value = s.group_roles.map(r => `${r.group}; ${r.project}; ${r.role}`).join('\n');
     $('#ssoAdmins').value = s.admin_groups.join(', ');
@@ -6306,6 +6345,8 @@ async function loadAudit() {
   } catch (e) { $('#auMsg').textContent = e.message; }
 }
 $('#auLoad').onclick = loadAudit;
+$('#auOpen').onclick = () => { $('#auditDlg').showModal(); loadAudit(); };
+closeOnBackdrop($('#histDlg')); closeOnBackdrop($('#auditDlg'));
 $('#auExport').onclick = () => { const m = $('#auMonth').value || new Date().toISOString().slice(0, 7); location.href = `/api/audit/export?month=${m}`; };
 $('#auVerify').onclick = async () => {
   try { const r = await api('GET', '/api/audit/verify');
