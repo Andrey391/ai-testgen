@@ -205,7 +205,7 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `tests/test_ui_static.py`); смоук-тест интерфейса — `tests/test_ui_nav.py`. **У экранов есть адреса**
   (`#/projects`, `#/p/{pid}/{req|pipe|studio|tests|runs|suites|coverage|tasks|dash|settings|setup}[/{id}[/{sec}]]`): `route()` открывает
   экран из адреса (вход, F5, «Назад», ссылка), открытие сущности пишет свой адрес (`setRoute`, новая запись истории), обновление
-  по таймеру — нет (`quiet`); чужое или удалённое — «Не найдено или нет доступа» (`showMissing`); новый экран — в `VIEW_TAB`/`openRoute`. Middleware `require_login` пускает без входа только пути из
+  по таймеру — нет (`quiet`); чужое или удалённое — «Не найдено или нет доступа» (`showMissing`); новый экран — в `VIEW_TAB`/`openRoute`; раздел настроек с деревом подразделов («Тестовые данные», «Процесс генерации» — этап на экране, `data-proc`) — в `SUB_SECS`. Middleware `require_login` пускает без входа только пути из
   `PUBLIC`, `/mcp` — по API-токену; передаёт запрос экземпляру-владельцу сессии Studio (`_elsewhere`),
   считает метрики и пишет журнал действий (`_audit`, `AUDIT_ACTIONS`). **Доступ к проекту** проверяет
   одна зависимость `guard` для всех маршрутов: ресурс по префиксу пути (`RESOURCES`) → проект → роль
