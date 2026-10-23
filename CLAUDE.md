@@ -549,7 +549,12 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   (`Model.features`), заменяется в `base.py`: обрезка старых скриншотов, structured output — JSON-схема в
   промпте, проверка pydantic и один повтор. Подключение, у которого ответ со structured output ушёл целиком в
   рассуждения (`max_tokens` без текста или поток замолчал в рассуждениях — GLM за шлюзом), дальше получает схему в промпте (`NO_STRUCTURED`, тот же
-  запрос повторяется так сразу). Таймаут запроса — `anthropic.Timeout` (SDK на `httpx2`, не `httpx`).
+  запрос повторяется так сразу). **Шлюз, отказавший в части запроса** (400/422 «… is not supported», «not
+  permitted», `unsupported_feature`), получает тот же запрос без неё — любой необязательной части (`OPTIONAL`:
+  `tool_choice`, structured output, context editing, effort, `fallbacks`, кэш): названной в ошибке, иначе по
+  очереди `DROP_ORDER`; запоминается для подключения (`REFUSED`), только если запрос без неё прошёл; отказ от
+  structured output — `FeatureRefused`, `llm.parse` повторяет со схемой в промпте. Новую необязательную часть
+  запроса добавляй в `OPTIONAL`/`DROP_ORDER` и `_sent`. Таймаут запроса — `anthropic.Timeout` (SDK на `httpx2`, не `httpx`).
 - `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256), группы
   каталога и настройки «группа → роль» (`data/sso.json`); `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
   таблице `tests` (`repo/tests.py`; теги, карантин, `heal_proposals`, `verify`; статус `STATUSES`: `draft` — записал агент, `review` — ждёт

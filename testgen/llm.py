@@ -42,7 +42,7 @@ import pydantic
 
 from .paths import OFFLINE
 from .repo import usage as usage_repo
-from .providers.anthropic import (CLEAR_TOOL_USES, CONTEXT_BETA, FALLBACK_BETA, FEATURES,  # noqa: F401
+from .providers.anthropic import (CLEAR_TOOL_USES, CONTEXT_BETA, FALLBACK_BETA, FEATURES, FeatureRefused,  # noqa: F401
                                   AnthropicProvider, error_text, is_error)
 from .providers.base import ProviderError, Reply, Request, schema_instruction, validate
 
@@ -427,10 +427,14 @@ async def parse(stage: dict | None, *, system: str, messages: list[dict], schema
                   max_tokens=max_tokens, cache=PROMPT_CACHE, context=context, stream=stream, timeout=timeout,
                   think_limit=think_limit, progress=progress)
     if prov.structured(m.name):
-        reply = await prov.parse(req, schema)
-        track(reply, usage, m.prices, project_id, stage_name)
+        try:
+            reply = await prov.parse(req, schema)
+        except FeatureRefused:      # the gateway does not take an output schema: it goes into the prompt
+            reply = None
+        if reply is not None:
+            track(reply, usage, m.prices, project_id, stage_name)
         # Off now: the model only thought - asked again with the schema in the prompt (unless the caller retries).
-        if prov.structured(m.name) or not again:
+        if reply is not None and (prov.structured(m.name) or not again):
             if reply.parsed is None and reply.stop != "refusal":
                 reply.parsed, _ = validate(schema, reply.text)
             return reply

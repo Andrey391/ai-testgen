@@ -261,6 +261,98 @@ def test_tool_choice_refused_by_gateway_is_dropped():
     assert len(calls) == 3 and "tool_choice" not in calls[2]          # no failing first try any more
 
 
+def _gateway(refuse):
+    """A fake gateway: `refuse(kw)` - the error message for a request it refuses, or None."""
+    import types
+
+    import anthropic
+    import httpx
+
+    calls = []
+
+    async def create(**kw):
+        calls.append(kw)
+        message = refuse(kw)
+        if message:
+            body = {"error": {"message": message, "type": None, "param": None, "code": "400"}}
+            raise anthropic.BadRequestError(message, response=httpx.Response(
+                400, request=httpx.Request("POST", "http://gateway.local/v1/messages")), body=body)
+        return types.SimpleNamespace(content=[{"type": "text", "text": "{}"}], stop_reason="end_turn",
+                                     model=kw["model"], usage=None)
+
+    client = types.SimpleNamespace(base_url="http://gateway.local/" + uuid.uuid4().hex,
+                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create,
+                                                                                            parse=create)))
+    return client, calls
+
+
+def test_json_schema_refused_by_gateway_goes_to_prompt():
+    """"text.format type 'json_schema' is not supported" - structured output is off for the connection and the
+    caller is told to put the schema in the prompt (FeatureRefused), not shown the gateway's error."""
+    import asyncio
+
+    import pydantic
+
+    from testgen.providers import anthropic as prov
+    from testgen.providers.base import Request
+
+    client, calls = _gateway(lambda kw: "litellm.BadRequestError: {\"error\":{\"code\":\"responses_feature_not_supported\","
+                                        "\"message\":\"text.format type 'json_schema' is not supported, only 'text' and "
+                                        "'json_object' are allowed.\"}}" if "output_format" in kw else None)
+
+    class Answer(pydantic.BaseModel):
+        ok: bool = True
+
+    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    r = Request(model="deepseek-coder", system="s", messages=[{"role": "user", "content": "go"}])
+    assert p.structured("deepseek-coder")
+    with pytest.raises(prov.FeatureRefused):
+        asyncio.run(p.parse(r, Answer))
+    assert len(calls) == 1 and not p.structured("deepseek-coder")
+    assert asyncio.run(p.chat(r)).text == "{}"                         # the schema-in-prompt request goes through
+
+
+def test_unnamed_refusal_drops_least_needed_part_first():
+    """A refusal that names no part ("Unsupported parameter") drops the optional parts one by one, the least needed
+    first, and remembers only what had to go for the request to go through."""
+    import asyncio
+
+    from testgen.providers import anthropic as prov
+    from testgen.providers.base import Request
+
+    client, calls = _gateway(lambda kw: "Unsupported parameter in request" if "output_config" in kw else None)
+    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    r = Request(model="m", effort="high", system="s", messages=[{"role": "user", "content": "go"}])
+    assert asyncio.run(p.chat(r)).text == "{}"
+    assert "fallbacks" in calls[0] and "fallbacks" not in calls[1] and "output_config" not in calls[2]
+    key = p._key("m")
+    assert prov.REFUSED[key] == {"fallbacks", "effort"}             # dropping fallbacks alone was not enough
+    asyncio.run(p.chat(r))
+    assert len(calls) == 4                                           # no failing tries any more
+
+
+def test_other_errors_drop_nothing():
+    """A 400 that is not a refusal of a part is not retried; a refusal that stays after every part was dropped
+    turns nothing off for the connection."""
+    import asyncio
+
+    from testgen.providers import anthropic as prov
+    from testgen.providers.base import ProviderError, Request
+
+    client, calls = _gateway(lambda kw: "messages: field required")
+    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    r = Request(model="m", effort="high", system="s", messages=[{"role": "user", "content": "go"}])
+    with pytest.raises(ProviderError):
+        asyncio.run(p.chat(r))
+    assert len(calls) == 1
+
+    client, calls = _gateway(lambda kw: "images are not supported by this model")
+    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    with pytest.raises(ProviderError):
+        asyncio.run(p.chat(r))
+    assert len(calls) > 1 and not prov.REFUSED.get(p._key("m"))
+
+
 def test_empty_assistant_turn_gets_placeholder():
     """A model that answered with nothing: its turn must not go back to the API empty
     (LiteLLM: "assistant must provide content, reasoning_content or tool_calls")."""
