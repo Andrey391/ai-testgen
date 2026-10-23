@@ -67,7 +67,18 @@ button:disabled{opacity:.5;cursor:default}
 .muted{color:var(--muted)}
 .hidden{display:none!important}
 .start{max-width:680px;margin:20px auto}
-.studio{display:grid;grid-template-columns:320px 1fr 380px;gap:14px;height:calc(100vh - 90px)}
+.studio{display:grid;grid-template-columns:300px minmax(0,1fr) 340px;grid-template-rows:auto minmax(0,1fr);gap:12px;height:calc(100vh - 90px)}
+/* the session bar over the three columns: what the session is, its state, how it is driven, saving */
+.ws-bar{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px}
+.ws-bar .ws-name{min-width:0;flex:0 1 auto;max-width:34%}
+.ws-bar .ws-name .hint{margin:0}
+.ws-bar .status{margin:0;flex:1 1 220px;min-width:0;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-bar .seg{margin:0}
+.ws-bar .seg button{padding:4px 10px;font-size:12px}
+.msg details{margin-top:4px}
+.msg details summary{cursor:pointer;color:var(--muted);font-size:12px}
+.msg details div{margin-top:4px;font-size:12px;color:var(--muted);max-height:200px;overflow:auto}
+.msg .n{margin-left:6px}
 .col{display:flex;flex-direction:column;min-height:0}
 .chat{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px}
 .msg{padding:8px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word}
@@ -79,7 +90,7 @@ button:disabled{opacity:.5;cursor:default}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px}
 .dot.run{background:var(--warn);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
-.live{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
+.live{position:relative;flex:1;min-height:0;display:flex;align-items:flex-start;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
 .live img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border:1px solid var(--line);border-radius:6px;display:block}
 .live .size{position:absolute;right:6px;bottom:6px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--card);color:var(--muted);opacity:.85;pointer-events:none}
 .live.picking img{cursor:crosshair;outline:2px solid var(--accent)}
@@ -171,7 +182,7 @@ tr.click:hover td{background:var(--bg)}
 .sess-chip span.n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sess-chip.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .sess-chip .unsaved{color:var(--warn)}
-.ws-ctl{margin-top:6px}
+
 details.fold{margin-top:6px;padding:4px 10px;font-size:13px}
 details.fold .goal{margin:4px 0 2px}
 ul.ready{list-style:none;padding:0;margin:4px 0 2px}
@@ -179,7 +190,7 @@ ul.ready li{display:flex;gap:6px;align-items:baseline;margin:2px 0}
 ul.ready li .ck{width:16px;text-align:center;color:var(--muted)}
 ul.ready li.ok .ck{color:var(--ok)}
 ul.ready li.bad .ck{color:var(--bad)}
-.changes{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;max-height:150px;overflow:auto}
+.changes{padding:6px 0 0;font-size:12px;max-height:180px;overflow:auto}
 .changes .head{display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:var(--muted);margin-bottom:2px}
 .changes .ch{display:flex;gap:6px;align-items:baseline;padding:2px 0;border-top:1px dashed var(--line)}
 .changes .ch .t{color:var(--muted);font-variant-numeric:tabular-nums;flex:none}
@@ -190,6 +201,8 @@ ul.ready li.bad .ck{color:var(--bad)}
 /* pagination of long tables and lists */
 .pg-hide{display:none!important}
 .pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;font-size:12px;color:var(--muted);margin-top:8px}
+/* the navigation of a long list stays on screen: at the bottom of the window, or of the box the list scrolls in */
+.pager{position:sticky;bottom:0;z-index:3;background:var(--panel);padding:6px 0;border-top:1px solid var(--line)}
 .pager select{width:auto;padding:2px 6px;font-size:12px}
 .pager button{min-width:28px}
 /* screenshot viewer */
@@ -495,7 +508,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 .bars div.fail::after{content:"✘";position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--bad)}
 .bars div:hover{opacity:.75}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
-@media (max-width:1100px){.studio{grid-template-columns:1fr;height:auto}.chat,.steps{max-height:360px}
+@media (max-width:1100px){.studio{grid-template-columns:1fr;grid-template-rows:none;height:auto}.ws-bar .ws-name{max-width:none;flex-basis:100%}.chat,.steps{max-height:360px}
   .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
   .subnav-group{width:100%}.subtree.open{flex-direction:row;flex-wrap:wrap;width:100%;margin-left:0}
   .skills-layout > .card{position:static}#skList{max-height:50vh}#skEditor{max-height:none}
@@ -523,6 +536,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <button data-tab="proj" data-needs-project>Проект</button>
   </nav>
   <span class="grow"></span>
+  <button class="btn hidden" id="histBtn" onclick="openTabHistory()"></button>
   <a class="btn" id="helpBtn" href="/guide" target="_blank" rel="noopener" title="Руководство пользователя: знакомство со студией, пошаговые сценарии работы и словарь терминов">Справка</a>
   <span class="muted hidden" id="whoami"></span>
   <button class="btn hidden" id="logoutBtn">Выйти</button>
@@ -718,18 +732,26 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </div>
 
   <div id="workspace" class="studio hidden">
-    <div class="card col">
-      <b id="wsTitle" class="ws-title"></b>
-      <div id="wsSource" class="hint hidden"></div>
-      <div class="row ws-ctl">
-        <label class="inline" title="Автопилот: агент выполняет шаги сам, без подтверждения каждого"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
-        <button class="btn small danger hidden" id="stopBtn" aria-keyshortcuts="Control+." title="Ctrl+. — Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
-      </div>
+    <div class="card ws-bar">
+      <div class="ws-name"><b id="wsTitle" class="ws-title"></b><div id="wsSource" class="hint hidden"></div></div>
       <div class="status" role="status" aria-live="polite"><span class="dot" id="stDot" aria-hidden="true"></span><span id="stText"></span></div>
-      <div class="genbox" id="genBox"></div>
-      <div class="changes" id="changesBox"></div>
-      <details class="opt fold"><summary>Цель</summary><div class="goal" id="goalText"></div></details>
-      <details class="opt fold"><summary>Готовность <span id="readySum"></span></summary><ul class="ready" id="readyList"></ul></details>
+      <label class="inline" title="Автопилот: агент выполняет шаги сам, без подтверждения каждого"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
+      <button class="btn small danger hidden" id="stopBtn" aria-keyshortcuts="Control+." title="Ctrl+. — Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">Остановить</button>
+      <div class="seg" id="modeSeg" role="radiogroup" aria-label="Что делает клик по экрану браузера">
+        <button type="button" role="radio" data-mode="off" title="Клик по экрану ничего не делает — только смотреть">Смотреть</button>
+        <button type="button" role="radio" data-mode="record" title="Record &amp; Play: клик по элементу делает с ним то же, что пользователь, и становится шагом">Записывать</button>
+        <button type="button" role="radio" data-mode="picker" title="Element Picker: сначала действие или проверка, затем клик по элементу">Выбрать элемент</button>
+      </div>
+      <button class="btn primary" id="saveBtn">Сохранить</button>
+    </div>
+
+    <div class="card col">
+      <details class="opt fold" id="wsDetails"><summary>Детали: готовность <span id="readySum"></span></summary>
+        <div class="muted" style="margin-top:4px">Цель</div><div class="goal" id="goalText"></div>
+        <ul class="ready" id="readyList"></ul>
+        <div class="changes" id="changesBox"></div>
+        <div class="hint" id="stMeta"></div>
+      </details>
       <div class="finish hidden" id="finishBox"></div>
       <div class="chat" id="chat"></div>
       <div id="pendingBox" class="pending hidden">
@@ -755,7 +777,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="card col">
       <div class="row" style="margin-bottom:6px">
         <b class="grow" title="Живой экран: браузер, в котором агент проходит сценарий, в реальном времени">Live View <span class="badge" id="engineBadge"></span></b>
-        <select id="mode" style="width:auto" title="Что делает клик по экрану Live View">
+        <select id="mode" class="hidden" aria-hidden="true" tabindex="-1">
           <option value="off">Клик по экрану: ничего (смотреть)</option>
           <option value="record" title="Запись действий: клик по элементу делает с ним то же, что пользователь, и становится шагом">Record &amp; Play: записывать мои действия</option>
           <option value="picker" title="Выбор элемента: сначала действие или проверка, затем клик по элементу">Element Picker: действие или проверка элемента</option>
@@ -802,7 +824,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div class="row" style="margin-bottom:8px">
         <b class="grow">Шаги теста <span class="muted" id="stepCount"></span></b>
         <button class="btn" id="addStepBtn" aria-label="Добавить шаг">+ шаг</button>
-        <button class="btn primary" id="saveBtn">Сохранить</button>
       </div>
       <div id="addStep" class="hidden" style="margin-bottom:8px">
         <div class="row">
@@ -842,9 +863,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <a class="btn small" id="expFeat" target="_blank">.feature</a>
         <a class="btn small hidden" id="expApi" target="_blank" title="API-тесты (pytest + httpx) по запросам, записанным при генерации">API</a>
       </div>
-      <div class="row" style="margin-top:8px">
-        <span class="grow"></span>
-        <button class="btn" id="newBtn">Новый тест</button>
+      <div class="row" style="margin-top:8px;justify-content:flex-end">
+        <button class="btn small" id="newBtn">Новый тест</button>
       </div>
     </div>
   </div>
@@ -1019,11 +1039,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="live-log" id="reqLog" aria-live="polite"></div>
   </div>
   <div id="anActive"></div>
-  <div class="card" style="margin-top:12px">
-    <div class="row"><h3 class="grow" style="margin:0">История проверок</h3><span class="muted" id="anCount"></span></div>
-    <div class="hint">Каждые требования проходят шаги: проверка ревьюером → разбор замечаний → сверка и подтверждение жизненного цикла → сценарии и тесты. Тест-дизайн начинается только после первых трёх. Выберите требования, чтобы продолжить работу с ними.</div>
-    <div id="anList" data-paged></div>
-  </div>
 </section>
 
 <!-- ============ PIPELINE ============ -->
@@ -1031,7 +1046,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="card hidden" id="pipeBusy"></div>
   <div class="card" id="pipeForm">
     <div class="row"><h2 class="grow" style="margin:0">Запуск конвейера</h2>
-      <button class="btn" onclick="openJobsHistory()">История запусков</button>
       <button class="btn primary hidden" id="pipeNew" onclick="foldPipeForm(false)">Новый запуск</button></div>
     <div id="pipeFormBody">
     <details class="how" data-how="pipe" open><summary>Как это работает</summary><div class="muted">Генерация тест-кейсов и тестов по настройкам проекта: требования → ревью → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div></details>
@@ -1832,6 +1846,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <tbody id="resumeBody"></tbody></table></div>
 </dialog>
 
+<dialog id="anDlg" class="hist-dlg" aria-labelledby="anDlgTitle">
+  <div class="row"><h3 class="grow" id="anDlgTitle">История проверок <span class="muted" id="anCount"></span></h3>
+    <button class="btn small" onclick="$('#anDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hint">Каждые требования проходят шаги: проверка ревьюером → разбор замечаний → сверка и подтверждение жизненного цикла → сценарии и тесты. Тест-дизайн начинается только после первых трёх. Выберите требования, чтобы продолжить работу с ними.</div>
+  <div class="hist-body"><div id="anList" data-paged></div></div>
+</dialog>
+
 <dialog id="jobsDlg" class="hist-dlg" aria-labelledby="jobsTitle">
   <div class="row"><h3 class="grow" id="jobsTitle">История запусков конвейера</h3>
     <button class="btn small" onclick="$('#jobsDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
@@ -2242,6 +2263,7 @@ function showTab(t, own) {
   const at = parseRoute(location.hash);
   if (own || routeTab(at) !== t || (at.pid || null) !== (t === 'home' ? null : PID)) setRoute(tabPath(t));
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  syncHistBtn(t);
   $('#allProj').classList.toggle('on', t === 'home');
   [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
   if (t !== 'home' && PID) store.set('tg_tab_' + PID, t);      // entering the project again opens it here
@@ -2310,6 +2332,7 @@ const linkBtn = path => `<button class="btn small" onclick="copyLink('${esc(path
 function showMissing(r = {}) {
   const own = r.pid && PROJECTS.some(p => p.id === r.pid) && VIEW_TAB[r.view];
   $$('nav button').forEach(b => b.classList.remove('on'));
+  syncHistBtn('');
   $('#allProj').classList.remove('on');
   [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== 'missing'));
   const link = $('#missingLink');
@@ -2714,19 +2737,20 @@ function render() {
   renderSource(s);
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
-  $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
+  $('#stMeta').textContent = `Проект ${s.project}` +
     (s.model ? ` · ${s.model.name}${s.model.screenshots !== 'always' ? ' (текстовый режим)' : ''}` : '') + usageText(s.usage) +
     (s.timing?.turns ? ` · ходов ${s.timing.turns}: модель ${Math.round(s.timing.model)} с, браузер ${Math.round(s.timing.browser)} с` : '');
-  $('#stText').title = (s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '') +
+  $('#stText').title = $('#stMeta').textContent + '\n' + (s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '') +
     (s.timing?.turns ? `\nВремя: ожидание модели ${s.timing.model} с, браузер ${s.timing.browser} с. Долго думает модель — уменьшите effort этапа «Генерация» или выберите модель быстрее; в Auto-Pilot поля формы заполняются за один ход.` : '');
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
   const mcp = s.engine !== 'builtin', apiTest = s.engine === 'api';
   $('#mode').disabled = $('#pickAction').disabled = mcp;
+  $$('#modeSeg button').forEach(b => b.disabled = mcp);
   if (!mcp && $('#mode').dataset.mcp === 'true') syncMode();     // back from an MCP or API session
   $('#mode').dataset.mcp = mcp;
-  if (mcp) { $('#mode').value = 'off'; $('#live').classList.remove('picking'); $('#pickAction').classList.add('hidden');
+  if (mcp) { $('#mode').value = 'off'; syncModeSeg(); $('#live').classList.remove('picking'); $('#pickAction').classList.add('hidden'); $('#modeHint').classList.remove('hidden');
     $('#modeHint').textContent = apiTest ? 'API-тест: браузера нет, каждый шаг — запрос к API. Здесь — запросы сессии и ответы на них.'
       : 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Record & Play и Element Picker работают со встроенным движком.'; }
   $('#live').classList.toggle('hidden', apiTest); $('#apiLive').classList.toggle('hidden', !apiTest);
@@ -2736,7 +2760,7 @@ function render() {
 
   const chat = $('#chat');
   const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
-  chat.innerHTML = s.chat.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join('');
+  chat.innerHTML = chatHtml(s.chat);
   if (atBottom) chat.scrollTop = chat.scrollHeight;
 
   const p = s.pending;
@@ -2753,6 +2777,24 @@ function render() {
   if (!editing) renderSteps(s.steps);
 }
 
+// A gateway that cannot take tool calls answers with a long JSON: the chat says what to do instead.
+const CHAT_HINTS = [[/tool_choice|tools? (are|is) not supported|does not support tools/i,
+  'Модель через этот адрес API не поддерживает вызов инструментов — агенту в браузере он нужен. Выберите другую модель в «Проект → Модель».']];
+function chatHtml(chat) {
+  const out = [];
+  for (const m of chat) {
+    const last = out[out.length - 1];
+    if (last && last.role === m.role && last.text === m.text) { last.n++; continue; }
+    out.push({role: m.role, text: m.text, n: 1});
+  }
+  return out.map(m => {
+    const n = m.n > 1 ? `<span class="badge n" title="Одинаковых сообщений подряд">×${m.n}</span>` : '';
+    const hint = m.role !== 'user' && CHAT_HINTS.find(([re]) => re.test(m.text));
+    if (m.text.length <= 240 && !hint) return `<div class="msg ${m.role}">${esc(m.text)}${n}</div>`;
+    const head = hint ? hint[1] : m.text.slice(0, 160).replace(/\s+\S*$/, '') + '…';
+    return `<div class="msg ${m.role}">${esc(head)}${n}<details><summary>Подробнее</summary><div>${esc(m.text)}</div></details></div>`;
+  }).join('');
+}
 // Where the session came from: «Из задачи …» over it, «Вернуться к …» first after saving.
 const SOURCE_TEXT = {task: ['Из задачи', 'Вернуться к задаче'], job: ['Из запуска конвейера', 'Вернуться к запуску'],
                      scenario: ['По сценарию', 'Вернуться к сценарию']};
@@ -2782,12 +2824,11 @@ function renderProgress(s) {
     awaiting_approval: s.autopilot ? 'Выполняет предложенный шаг…' : 'Ждёт вашего решения: «Выполнить шаг» или «Отклонить» — подсказать другой',
     idle: 'Ждёт вас: подскажите агенту в чате, добавьте шаг или нажмите «Продолжить с агентом»',
     done: 'Генерация завершена — проверьте шаги и сохраните тест',
-    error: 'Ошибка — см. сообщение в чате; можно «Продолжить с агентом»',
+    error: 'Ошибка — причина в чате; можно «Продолжить с агентом»',
     closed: 'Сессия закрыта'}[s.status] || s.status;
   const f = s.finish;
   const item = (cls, text) => `<li class="${cls}"><span class="ck">${cls === 'ok' ? '✓' : cls === 'bad' ? '✕' : '○'}</span><span>${text}</span></li>`;
-  $('#genBox').innerHTML = `<div><span class="muted">Сейчас:</span> <span class="now">${esc(now)}</span>
-      ${s.autopilot ? `<span class="muted"> · Auto-Pilot: до ${s.max_steps} шагов</span>` : ''}</div>`;
+  $('#stText').textContent = now + (s.autopilot ? ` · Auto-Pilot: до ${s.max_steps} шагов` : '');
   $('#goalText').textContent = s.expected || 'Ожидаемый результат сценария';
   const ready = [n > 0, asserts.length > 0, f?.status === 'passed'];
   $('#readySum').innerHTML = `<span class="badge ${ready.every(Boolean) ? 'ok' : f && f.status !== 'passed' ? 'bad' : 'off'}">${ready.filter(Boolean).length} из 3</span>`;
@@ -2884,7 +2925,8 @@ function renderSteps(steps) {
       <div>
         <span class="badge ${st.action.startsWith('assert') ? 'assert' : ''}">${esc(st.action)}</span>
         <span class="d" contenteditable="true" data-i="${i}">${esc(st.description)}</span>
-        <div class="meta">${st.value ? 'значение: ' + esc(st.value) + ' · ' : ''}${esc(locText(st.locator))}${st.source !== 'ai' ? ' · ' + esc(st.source) : ''}${st.healed ? ' · healed' : ''}</div>
+        <div class="meta">${[st.value && !(st.description || '').includes(st.value) ? 'значение: ' + esc(st.value) : '', esc(locText(st.locator)),
+  !['ai', 'system'].includes(st.source) ? esc(st.source) : '', st.healed ? 'healed' : ''].filter(Boolean).join(' · ')}</div>
         ${st.error ? `<div class="err">${esc(st.error)}</div>` : ''}
         ${st.status === 'running' ? '<div class="hint">выполняется…</div>' : ''}
         ${st.replay_error ? `<div class="err">✘ Упал при прогоне: ${esc(st.replay_error)}</div>` : ''}
@@ -2960,7 +3002,7 @@ $('#chatIn').onkeydown = e => { if (e.key === 'Enter') sendChat(); };
 // (a button is clicked, a field asks for the text, a list for the item), Element Picker - the action or
 // check chosen in the list next to it
 const MODE_HINT = {
-  off: 'Клик по экрану ничего не делает. Чтобы добавлять шаги кликами, выберите Record & Play или Element Picker; агент и «+ шаг» работают в любом режиме.',
+  off: '',
   record: 'Запись: действуйте как пользователь. Клик по кнопке или ссылке — клик, по полю ввода — студия спросит текст, по списку — пункт. Каждый клик сразу выполняется в браузере и становится шагом.',
   picker: 'Выберите в списке, что сделать с элементом (действие или проверку), и кликните по нему: действие выполнится и запишется шагом.',
 };
@@ -2970,8 +3012,12 @@ function syncMode() {
   $('#pickAction').classList.toggle('hidden', m !== 'picker');
   DRAG_FROM = null;
   $('#modeHint').textContent = MODE_HINT[m];
+  $('#modeHint').classList.toggle('hidden', !MODE_HINT[m]);
+  syncModeSeg();
 }
+function syncModeSeg() { $$('#modeSeg button').forEach(b => b.setAttribute('aria-checked', b.dataset.mode === $('#mode').value)); }
 $('#mode').onchange = syncMode;
+$$('#modeSeg button').forEach(b => b.onclick = () => { $('#mode').value = b.dataset.mode; syncMode(); });
 let DRAG_FROM = null;   // drag_to in the picker: the first click chooses the element, the second the target
 syncMode();
 $('#shot').onclick = async e => {
@@ -4297,6 +4343,7 @@ async function selectAnalysis(aid) {
 $('#anList').addEventListener('click', e => {
   const row = e.target.closest('.an-row');
   if (!row) return;
+  $('#anDlg').close();
   setRoute(projPath('req', row.dataset.aid));
   selectAnalysis(row.dataset.aid);
   $('#anActive').scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -5358,14 +5405,17 @@ async function loadPipe() {
   loadPipeScen(); loadPipeReviews();
   const pid = PID, jobs = await api('GET', `/api/projects/${pid}/jobs`);
   if (pid !== PID) return;      // another project was chosen meanwhile
-  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="$('#jobsDlg').close();openJob('${j.id}')">
-    <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
-    <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">Запусков пока не было: выберите источник и нажмите «Запустить».</td></tr>';
+  renderJobs(jobs);
   if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
   const busy = jobs.find(j => LIVE_JOB.includes(j.status));
   pipeBusy(busy && !(JOB?.id === busy.id && !LIVE_JOB.includes(JOB.status)) ? busy : null);
   if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id, true);
+}
+function renderJobs(jobs) {
+  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="$('#jobsDlg').close();openJob('${j.id}')">
+    <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
+    <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Запусков пока не было: выберите источник на вкладке «Конвейер» и нажмите «Запустить».</td></tr>';
 }
 // An open run takes the page: the launch form folds to its title, «Новый запуск» unfolds it.
 function foldPipeForm(fold) {
@@ -5373,7 +5423,24 @@ function foldPipeForm(fold) {
   $('#pipeNew').classList.toggle('hidden', !fold);
   if (!fold) $('#pipeForm').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
-function openJobsHistory() { $('#jobsDlg').showModal(); loadPipe(); }
+// The history in the header is the one of the tab open: checks of requirements, runs of the pipeline.
+const TAB_HISTORY = {
+  req: {label: 'История проверок', title: 'Проверки требований проекта: шаг, сценарии и тесты каждой', open: () => $('#anDlg').showModal()},
+  pipe: {label: 'История запусков', title: 'Запуски конвейера проекта: статус, сколько тестов готово, кто запустил', open: openJobsHistory},
+};
+function syncHistBtn(t) {
+  const h = PID && TAB_HISTORY[t], b = $('#histBtn');
+  b.classList.toggle('hidden', !h);
+  if (h) { b.textContent = h.label; b.title = h.title; }
+}
+function openTabHistory() { TAB_HISTORY[curTab()]?.open(); }
+// Only the list is loaded, a run opens on «Конвейер».
+async function openJobsHistory() {
+  if (!PID) return;
+  $('#jobsDlg').showModal();
+  const pid = PID, jobs = await api('GET', `/api/projects/${pid}/jobs`);
+  if (pid === PID) renderJobs(jobs);
+}
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
 const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_cases', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
 let PIPE_BUSY = null;
@@ -6412,7 +6479,7 @@ async function loadAudit() {
 }
 $('#auLoad').onclick = loadAudit;
 $('#auOpen').onclick = () => { $('#auditDlg').showModal(); loadAudit(); };
-closeOnBackdrop($('#histDlg')); closeOnBackdrop($('#auditDlg')); closeOnBackdrop($('#resumeDlg')); closeOnBackdrop($('#jobsDlg'));
+closeOnBackdrop($('#histDlg')); closeOnBackdrop($('#auditDlg')); closeOnBackdrop($('#resumeDlg')); closeOnBackdrop($('#jobsDlg')); closeOnBackdrop($('#anDlg'));
 $('#auExport').onclick = () => { const m = $('#auMonth').value || new Date().toISOString().slice(0, 7); location.href = `/api/audit/export?month=${m}`; };
 $('#auVerify').onclick = async () => {
   try { const r = await api('GET', '/api/audit/verify');
