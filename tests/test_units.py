@@ -224,6 +224,43 @@ def test_context_editing_failure_falls_back_to_trimming():
     assert len(calls) == 3 and "context_management" not in calls[2]   # no failing first try any more
 
 
+def test_tool_choice_refused_by_gateway_is_dropped():
+    """LiteLLM over a Responses API: "tool_choice type 'auto' is not supported by this gateway phase" -
+    the request is repeated with the tools but without tool_choice, and later ones skip it."""
+    import asyncio
+    import types
+
+    import anthropic
+    import httpx
+
+    from testgen.providers import anthropic as prov
+    from testgen.providers.base import Request
+
+    req = httpx.Request("POST", "http://gateway.local/v1/messages")
+    message = ("litellm.BadRequestError: OpenAIException - {\"error\":{\"code\":\"responses_feature_not_supported\","
+               "\"message\":\"tool_choice type 'auto' is not supported by this gateway phase.\"}}")
+    body = {"error": {"message": message, "type": None, "param": None, "code": "400"}}
+    calls = []
+
+    async def create(**kw):
+        calls.append(kw)
+        if "tool_choice" in kw:
+            raise anthropic.BadRequestError(message, response=httpx.Response(400, request=req), body=body)
+        return types.SimpleNamespace(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn",
+                                     model=kw["model"], usage=None)
+
+    client = types.SimpleNamespace(base_url="http://gateway.local/" + uuid.uuid4().hex,
+                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create)))
+    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    tool = {"name": "click", "description": "c", "input_schema": {"type": "object", "properties": {}}}
+    r = Request(model="deepseek-coder", system="s", messages=[{"role": "user", "content": "go"}], tools=[tool])
+
+    assert asyncio.run(p.chat(r)).text == "ok"
+    assert len(calls) == 2 and "tool_choice" not in calls[1] and calls[1]["tools"] == [tool]
+    asyncio.run(p.chat(r))
+    assert len(calls) == 3 and "tool_choice" not in calls[2]          # no failing first try any more
+
+
 def test_empty_assistant_turn_gets_placeholder():
     """A model that answered with nothing: its turn must not go back to the API empty
     (LiteLLM: "assistant must provide content, reasoning_content or tool_calls")."""
