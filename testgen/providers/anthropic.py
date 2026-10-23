@@ -7,9 +7,13 @@ Features (llm.Model.features) a model may lack - the studio then does the same o
     effort           output_config.effort
     fallbacks        fallbacks="default": a declined request is re-run on the provider's fallback model
     structured       messages.parse with a pydantic output format; off: JSON schema in the prompt
+
+A gateway that refuses one of them, or tool_choice ("... is not supported"), gets the request again without it
+(OPTIONAL, REFUSED); structured output refused - the schema goes into the prompt.
 """
 from __future__ import annotations
 
+import re
 import time
 
 import anthropic
@@ -93,19 +97,45 @@ def _context_editing_failed(e: Exception) -> bool:
     return any(k in text for k in ("context_management", "context-management", CLEAR_TOOL_USES))
 
 
-def _tool_choice_refused(e: Exception) -> bool:
-    """A gateway refused tool_choice itself ("tool_choice type 'auto' is not supported by this gateway phase"
-    from LiteLLM over a Responses API) - the tools are fine, only the explicit choice is not."""
-    if not isinstance(e, anthropic.APIStatusError) or e.status_code not in (400, 422):
-        return False
-    return "tool_choice" in f"{getattr(e, 'message', '')} {getattr(e, 'body', '')}".lower()
+# A gateway of the project's own (LiteLLM over an OpenAI Responses API and the like) may refuse a part of a request
+# the studio can do without: "tool_choice type 'auto' is not supported", "text.format type 'json_schema' is not
+# supported", "Extra inputs are not permitted". The part is dropped and the request sent again, whatever the part.
+# What names each optional part in such an error:
+OPTIONAL = {
+    "structured": ("json_schema", "output_format", "text.format", "response_format", "structured output"),
+    "tool_choice": ("tool_choice",),
+    "context_editing": ("context_management", "context-management", "clear_tool_uses"),
+    "effort": ("effort", "output_config", "reasoning"),
+    "fallbacks": ("fallbacks",),
+    "cache": ("cache_control",),
+}
+# The order a refusal that names none of them drops them: the least needed first.
+DROP_ORDER = ("fallbacks", "effort", "cache", "context_editing", "tool_choice", "structured")
+UNSUPPORTED = re.compile(r"not (?:be )?supported|unsupported|feature_not_supported|not allowed|not permitted|"
+                         r"unknown (?:parameter|field|argument)|unrecognized (?:parameter|field|argument)|"
+                         r"extra (?:inputs|fields)", re.I)
+# Connections (API address, model) and the optional parts they refused: requests go without them.
+REFUSED: dict[tuple[str, str], set[str]] = {}
+
+
+def _refused(e: Exception, present: list[str]) -> str | None:
+    """The optional part of the request a gateway refused: the one its error names, else the least needed one
+    sent. None - not a refusal of a feature (or nothing left to drop)."""
+    if not present or not isinstance(e, anthropic.APIStatusError) or e.status_code not in (400, 422):
+        return None
+    text = f"{getattr(e, 'message', '')} {getattr(e, 'body', '')}".lower()
+    if not UNSUPPORTED.search(text):
+        return None
+    named = [f for f in present if any(w in text for w in OPTIONAL[f])]
+    return (named or present)[0]
+
+
+class FeatureRefused(ProviderError):
+    """The gateway does not take structured output: the caller asks with the schema in the prompt."""
 
 
 # Connections (API address, model) where context editing failed: the studio cuts old screenshots itself.
 NO_CONTEXT_EDITING: set[tuple[str, str]] = set()
-# Connections (a gateway of the project's own) that refused tool_choice: the tools go without it (auto is
-# the default anyway; several calls in one answer are handled by the agent).
-NO_TOOL_CHOICE: set[tuple[str, str]] = set()
 # Connections (a gateway of the project's own) that refused a streamed request: they get plain ones.
 NO_STREAM: set[tuple[str, str]] = set()
 STREAM_REFUSED = {400, 404, 405, 415, 422, 501}
@@ -177,8 +207,21 @@ class AnthropicProvider:
     def _key(self, model: str) -> tuple[str, str]:
         return str(getattr(self._client, "base_url", "")), model
 
+    def _on(self, feature: str, model: str) -> bool:
+        return feature not in REFUSED.get(self._key(model), ())
+
+    @staticmethod
+    def _sent(p: dict, structured: bool) -> list[str]:
+        """The optional parts the request carries - what a refusal may be about - the least needed first."""
+        has = {"tool_choice": "tool_choice" in p, "context_editing": "context_management" in p,
+               "effort": "effort" in (p.get("output_config") or {}), "fallbacks": "fallbacks" in p,
+               "cache": "cache_control" in p or (isinstance(p.get("system"), list)
+                                                 and any("cache_control" in b for b in p["system"])),
+               "structured": structured}
+        return [f for f in DROP_ORDER if has[f]]
+
     def _params(self, req: Request) -> tuple[dict, list[str]]:
-        cache = req.cache and "cache" in self.features
+        cache = req.cache and "cache" in self.features and self._on("cache", req.model)
         if cache:
             system = [{"type": "text", "text": req.system, "cache_control": EPHEMERAL}]
             if req.context:
@@ -190,17 +233,18 @@ class AnthropicProvider:
         messages = fill_empty(req.messages)
         betas: list[str] = []
         p = {"model": req.model, "max_tokens": req.max_tokens, "system": system}
-        if "effort" in self.features and req.effort:
+        if "effort" in self.features and req.effort and self._on("effort", req.model):
             p["output_config"] = {"effort": req.effort}
-        if "fallbacks" in self.features:
+        if "fallbacks" in self.features and self._on("fallbacks", req.model):
             p["fallbacks"] = "default"
             betas.append(FALLBACK_BETA)
         if req.tools:
             p["tools"] = req.tools
-            if self._key(req.model) not in NO_TOOL_CHOICE:
+            if self._on("tool_choice", req.model):
                 p["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": req.one_tool}
         if req.keep_images:
-            if "context_editing" in self.features and self._key(req.model) not in NO_CONTEXT_EDITING:
+            if "context_editing" in self.features and self._key(req.model) not in NO_CONTEXT_EDITING \
+                    and self._on("context_editing", req.model):
                 betas.append(CONTEXT_BETA)
                 # Old screenshots/snapshots are useless once the page moved on.
                 p["context_management"] = {"edits": [{
@@ -226,24 +270,35 @@ class AnthropicProvider:
                                       getattr(u, "cache_read_input_tokens", 0)),
                      parsed=getattr(resp, "parsed_output", None))
 
-    async def _send(self, req: Request, call) -> Reply:
+    async def _send(self, req: Request, call, structured: bool = False) -> Reply:
+        """The request; a part of it the gateway refuses is dropped and the request sent again. Remembered for the
+        connection only when a request without it went through: a failure for another reason drops nothing for
+        good. Structured output refused - FeatureRefused: the caller puts the schema in the prompt."""
         p, betas = self._params(req)
+        key, dropped = self._key(req.model), set()
         try:
-            for _ in range(3):                        # each refused feature is dropped once, then the request again
+            while True:
                 try:
                     resp = await call(p, betas)
                     break
                 except anthropic.APIStatusError as e:
                     if "context_management" in p and _context_editing_failed(e):
-                        NO_CONTEXT_EDITING.add(self._key(req.model))
-                    elif "tool_choice" in p and _tool_choice_refused(e):
-                        NO_TOOL_CHOICE.add(self._key(req.model))
+                        NO_CONTEXT_EDITING.add(key)
                     else:
-                        raise
-                    p, betas = self._params(req)      # now without the refused feature
-            else:
-                resp = await call(p, betas)
+                        part = _refused(e, [f for f in self._sent(p, structured) if f not in dropped])
+                        if part is None:
+                            raise
+                        if part == "structured":
+                            NO_STRUCTURED.add(key)
+                            raise FeatureRefused(error_text(e), status=e.status_code) from e
+                        dropped.add(part)
+                        REFUSED.setdefault(key, set()).add(part)
+                    p, betas = self._params(req)      # now without the refused part
         except Exception as e:
+            if dropped and not isinstance(e, FeatureRefused):
+                REFUSED[key] -= dropped               # they were not the trouble: they stay on
+            if isinstance(e, ProviderError):
+                raise
             if is_error(e):
                 raise ProviderError(error_text(e), status=getattr(e, "status_code", None)) from e
             raise
@@ -252,15 +307,15 @@ class AnthropicProvider:
     def _streams(self, req: Request) -> bool:
         return req.stream and self._key(req.model) not in NO_STREAM and hasattr(self.client().beta.messages, "stream")
 
-    async def _streamed(self, req: Request, call, plain) -> Reply:
+    async def _streamed(self, req: Request, call, plain, structured: bool = False) -> Reply:
         """A streamed request; a gateway that refuses streams gets the plain one (and from now on)."""
         try:
-            return await self._send(req, call)
+            return await self._send(req, call, structured)
         except ProviderError as e:
-            if e.status not in STREAM_REFUSED:
+            if isinstance(e, FeatureRefused) or e.status not in STREAM_REFUSED:
                 raise
             NO_STREAM.add(self._key(req.model))
-            return await self._send(req, plain)
+            return await self._send(req, plain, structured)
 
     async def chat(self, req: Request) -> Reply:
         def plain(p, betas):
@@ -318,5 +373,5 @@ class AnthropicProvider:
                         raise
             return parsed(msg) if isinstance(msg, BetaMessage) and getattr(msg, "parsed_output", None) is None else msg
         if self._streams(req):
-            return await self._streamed(req, streamed, call)
-        return await self._send(req, call)
+            return await self._streamed(req, streamed, call, structured=True)
+        return await self._send(req, call, structured=True)
