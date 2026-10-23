@@ -67,7 +67,18 @@ button:disabled{opacity:.5;cursor:default}
 .muted{color:var(--muted)}
 .hidden{display:none!important}
 .start{max-width:680px;margin:20px auto}
-.studio{display:grid;grid-template-columns:320px 1fr 380px;gap:14px;height:calc(100vh - 90px)}
+.studio{display:grid;grid-template-columns:300px minmax(0,1fr) 340px;grid-template-rows:auto minmax(0,1fr);gap:12px;height:calc(100vh - 90px)}
+/* the session bar over the three columns: what the session is, its state, how it is driven, saving */
+.ws-bar{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px}
+.ws-bar .ws-name{min-width:0;flex:0 1 auto;max-width:34%}
+.ws-bar .ws-name .hint{margin:0}
+.ws-bar .status{margin:0;flex:1 1 220px;min-width:0;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-bar .seg{margin:0}
+.ws-bar .seg button{padding:4px 10px;font-size:12px}
+.msg details{margin-top:4px}
+.msg details summary{cursor:pointer;color:var(--muted);font-size:12px}
+.msg details div{margin-top:4px;font-size:12px;color:var(--muted);max-height:200px;overflow:auto}
+.msg .n{margin-left:6px}
 .col{display:flex;flex-direction:column;min-height:0}
 .chat{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px}
 .msg{padding:8px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word}
@@ -79,7 +90,7 @@ button:disabled{opacity:.5;cursor:default}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px}
 .dot.run{background:var(--warn);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
-.live{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
+.live{position:relative;flex:1;min-height:0;display:flex;align-items:flex-start;justify-content:center;background:var(--bg);border-radius:8px;overflow:auto}
 .live img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border:1px solid var(--line);border-radius:6px;display:block}
 .live .size{position:absolute;right:6px;bottom:6px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--card);color:var(--muted);opacity:.85;pointer-events:none}
 .live.picking img{cursor:crosshair;outline:2px solid var(--accent)}
@@ -109,6 +120,11 @@ textarea.big{min-height:14em;resize:vertical}
 #credDlg::backdrop{background:rgba(0,0,0,.35)}
 #casesDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:900px;width:calc(100% - 32px)}
 #casesDlg::backdrop{background:rgba(0,0,0,.35)}
+/* the history of changes: a popup, not a block of the page */
+.hist-dlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:960px;width:calc(100% - 32px);padding:18px}
+.hist-dlg::backdrop{background:rgba(0,0,0,.35)}
+.hist-dlg h3{margin:0;font-size:16px}
+.hist-dlg .hist-body{max-height:70vh;overflow:auto;margin-top:10px}
 .case-f{border-top:1px solid var(--line);padding:8px 0}.case-f:first-child{border-top:0}
 .case-f textarea{width:100%;min-height:54px;margin-top:6px}
 #askDlg{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:460px;width:calc(100% - 32px);padding:18px}
@@ -166,7 +182,7 @@ tr.click:hover td{background:var(--bg)}
 .sess-chip span.n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sess-chip.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .sess-chip .unsaved{color:var(--warn)}
-.ws-ctl{margin-top:6px}
+
 details.fold{margin-top:6px;padding:4px 10px;font-size:13px}
 details.fold .goal{margin:4px 0 2px}
 ul.ready{list-style:none;padding:0;margin:4px 0 2px}
@@ -174,7 +190,7 @@ ul.ready li{display:flex;gap:6px;align-items:baseline;margin:2px 0}
 ul.ready li .ck{width:16px;text-align:center;color:var(--muted)}
 ul.ready li.ok .ck{color:var(--ok)}
 ul.ready li.bad .ck{color:var(--bad)}
-.changes{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;max-height:150px;overflow:auto}
+.changes{padding:6px 0 0;font-size:12px;max-height:180px;overflow:auto}
 .changes .head{display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:var(--muted);margin-bottom:2px}
 .changes .ch{display:flex;gap:6px;align-items:baseline;padding:2px 0;border-top:1px dashed var(--line)}
 .changes .ch .t{color:var(--muted);font-variant-numeric:tabular-nums;flex:none}
@@ -185,6 +201,8 @@ ul.ready li.bad .ck{color:var(--bad)}
 /* pagination of long tables and lists */
 .pg-hide{display:none!important}
 .pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;font-size:12px;color:var(--muted);margin-top:8px}
+/* the navigation of a long list stays on screen: at the bottom of the window, or of the box the list scrolls in */
+.pager{position:sticky;bottom:0;z-index:3;background:var(--panel);padding:6px 0;border-top:1px solid var(--line)}
 .pager select{width:auto;padding:2px 6px;font-size:12px}
 .pager button{min-width:28px}
 /* screenshot viewer */
@@ -373,7 +391,7 @@ details.how>div{margin-top:4px}
 .stage{border-left:3px solid var(--accent)}
 .stage.disabled{border-left-color:var(--line);opacity:.8}
 .stage-head{display:flex;align-items:center;gap:10px}
-.stage-head .num{width:24px;height:24px;border-radius:50%;background:var(--soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.stage-head .num,.proc-row .num{width:24px;height:24px;border-radius:50%;background:var(--soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
 .flow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0}
 .flow .chip{padding:4px 10px;border-radius:14px;border:1px solid var(--line);font-size:12px;color:var(--muted)}
 .flow .chip.on{border-color:var(--accent);color:var(--accent)}
@@ -464,6 +482,7 @@ details.menu summary{list-style:none;cursor:pointer}
 details.menu summary::-webkit-details-marker{display:none}
 details.menu .items{position:absolute;right:0;z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;min-width:220px;box-shadow:0 6px 20px rgba(0,0,0,.15);display:flex;flex-direction:column}
 details.menu .items a,details.menu .items button{text-align:left;border:0;background:none;color:var(--ink);font:inherit;font-size:13px;padding:6px 8px;border-radius:6px;cursor:pointer;text-decoration:none}
+details.menu .items.run-opts{padding:10px;gap:6px;min-width:260px}
 details.menu .items a:hover,details.menu .items button:hover{background:var(--soft)}
 .imgs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px}
 .imgs figure{margin:0}.imgs figcaption{font-size:11px;color:var(--muted)}
@@ -489,7 +508,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
 .bars div.fail::after{content:"✘";position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--bad)}
 .bars div:hover{opacity:.75}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
-@media (max-width:1100px){.studio{grid-template-columns:1fr;height:auto}.chat,.steps{max-height:360px}
+@media (max-width:1100px){.studio{grid-template-columns:1fr;grid-template-rows:none;height:auto}.ws-bar .ws-name{max-width:none;flex-basis:100%}.chat,.steps{max-height:360px}
   .settings,.skills-layout{grid-template-columns:1fr}.subnav{flex-direction:row;flex-wrap:wrap;position:static}
   .subnav-group{width:100%}.subtree.open{flex-direction:row;flex-wrap:wrap;width:100%;margin-left:0}
   .skills-layout > .card{position:static}#skList{max-height:50vh}#skEditor{max-height:none}
@@ -517,6 +536,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <button data-tab="proj" data-needs-project>Проект</button>
   </nav>
   <span class="grow"></span>
+  <button class="btn hidden" id="histBtn" onclick="openTabHistory()"></button>
   <a class="btn" id="helpBtn" href="/guide" target="_blank" rel="noopener" title="Руководство пользователя: знакомство со студией, пошаговые сценарии работы и словарь терминов">Справка</a>
   <span class="muted hidden" id="whoami"></span>
   <button class="btn hidden" id="logoutBtn">Выйти</button>
@@ -674,8 +694,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <label>Сценарий</label>
     <textarea id="fScenario" rows="4" placeholder="Войти, добавить рюкзак в корзину и проверить, что он появился в корзине"></textarea>
     <div class="hint hidden" id="fModel" aria-live="polite"></div>
-    <div class="hint" id="fFree" title="Сценарий из вкладки «Требования» («Тест в Studio») проходит эти проверки">Свой сценарий записывается сразу: студия не проверяет его по требованиям и не ждёт подтверждения модели и учётной записи роли — тест сохранится черновиком, его проверит человек.</div>
-    <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div>
+    <details class="opt" id="fFree"><summary class="hint">Свой сценарий не проверяется по требованиям — тест сохранится черновиком</summary>
+      <div class="hint">Студия не проверяет его по требованиям и не ждёт подтверждения модели и учётной записи роли — тест проверит человек. Сценарий из вкладки «Требования» («Тест в Studio») проходит эти проверки.</div>
+      <div class="hint">Данные, которые должны быть новыми при каждом прогоне (e-mail при регистрации, название заказа), агент вводит как <code>{{faker.email}}</code>, <code>{{faker.name}}</code>, <code>{{unique}}</code>, <code>{{today}}</code> — значение генерируется при каждом запуске.</div></details>
     <div class="grid2">
       <div><label>Движок браузера</label>
         <select id="fEngine">
@@ -705,25 +726,32 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   </div>
 
   <div id="resumeBox" class="card start hidden">
-    <h3 style="margin-top:0">Прерванные сессии</h3>
-    <div class="hint">Студия перезапускалась, пока шла генерация. Шаги сохраняются после каждого действия: сессию можно продолжить (шаги воспроизведутся в новом браузере, затем агент продолжит сценарий) или сразу сохранить записанные шаги как тест.</div>
-    <table style="margin-top:8px"><thead><tr><th>Тест</th><th>Шагов</th><th>Изменена</th><th></th></tr></thead>
-      <tbody id="resumeBody"></tbody></table>
+    <div class="row"><b class="grow" id="resumeHead">Прерванные сессии</b>
+      <button class="btn small" onclick="$('#resumeDlg').showModal()">Все прерванные</button></div>
+    <div id="resumeLast"></div>
   </div>
 
   <div id="workspace" class="studio hidden">
-    <div class="card col">
-      <b id="wsTitle" class="ws-title"></b>
-      <div id="wsSource" class="hint hidden"></div>
-      <div class="row ws-ctl">
-        <label class="inline" title="Автопилот: агент выполняет шаги сам, без подтверждения каждого"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
-        <button class="btn small danger hidden" id="stopBtn" aria-keyshortcuts="Control+." title="Ctrl+. — Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">■ Остановить</button>
-      </div>
+    <div class="card ws-bar">
+      <div class="ws-name"><b id="wsTitle" class="ws-title"></b><div id="wsSource" class="hint hidden"></div></div>
       <div class="status" role="status" aria-live="polite"><span class="dot" id="stDot" aria-hidden="true"></span><span id="stText"></span></div>
-      <div class="genbox" id="genBox"></div>
-      <div class="changes" id="changesBox"></div>
-      <details class="opt fold"><summary>Цель</summary><div class="goal" id="goalText"></div></details>
-      <details class="opt fold"><summary>Готовность <span id="readySum"></span></summary><ul class="ready" id="readyList"></ul></details>
+      <label class="inline" title="Автопилот: агент выполняет шаги сам, без подтверждения каждого"><input type="checkbox" id="autoToggle"> Auto-Pilot</label>
+      <button class="btn small danger hidden" id="stopBtn" aria-keyshortcuts="Control+." title="Ctrl+. — Остановить агента: запрос к модели отменяется, Auto-Pilot выключается, браузер остаётся открытым">Остановить</button>
+      <div class="seg" id="modeSeg" role="radiogroup" aria-label="Что делает клик по экрану браузера">
+        <button type="button" role="radio" data-mode="off" title="Клик по экрану ничего не делает — только смотреть">Смотреть</button>
+        <button type="button" role="radio" data-mode="record" title="Record &amp; Play: клик по элементу делает с ним то же, что пользователь, и становится шагом">Записывать</button>
+        <button type="button" role="radio" data-mode="picker" title="Element Picker: сначала действие или проверка, затем клик по элементу">Выбрать элемент</button>
+      </div>
+      <button class="btn primary" id="saveBtn">Сохранить</button>
+    </div>
+
+    <div class="card col">
+      <details class="opt fold" id="wsDetails"><summary>Детали: готовность <span id="readySum"></span></summary>
+        <div class="muted" style="margin-top:4px">Цель</div><div class="goal" id="goalText"></div>
+        <ul class="ready" id="readyList"></ul>
+        <div class="changes" id="changesBox"></div>
+        <div class="hint" id="stMeta"></div>
+      </details>
       <div class="finish hidden" id="finishBox"></div>
       <div class="chat" id="chat"></div>
       <div id="pendingBox" class="pending hidden">
@@ -749,7 +777,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="card col">
       <div class="row" style="margin-bottom:6px">
         <b class="grow" title="Живой экран: браузер, в котором агент проходит сценарий, в реальном времени">Live View <span class="badge" id="engineBadge"></span></b>
-        <select id="mode" style="width:auto" title="Что делает клик по экрану Live View">
+        <select id="mode" class="hidden" aria-hidden="true" tabindex="-1">
           <option value="off">Клик по экрану: ничего (смотреть)</option>
           <option value="record" title="Запись действий: клик по элементу делает с ним то же, что пользователь, и становится шагом">Record &amp; Play: записывать мои действия</option>
           <option value="picker" title="Выбор элемента: сначала действие или проверка, затем клик по элементу">Element Picker: действие или проверка элемента</option>
@@ -796,7 +824,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <div class="row" style="margin-bottom:8px">
         <b class="grow">Шаги теста <span class="muted" id="stepCount"></span></b>
         <button class="btn" id="addStepBtn" aria-label="Добавить шаг">+ шаг</button>
-        <button class="btn primary" id="saveBtn">Сохранить</button>
       </div>
       <div id="addStep" class="hidden" style="margin-bottom:8px">
         <div class="row">
@@ -836,9 +863,8 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <a class="btn small" id="expFeat" target="_blank">.feature</a>
         <a class="btn small hidden" id="expApi" target="_blank" title="API-тесты (pytest + httpx) по запросам, записанным при генерации">API</a>
       </div>
-      <div class="row" style="margin-top:8px">
-        <span class="grow"></span>
-        <button class="btn" id="newBtn">Новый тест</button>
+      <div class="row" style="margin-top:8px;justify-content:flex-end">
+        <button class="btn small" id="newBtn">Новый тест</button>
       </div>
     </div>
   </div>
@@ -855,7 +881,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       </div>
       <span class="grow"></span>
       <button class="btn" id="casesBtn" title="Подтянуть ручные тест-кейсы из Test IT, Allure TestOps или Zephyr Scale и автоматизировать выбранные: ИИ-ревьюер разберёт тестовые данные и замечания, агент запишет тесты">Импорт кейсов</button>
-      <select id="runScreen" style="width:auto" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
+      <details class="menu" id="runOpts"><summary class="btn" title="Экран, видимое окно браузера, черновики — для «Запустить» и «Запустить набор»">Параметры прогона <span id="runOptsMark"></span>▾</summary>
+        <div class="items run-opts">
+          <label for="runScreen">Экран</label><select id="runScreen" title="Размер окна браузера (или устройство) для «Запустить» и «Запустить набор»">
         <option value="">Экран: как в проекте</option>
         <option value="1920x1080">1920×1080</option>
         <option value="2560x1440">2560×1440</option>
@@ -869,13 +897,16 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <option value="Pixel 7">Pixel 7</option>
         <option value="custom">Другой…</option>
       </select>
-      <label class="inline"><input type="checkbox" id="runHeaded"> в видимом окне</label>
-      <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="runDrafts"> с черновиками</label>
-      <button class="btn primary" id="suiteBtn">Запустить набор</button>
-      <a class="btn" id="zipBtn" title="Все тесты (или тесты выбранного тега) как проект pytest: conftest.py, tests/, features/">Экспорт .zip</a>
-      <a class="btn hidden" id="zipTestit" title="С декораторами testit-adapter-pytest: результаты прогонов в CI уходят в Test IT">.zip для Test IT</a>
+          <label class="inline"><input type="checkbox" id="runHeaded"> в видимом окне браузера</label>
+          <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="runDrafts"> набор — с черновиками</label>
+        </div></details>
+      <button class="btn primary" id="suiteBtn" title="Набор — все тесты или тесты выбранного тега: параллельно, в одном браузере, как в CI (python -m testgen.run). Упавший тест перезапускается один раз: прошёл со второй попытки — «нестабилен». Тесты в карантине запускаются, но не валят набор">Запустить набор</button>
+      <details class="menu"><summary class="btn">Экспорт ▾</summary><div class="items">
+        <a id="zipBtn" title="Все тесты (или тесты выбранного тега) как проект pytest: conftest.py, tests/, features/">Проект pytest (.zip)</a>
+        <a class="hidden" id="zipTestit" title="С декораторами testit-adapter-pytest: результаты прогонов в CI уходят в Test IT">.zip для Test IT</a>
+      </div></details>
     </div>
-    <div class="hint">Набор — все тесты или тесты выбранного тега: параллельно, в одном браузере, как в CI (<code>python -m testgen.run --project … --tag … --junit report.xml</code>). Упавший тест перезапускается один раз: прошёл со второй попытки — «нестабилен». Тесты в карантине запускаются, но не валят набор.</div>
+  </div>
   </div>
   <!-- the list of the section on the left, the open test, run or suite on the right (over the list when narrow) -->
   <div class="split" id="testsSplit">
@@ -1008,18 +1039,15 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="live-log" id="reqLog" aria-live="polite"></div>
   </div>
   <div id="anActive"></div>
-  <div class="card" style="margin-top:12px">
-    <div class="row"><h3 class="grow" style="margin:0">История проверок</h3><span class="muted" id="anCount"></span></div>
-    <div class="hint">Каждые требования проходят шаги: проверка ревьюером → разбор замечаний → сверка и подтверждение жизненного цикла → сценарии и тесты. Тест-дизайн начинается только после первых трёх. Выберите требования, чтобы продолжить работу с ними.</div>
-    <div id="anList" data-paged></div>
-  </div>
 </section>
 
 <!-- ============ PIPELINE ============ -->
 <section id="tab-pipe" class="hidden">
   <div class="card hidden" id="pipeBusy"></div>
   <div class="card" id="pipeForm">
-    <h2>Запуск конвейера</h2>
+    <div class="row"><h2 class="grow" style="margin:0">Запуск конвейера</h2>
+      <button class="btn primary hidden" id="pipeNew" onclick="foldPipeForm(false)">Новый запуск</button></div>
+    <div id="pipeFormBody">
     <details class="how" data-how="pipe" open><summary>Как это работает</summary><div class="muted">Генерация тест-кейсов и тестов по настройкам проекта: требования → ревью → сценарии → генерация тестов в браузере → прогон → публикация. Этапы и их правила настраиваются во вкладке «Проект → Процесс».</div></details>
     <div class="flow" id="pipeFlow"></div>
     <label>Источник</label>
@@ -1056,15 +1084,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="design-choice" id="pipeChoice" data-pipe-design></div>
     <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
       <button class="btn primary" id="pipeStart">Запустить</button></div>
+    </div>
   </div>
 
   <div class="card hidden" id="jobBox"></div>
-
-  <div class="card">
-    <h3>История запусков</h3>
-    <table><thead><tr><th>Запуск</th><th>Статус</th><th>Тестов</th><th>Кто</th></tr></thead>
-    <tbody id="jobsBody"></tbody></table>
-  </div>
 </section>
 
 <!-- ============ PROJECT SETTINGS ============ -->
@@ -1073,16 +1096,17 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div class="subnav" role="tree">
       <div class="subnav-group">Проект</div>
       <button data-sub="general" class="on">Общие</button>
-      <button data-sub="model">Модель</button>
       <button data-sub="access">Участники и доступ</button>
+      <div class="subnav-group">Подключения</div>
+      <button data-sub="model">Модель</button>
       <button data-sub="conns">Подключения (MCP)</button>
       <button data-sub="api">API приложения</button>
       <button data-sub="ide">Доступ из IDE (MCP)</button>
-      <div class="subnav-group">Генерация тестов</div>
+      <div class="subnav-group">Тест-дизайн</div>
       <button data-sub="reqs">Требования</button>
       <button data-sub="scen">Сценарии</button>
       <button data-sub="data" class="has-tree"><span class="caret">▸</span>Тестовые данные <span class="nb" id="knNavAlert"></span></button>
-      <div class="subtree" id="knTree">
+      <div class="subtree" id="knTree" data-tree="data">
         <button data-sub="data" data-sec="overview">Обзор и подтверждение</button>
         <button data-sub="data" data-sec="pending">Обновления <span class="nb" data-kn-count="pending"></span></button>
         <button data-sub="data" data-sec="dups">Дубли <span class="nb" data-kn-count="dups"></span></button>
@@ -1092,9 +1116,19 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <button data-sub="data" data-sec="data">Данные стенда <span class="nb" data-kn-count="data"></span></button>
         <button data-sub="data" data-sec="memory">Память <span class="nb" data-kn-count="memory"></span></button>
       </div>
-      <button data-sub="blocks">Повторяющиеся шаги</button>
-      <button data-sub="process">Процесс генерации</button>
       <button data-sub="skills">Скиллы</button>
+      <div class="subnav-group">Генерация и прогоны</div>
+      <button data-sub="process" class="has-tree"><span class="caret">▸</span>Процесс генерации</button>
+      <div class="subtree" id="procTree" data-tree="process">
+        <button data-sub="process" data-sec="overview">Обзор этапов</button>
+        <button data-sub="process" data-sec="authoring">Генерация теста</button>
+        <button data-sub="process" data-sec="run">Прогон</button>
+        <button data-sub="process" data-sec="verify">Качество (мутации)</button>
+        <button data-sub="process" data-sec="publish">Публикация</button>
+        <button data-sub="process" data-sec="decisions">Решения команды</button>
+        <button data-sub="process" data-sec="budget">Лимиты расхода</button>
+      </div>
+      <button data-sub="blocks">Повторяющиеся шаги</button>
     </div>
     <div>
       <!-- General -->
@@ -1230,16 +1264,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div id="acGroups" style="margin-top:8px"></div>
         </div>
         <div class="card ownerOnly">
-          <h3>Журнал действий</h3>
+          <div class="row"><h3 class="grow" style="margin:0">Журнал действий</h3>
+            <button class="btn" id="auOpen">Открыть журнал</button></div>
           <div class="muted">Кто и когда менял тесты, принимал самолечение, запускал прогоны, менял подключения и права. Записи только дописываются и связаны цепочкой хэшей; администратор выгружает журнал в SIEM.</div>
-          <div class="row" style="margin-top:8px">
-            <input id="auUser" placeholder="пользователь" style="width:auto">
-            <select id="auAction" style="width:auto"><option value="">все действия</option><option value="test.">тесты</option><option value="heal.">самолечение</option><option value="run.">прогоны</option><option value="suite.">наборы</option><option value="connection.">подключения</option><option value="project.">проект и права</option></select>
-            <button class="btn" id="auLoad">Показать</button><span class="grow"></span>
-            <span class="adminOnly"><input id="auMonth" type="month" style="width:auto"> <button class="btn" id="auExport">Выгрузить месяц</button> <button class="btn" id="auVerify">Проверить целостность</button></span>
-          </div>
-          <div id="auMsg" class="muted" style="margin-top:6px"></div>
-          <div style="max-height:420px;overflow:auto;margin-top:8px"><table><thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Итог</th></tr></thead><tbody id="auList"></tbody></table></div>
         </div>
         <div class="card adminOnly">
           <h3>Группы → роли (вся студия, администратор)</h3>
@@ -1491,24 +1518,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="card" id="blocksBox"></div>
       </div>
       <div data-subpanel="process" class="hidden">
-        <div class="card">
+        <div class="card" data-proc="overview">
           <h3>Процесс генерации тест-кейсов</h3>
-          <div class="muted">Этапы конвейера и их правила. Модель и effort пустые — как в «Проект → Модель» (<span id="defModel"></span>). Скиллы добавляются к инструкциям этапа; редактировать их можно во вкладке «Скиллы».</div>
+          <div class="muted">Этапы конвейера по порядку: откройте этап, чтобы настроить его. Модель и effort этапа пустые — как в «Проект → Модель» (<span id="defModel"></span>).</div>
+          <div id="procStages" style="margin-top:8px"></div>
         </div>
 
-        <div class="card stage">
-          <div class="stage-head"><span class="num">1</span><h3 class="grow" style="margin:0">Требования</h3>
-            <button class="btn small" onclick="showSub('reqs')">Настроить →</button></div>
-          <div class="hint">Источники требований, Planner, проверка ТЗ по стандарту документации и модель приложения — в разделе «Требования».</div>
-        </div>
-
-        <div class="card stage">
-          <div class="stage-head"><span class="num">2</span><h3 class="grow" style="margin:0">Сценарии</h3>
-            <button class="btn small" onclick="showSub('scen')">Настроить →</button></div>
-          <div class="hint">Виды проверок, слои UI / API, техники тест-дизайна, отбор и скиллы сценариев — в разделе «Сценарии».</div>
-        </div>
-
-        <div class="card stage">
+        <div class="card stage" data-proc="authoring">
           <div class="stage-head"><span class="num">3</span><h3 class="grow" style="margin:0">Генерация теста в браузере</h3></div>
           <div class="grid3">
             <div><label>Движок браузера</label>
@@ -1527,6 +1543,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <label>Инструменты подключений для агента (только чтение)</label>
           <div class="checks" data-list="authoring.tool_connections" data-kind="toolconns"></div>
           <div class="hint">Например, агент сможет сам прочитать задачу Jira или существующие тест-кейсы Zephyr во время генерации.</div>
+          <label>Скиллы</label>
+          <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
+          <details class="opt"><summary>Модель этапа и режим для моделей слабее</summary>
           <div class="grid2">
             <div><label>Промпт агента</label>
               <select data-p="authoring.prompt">
@@ -1541,15 +1560,13 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
               </select></div>
           </div>
           <div class="hint">Ошибки ответа модели (неверный ref, несуществующий инструмент, битый JSON) возвращаются ей на исправление — не больше двух раз на шаг.</div>
-          <label>Скиллы</label>
-          <div class="checks" data-list="authoring.skills" data-kind="skills" data-stage="authoring"></div>
           <div class="grid2">
             <div><label>Модель</label><input data-p="authoring.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="authoring.effort" class="effortSel"></select></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card stage" data-stage="run">
+        <div class="card stage" data-stage="run" data-proc="run">
           <div class="stage-head"><span class="num">4</span><h3 class="grow" style="margin:0">Прогон</h3>
             <label class="inline"><input type="checkbox" data-p="run.enabled"> включён в конвейере</label></div>
           <div class="checks" style="margin-top:8px">
@@ -1564,6 +1581,21 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
                 <option value="review">На ревью человеку</option>
                 <option value="auto">Сохранять сразу</option>
               </select></div>
+            <div><label>Тестов параллельно в наборе</label><input type="number" min="1" max="8" data-p="run.parallel"></div>
+            <div><label>Порог нестабильности, % смен результата</label><input type="number" min="1" max="100" data-p="run.flaky_threshold"></div>
+            <div><label>&nbsp;</label><label class="inline"><input type="checkbox" data-p="run.auto_quarantine"> Карантин автоматически</label></div>
+          </div>
+          <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
+          <label>Браузеры наборов</label>
+          <div class="checks" data-list="run.browsers" data-kind="browsers"></div>
+          <label>Экраны и устройства (через запятую; desktop — экран 1920×1080, размер окна — 1366x768)</label>
+          <input data-csv="run.devices" placeholder="desktop, 1366x768, iPhone 13, Pixel 7">
+          <div class="hint">Набор прогоняет каждый тест во всех выбранных браузерах и на всех устройствах. Firefox и WebKit нужно установить: <code>playwright install firefox webkit</code>.</div>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
+          </div>
+          <details class="opt"><summary>Дополнительно: trace, хранение, доступность, визуальная проверка, язык и часовой пояс</summary>
+          <div class="grid3">
             <div><label>Playwright trace</label>
               <select data-p="run.trace">
                 <option value="failed">Только для упавших</option>
@@ -1571,9 +1603,6 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
                 <option value="off">Не записывать</option>
               </select></div>
             <div><label>Хранить прогонов на тест</label><input type="number" min="1" max="200" data-p="run.keep_runs"></div>
-            <div><label>Тестов параллельно в наборе</label><input type="number" min="1" max="8" data-p="run.parallel"></div>
-            <div><label>Порог нестабильности, % смен результата</label><input type="number" min="1" max="100" data-p="run.flaky_threshold"></div>
-            <div><label>&nbsp;</label><label class="inline"><input type="checkbox" data-p="run.auto_quarantine"> Карантин автоматически</label></div>
             <div><label>Доступность: падать начиная с</label>
               <select data-p="run.a11y_impact">
                 <option value="critical">critical</option>
@@ -1586,24 +1615,17 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <div><label>Часовой пояс</label><input data-p="run.timezone" placeholder="Europe/Moscow"></div>
             <div><label>Ручной прогон кейса, минут</label><input type="number" min="1" max="200" data-p="run.manual_minutes" title="Для оценки сэкономленного времени на дашборде"></div>
           </div>
-          <label>Браузеры наборов</label>
-          <div class="checks" data-list="run.browsers" data-kind="browsers"></div>
-          <label>Экраны и устройства (через запятую; desktop — экран 1920×1080, размер окна — 1366x768)</label>
-          <input data-csv="run.devices" placeholder="desktop, 1366x768, iPhone 13, Pixel 7">
-          <div class="hint">Набор прогоняет каждый тест во всех выбранных браузерах и на всех устройствах. Firefox и WebKit нужно установить: <code>playwright install firefox webkit</code>.</div>
-          <div class="checks" style="margin-top:8px">
-            <label class="inline"><input type="checkbox" data-p="run.login_once"> Вход один раз: остальные тесты начинаются с сохранённым входом теста входа проекта</label>
-          </div>
-          <div class="hint">На ревью: прогон продолжается с элементом, найденным ИИ, но в тест локатор попадает только после «Принять» во вкладке «Тесты» — ИИ не «вылечит» тест под баг. Отклонённый локатор больше не предлагается.</div>
+          </details>
           <label>Скиллы</label>
           <div class="checks" data-list="run.skills" data-kind="skills" data-stage="run"></div>
+          <details class="opt"><summary>Модель этапа (самолечение и анализ падений)</summary>
           <div class="grid2">
             <div><label>Модель</label><input data-p="run.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="run.effort" class="effortSel"></select></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card stage" data-stage="verify">
+        <div class="card stage" data-stage="verify" data-proc="verify">
           <div class="stage-head"><span class="num">5</span><h3 class="grow" style="margin:0">Проверка качества теста (мутации)</h3>
             <label class="inline"><input type="checkbox" data-p="verify.enabled"> включена в конвейере</label></div>
           <div class="hint">Новый тест прогоняется на «испорченной» странице: действие не срабатывает, результат скрыт или изменён, API отвечает 500. Тест обязан упасть на каждом мутанте; если прошёл — проверки слабые. Без LLM и без самолечения.</div>
@@ -1616,7 +1638,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           </div>
         </div>
 
-        <div class="card stage" data-stage="publish">
+        <div class="card stage" data-stage="publish" data-proc="publish">
           <div class="stage-head"><span class="num">6</span><h3 class="grow" style="margin:0">Публикация в систему управления тестами</h3>
             <label class="inline"><input type="checkbox" data-p="publish.enabled"> включена</label></div>
           <div class="grid2">
@@ -1630,13 +1652,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="checks" data-list="publish.skills" data-kind="skills" data-stage="publish"></div>
           <label>Скиллы отправки результата прогона</label>
           <div class="checks" data-list="publish.run_skills" data-kind="skills" data-stage="publish"></div>
+          <details class="opt"><summary>Модель этапа</summary>
           <div class="grid2">
             <div><label>Модель</label><input data-p="publish.model" class="modelIn" list="llmModels"></div>
             <div><label>Effort</label><select data-p="publish.effort" class="effortSel"></select></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card stage">
+        <div class="card stage" data-proc="decisions">
           <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Решения команды</h3></div>
           <div class="hint">Что ждёт людей и кто это решает. Конвейер не держит весь запуск: кейсы и сценарии без открытых решений идут в работу сразу, ждут только спорные. Решения, принятые без человека, записываются в журнал действий и журнал запуска; их можно отменить.</div>
           <div class="grid3">
@@ -1645,11 +1668,11 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
                 <option value="all">После ревью автора — каждый</option>
                 <option value="risk">По риску: сильные проверки, зелёный прогон — сразу</option>
               </select></div>
-            <div><label>Сильные проверки: обнаружено мутантов, % не меньше</label><input type="number" min="1" max="100" data-p="decisions.min_score" title="Нужна проверка качества мутациями (этап 5)"></div>
+            <div><label>Сильные проверки: обнаружено мутантов, % не меньше</label><input type="number" min="1" max="100" data-p="decisions.min_score" title="Нужна проверка качества мутациями (этап «Качество (мутации)»)"></div>
             <div><label>Срок решения, часов</label><input type="number" min="1" max="720" data-p="decisions.sla_hours" title="«Мои решения» в «Ждёт вас» показывают срок и просроченные"></div>
           </div>
           <div class="hint">«По риску»: тест с долей обнаруженных мутантов не ниже порога, без самолечения и с прошедшим прогоном сразу попадает в регрессионный набор; остальные — на ревью с причиной. Тесты, изменённые агентом, всегда идут на ревью.</div>
-          <div class="hint hidden" id="riskWarn" style="color:var(--warn)">Этап «Проверка качества теста (мутации)» выключен: без него силу проверок не измерить, и «По риску» отправит на ревью каждый тест. Включите этап выше.</div>
+          <div class="hint hidden" id="riskWarn" style="color:var(--warn)">Этап «Проверка качества теста (мутации)» выключен: без него силу проверок не измерить, и «По риску» отправит на ревью каждый тест. Включите его в «Качество (мутации)».</div>
           <div class="checks" style="margin-top:8px">
             <label class="inline"><input type="checkbox" data-p="decisions.auto_accept"> Принимать уверенные предложения ревьюера кейсов сами</label>
           </div>
@@ -1667,7 +1690,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="hint">Ревью теста и самолечения решает автор теста; выбор сценариев и похожие сценарии — тот, кто запустил конвейер.</div>
         </div>
 
-        <div class="card stage">
+        <div class="card stage" data-proc="budget">
           <div class="stage-head"><span class="num">₽</span><h3 class="grow" style="margin:0">Лимиты расхода на модели</h3></div>
           <div class="hint">0 — без лимита. Запрос сверх лимита не отправляется; на 80% приходит предупреждение (в чат сессии, журнал конвейера, уведомления проекта).</div>
           <div class="grid3">
@@ -1680,7 +1703,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="sub" id="usageBox"></div>
         </div>
 
-        <div class="card row" style="position:sticky;bottom:10px">
+        <div class="card row" style="position:sticky;bottom:10px" data-proc="authoring run verify publish decisions budget">
           <span class="muted grow" id="procMsg" data-proc-msg></span>
           <button class="btn primary" id="procSave" data-save-process>Сохранить процесс</button>
         </div>
@@ -1794,6 +1817,47 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="row" style="margin-top:12px"><span class="muted grow" id="csNote"></span>
     <button class="btn" onclick="$('#casesDlg').close()">Отмена</button>
     <button class="btn primary" id="csStart" disabled>Автоматизировать</button></div>
+</dialog>
+
+<dialog id="histDlg" class="hist-dlg" aria-labelledby="histTitle">
+  <div class="row"><h3 class="grow" id="histTitle"></h3>
+    <button class="btn small" onclick="$('#histDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hist-body" id="histBody"></div>
+</dialog>
+
+<dialog id="auditDlg" class="hist-dlg" aria-labelledby="auTitle">
+  <div class="row"><h3 class="grow" id="auTitle">Журнал действий</h3>
+    <button class="btn small" onclick="$('#auditDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="row" style="margin-top:10px">
+    <input id="auUser" placeholder="пользователь" style="width:auto">
+    <select id="auAction" style="width:auto"><option value="">все действия</option><option value="test.">тесты</option><option value="heal.">самолечение</option><option value="run.">прогоны</option><option value="suite.">наборы</option><option value="connection.">подключения</option><option value="project.">проект и права</option></select>
+    <button class="btn" id="auLoad">Показать</button><span class="grow"></span>
+    <span class="adminOnly"><input id="auMonth" type="month" style="width:auto"> <button class="btn" id="auExport">Выгрузить месяц</button> <button class="btn" id="auVerify">Проверить целостность</button></span>
+  </div>
+  <div id="auMsg" class="muted" style="margin-top:6px"></div>
+  <div class="hist-body"><table><thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Итог</th></tr></thead><tbody id="auList"></tbody></table></div>
+</dialog>
+
+<dialog id="resumeDlg" class="hist-dlg" aria-labelledby="resumeTitle">
+  <div class="row"><h3 class="grow" id="resumeTitle">Прерванные сессии</h3>
+    <button class="btn small" onclick="$('#resumeDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hint">Студия перезапускалась, пока шла генерация. Шаги сохраняются после каждого действия: сессию можно продолжить (шаги воспроизведутся в новом браузере, затем агент продолжит сценарий) или сразу сохранить записанные шаги как тест.</div>
+  <div class="hist-body"><table><thead><tr><th>Тест</th><th>Шагов</th><th>Изменена</th><th></th></tr></thead>
+    <tbody id="resumeBody"></tbody></table></div>
+</dialog>
+
+<dialog id="anDlg" class="hist-dlg" aria-labelledby="anDlgTitle">
+  <div class="row"><h3 class="grow" id="anDlgTitle">История проверок <span class="muted" id="anCount"></span></h3>
+    <button class="btn small" onclick="$('#anDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hint">Каждые требования проходят шаги: проверка ревьюером → разбор замечаний → сверка и подтверждение жизненного цикла → сценарии и тесты. Тест-дизайн начинается только после первых трёх. Выберите требования, чтобы продолжить работу с ними.</div>
+  <div class="hist-body"><div id="anList" data-paged></div></div>
+</dialog>
+
+<dialog id="jobsDlg" class="hist-dlg" aria-labelledby="jobsTitle">
+  <div class="row"><h3 class="grow" id="jobsTitle">История запусков конвейера</h3>
+    <button class="btn small" onclick="$('#jobsDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
+  <div class="hist-body"><table><thead><tr><th>Запуск</th><th>Статус</th><th>Тестов</th><th>Кто</th></tr></thead>
+    <tbody id="jobsBody"></tbody></table></div>
 </dialog>
 
 <dialog id="askDlg" aria-labelledby="askTitle" aria-describedby="askText">
@@ -1920,6 +1984,21 @@ function ask({title = '', text = '', subject = '', actions = [{label: 'OK', valu
     const danger = actions.some(a => a.kind === 'danger');
     if (control) { control.focus(); if (!pick) inp.select(); }
     else (primary || (danger ? no : made.at(-1)) || no)?.focus();
+  });
+}
+// openHistory(title, html) - the history of changes (test versions, earlier texts of the requirements, the action log)
+// opens in a popup: the page keeps only what the person works with now. Esc or a click beside it closes the popup.
+function openHistory(title, html) {
+  const dlg = $('#histDlg');
+  $('#histTitle').textContent = title;
+  $('#histBody').innerHTML = html;
+  if (!dlg.open) dlg.showModal();
+  return $('#histBody');
+}
+function closeOnBackdrop(dlg) {
+  dlg.addEventListener('click', e => {
+    const r = dlg.getBoundingClientRect();
+    if (e.target === dlg && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) dlg.close();
   });
 }
 // sure(title, action, text, subject) - ask() about an irreversible action: one red button named by the action.
@@ -2145,7 +2224,7 @@ async function switchProject(pid) {
 const REQ_DRAFTS = {};      // new requirements typed and not reviewed yet: each project its own
 function leaveProject(prev, pid) {
   // Конвейер: the run open and its polling, the banner of a run going on, what was typed for the other application
-  clearTimeout(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null);
+  clearTimeout(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null); foldPipeForm(false);
   $('#pipeUrl').value = $('#pipeCaseIds').value = ''; $('#pipeErr').textContent = '';
   PIPE_REVIEWS = []; PIPE_ANS = []; PIPE_SCEN = []; $('#pipeReview').innerHTML = ''; $('#pipeLeft').innerHTML = '';
   // Тесты: the run or suite open stops refreshing
@@ -2184,6 +2263,7 @@ function showTab(t, own) {
   const at = parseRoute(location.hash);
   if (own || routeTab(at) !== t || (at.pid || null) !== (t === 'home' ? null : PID)) setRoute(tabPath(t));
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  syncHistBtn(t);
   $('#allProj').classList.toggle('on', t === 'home');
   [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== t));
   if (t !== 'home' && PID) store.set('tg_tab_' + PID, t);      // entering the project again opens it here
@@ -2223,11 +2303,14 @@ function parseRoute(hash) {
 }
 const routeTab = r => r.tab || (r.pid ? VIEW_TAB[r.view] : '');
 const projPath = (...parts) => `/p/${PID}/` + parts.filter(Boolean).join('/');
-function settingsPath(sub, sec) { return projPath('settings', sub, sub === 'data' ? sec : ''); }
+// the settings with a subtree (Тестовые данные, Процесс генерации): their sections have addresses
+const SUB_SECS = {data: {key: 'tg_kn_sec', def: 'overview'}, process: {key: 'tg_proc_sec', def: 'overview'}};
+const subSec = (sub, sec) => SUB_SECS[sub] ? sec || store.get(SUB_SECS[sub].key) || SUB_SECS[sub].def : '';
+function settingsPath(sub, sec) { return projPath('settings', sub, subSec(sub, sec)); }
 function tabPath(t) {
   if (t === 'home' || !PID) return '/projects';
   if (t === 'studio' && SID) return projPath('studio', SID);
-  if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general', store.get('tg_kn_sec') || 'overview');
+  if (t === 'proj') return settingsPath(store.get('tg_settings_sub') || 'general');
   if (t === 'tests') return testsPath();
   return projPath(t);
 }
@@ -2249,6 +2332,7 @@ const linkBtn = path => `<button class="btn small" onclick="copyLink('${esc(path
 function showMissing(r = {}) {
   const own = r.pid && PROJECTS.some(p => p.id === r.pid) && VIEW_TAB[r.view];
   $$('nav button').forEach(b => b.classList.remove('on'));
+  syncHistBtn('');
   $('#allProj').classList.remove('on');
   [...TABS, 'missing'].forEach(x => $('#tab-' + x).classList.toggle('hidden', x !== 'missing'));
   const link = $('#missingLink');
@@ -2276,7 +2360,7 @@ async function openRoute(r) {
   if (!tab) return showMissing();
   if (r.view === 'setup') { showTab('home'); return openWizard(PID); }
   if (r.view === 'settings') {
-    if (id) { store.set('tg_settings_sub', id); if (id === 'data' && r.sec) store.set('tg_kn_sec', r.sec); }
+    if (id) { store.set('tg_settings_sub', id); if (SUB_SECS[id] && r.sec) store.set(SUB_SECS[id].key, r.sec); }
     if (r.back) KN_BACK = {pid: r.pid, path: r.back};
     if (r.query.get('from')) KN_FROM = r.query.get('from');      // the updates one analysis proposed
     renderKnBack();
@@ -2584,6 +2668,13 @@ async function loadInterrupted() {
   if (!PID) return;
   const cps = await api('GET', `/api/projects/${PID}/sessions`).catch(() => []);
   $('#resumeBox').classList.toggle('hidden', !cps.length || !!SID);
+  if (!cps.length && $('#resumeDlg').open) $('#resumeDlg').close();
+  // the page shows the latest one; all of them - in a popup
+  const last = cps.reduce((a, c) => !a || c.updated > a.updated ? c : a, null);
+  $('#resumeHead').textContent = `Прерванные сессии: ${cps.length}`;
+  $('#resumeLast').innerHTML = last ? `<div class="row" style="margin-top:6px"><span class="grow">Последняя: <b>${esc(last.name)}</b>
+      <span class="muted">· шагов: ${last.steps} · ${fmtTime(last.updated)}</span></span>
+      <button class="btn primary small" onclick="restoreSession('${last.id}')">Продолжить</button></div>` : '';
   $('#resumeBody').innerHTML = cps.map(c => `<tr>
     <td><b>${esc(c.name)}</b>${c.origin?.job ? ' <span class="badge">конвейер</span>' : ''}${c.test_id ? ' <span class="badge ok">тест сохранён</span>' : ''}
       <div class="hint">${esc((c.scenario || '').slice(0, 160))}</div></td>
@@ -2593,6 +2684,7 @@ async function loadInterrupted() {
       <button class="btn small danger" onclick="discardInterrupted('${c.id}')">Удалить</button></td></tr>`).join('');
 }
 async function restoreSession(sid) {
+  if ($('#resumeDlg').open) $('#resumeDlg').close();
   try { if (await startSession(() => api('POST', `/api/projects/${PID}/sessions/${sid}/restore`, {}))) openSession(sid); }
   catch (e) { toast(e.message, 'bad'); }
 }
@@ -2645,19 +2737,20 @@ function render() {
   renderSource(s);
   const busy = ['starting', 'thinking', 'executing'].includes(s.status);
   $('#stDot').className = 'dot' + (busy ? ' run' : '');
-  $('#stText').textContent = (STATUS[s.status] || s.status) + (s.autopilot ? ' · Auto-Pilot' : '') + ` · ${s.project}` +
+  $('#stMeta').textContent = `Проект ${s.project}` +
     (s.model ? ` · ${s.model.name}${s.model.screenshots !== 'always' ? ' (текстовый режим)' : ''}` : '') + usageText(s.usage) +
     (s.timing?.turns ? ` · ходов ${s.timing.turns}: модель ${Math.round(s.timing.model)} с, браузер ${Math.round(s.timing.browser)} с` : '');
-  $('#stText').title = (s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '') +
+  $('#stText').title = $('#stMeta').textContent + '\n' + (s.usage?.requests ? `Запросов к ИИ: ${s.usage.requests}; вход ${s.usage.input_tokens}, запись в кэш ${s.usage.cache_creation_input_tokens}, из кэша ${s.usage.cache_read_input_tokens}, выход ${s.usage.output_tokens}` : '') +
     (s.timing?.turns ? `\nВремя: ожидание модели ${s.timing.model} с, браузер ${s.timing.browser} с. Долго думает модель — уменьшите effort этапа «Генерация» или выберите модель быстрее; в Auto-Pilot поля формы заполняются за один ход.` : '');
   $('#autoToggle').checked = s.autopilot;
   $('#urlbar').textContent = s.page_url || s.url;
   $('#engineBadge').textContent = ENGINES[s.engine] || s.engine;
   const mcp = s.engine !== 'builtin', apiTest = s.engine === 'api';
   $('#mode').disabled = $('#pickAction').disabled = mcp;
+  $$('#modeSeg button').forEach(b => b.disabled = mcp);
   if (!mcp && $('#mode').dataset.mcp === 'true') syncMode();     // back from an MCP or API session
   $('#mode').dataset.mcp = mcp;
-  if (mcp) { $('#mode').value = 'off'; $('#live').classList.remove('picking'); $('#pickAction').classList.add('hidden');
+  if (mcp) { $('#mode').value = 'off'; syncModeSeg(); $('#live').classList.remove('picking'); $('#pickAction').classList.add('hidden'); $('#modeHint').classList.remove('hidden');
     $('#modeHint').textContent = apiTest ? 'API-тест: браузера нет, каждый шаг — запрос к API. Здесь — запросы сессии и ответы на них.'
       : 'С движком Playwright MCP шаги добавляет агент или кнопка «+ шаг»; Record & Play и Element Picker работают со встроенным движком.'; }
   $('#live').classList.toggle('hidden', apiTest); $('#apiLive').classList.toggle('hidden', !apiTest);
@@ -2667,7 +2760,7 @@ function render() {
 
   const chat = $('#chat');
   const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
-  chat.innerHTML = s.chat.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join('');
+  chat.innerHTML = chatHtml(s.chat);
   if (atBottom) chat.scrollTop = chat.scrollHeight;
 
   const p = s.pending;
@@ -2684,6 +2777,24 @@ function render() {
   if (!editing) renderSteps(s.steps);
 }
 
+// A gateway that cannot take tool calls answers with a long JSON: the chat says what to do instead.
+const CHAT_HINTS = [[/tool_choice|tools? (are|is) not supported|does not support tools/i,
+  'Модель через этот адрес API не поддерживает вызов инструментов — агенту в браузере он нужен. Выберите другую модель в «Проект → Модель».']];
+function chatHtml(chat) {
+  const out = [];
+  for (const m of chat) {
+    const last = out[out.length - 1];
+    if (last && last.role === m.role && last.text === m.text) { last.n++; continue; }
+    out.push({role: m.role, text: m.text, n: 1});
+  }
+  return out.map(m => {
+    const n = m.n > 1 ? `<span class="badge n" title="Одинаковых сообщений подряд">×${m.n}</span>` : '';
+    const hint = m.role !== 'user' && CHAT_HINTS.find(([re]) => re.test(m.text));
+    if (m.text.length <= 240 && !hint) return `<div class="msg ${m.role}">${esc(m.text)}${n}</div>`;
+    const head = hint ? hint[1] : m.text.slice(0, 160).replace(/\s+\S*$/, '') + '…';
+    return `<div class="msg ${m.role}">${esc(head)}${n}<details><summary>Подробнее</summary><div>${esc(m.text)}</div></details></div>`;
+  }).join('');
+}
 // Where the session came from: «Из задачи …» over it, «Вернуться к …» first after saving.
 const SOURCE_TEXT = {task: ['Из задачи', 'Вернуться к задаче'], job: ['Из запуска конвейера', 'Вернуться к запуску'],
                      scenario: ['По сценарию', 'Вернуться к сценарию']};
@@ -2713,12 +2824,11 @@ function renderProgress(s) {
     awaiting_approval: s.autopilot ? 'Выполняет предложенный шаг…' : 'Ждёт вашего решения: «Выполнить шаг» или «Отклонить» — подсказать другой',
     idle: 'Ждёт вас: подскажите агенту в чате, добавьте шаг или нажмите «Продолжить с агентом»',
     done: 'Генерация завершена — проверьте шаги и сохраните тест',
-    error: 'Ошибка — см. сообщение в чате; можно «Продолжить с агентом»',
+    error: 'Ошибка — причина в чате; можно «Продолжить с агентом»',
     closed: 'Сессия закрыта'}[s.status] || s.status;
   const f = s.finish;
   const item = (cls, text) => `<li class="${cls}"><span class="ck">${cls === 'ok' ? '✓' : cls === 'bad' ? '✕' : '○'}</span><span>${text}</span></li>`;
-  $('#genBox').innerHTML = `<div><span class="muted">Сейчас:</span> <span class="now">${esc(now)}</span>
-      ${s.autopilot ? `<span class="muted"> · Auto-Pilot: до ${s.max_steps} шагов</span>` : ''}</div>`;
+  $('#stText').textContent = now + (s.autopilot ? ` · Auto-Pilot: до ${s.max_steps} шагов` : '');
   $('#goalText').textContent = s.expected || 'Ожидаемый результат сценария';
   const ready = [n > 0, asserts.length > 0, f?.status === 'passed'];
   $('#readySum').innerHTML = `<span class="badge ${ready.every(Boolean) ? 'ok' : f && f.status !== 'passed' ? 'bad' : 'off'}">${ready.filter(Boolean).length} из 3</span>`;
@@ -2815,7 +2925,8 @@ function renderSteps(steps) {
       <div>
         <span class="badge ${st.action.startsWith('assert') ? 'assert' : ''}">${esc(st.action)}</span>
         <span class="d" contenteditable="true" data-i="${i}">${esc(st.description)}</span>
-        <div class="meta">${st.value ? 'значение: ' + esc(st.value) + ' · ' : ''}${esc(locText(st.locator))}${st.source !== 'ai' ? ' · ' + esc(st.source) : ''}${st.healed ? ' · healed' : ''}</div>
+        <div class="meta">${[st.value && !(st.description || '').includes(st.value) ? 'значение: ' + esc(st.value) : '', esc(locText(st.locator)),
+  !['ai', 'system'].includes(st.source) ? esc(st.source) : '', st.healed ? 'healed' : ''].filter(Boolean).join(' · ')}</div>
         ${st.error ? `<div class="err">${esc(st.error)}</div>` : ''}
         ${st.status === 'running' ? '<div class="hint">выполняется…</div>' : ''}
         ${st.replay_error ? `<div class="err">✘ Упал при прогоне: ${esc(st.replay_error)}</div>` : ''}
@@ -2891,7 +3002,7 @@ $('#chatIn').onkeydown = e => { if (e.key === 'Enter') sendChat(); };
 // (a button is clicked, a field asks for the text, a list for the item), Element Picker - the action or
 // check chosen in the list next to it
 const MODE_HINT = {
-  off: 'Клик по экрану ничего не делает. Чтобы добавлять шаги кликами, выберите Record & Play или Element Picker; агент и «+ шаг» работают в любом режиме.',
+  off: '',
   record: 'Запись: действуйте как пользователь. Клик по кнопке или ссылке — клик, по полю ввода — студия спросит текст, по списку — пункт. Каждый клик сразу выполняется в браузере и становится шагом.',
   picker: 'Выберите в списке, что сделать с элементом (действие или проверку), и кликните по нему: действие выполнится и запишется шагом.',
 };
@@ -2901,8 +3012,12 @@ function syncMode() {
   $('#pickAction').classList.toggle('hidden', m !== 'picker');
   DRAG_FROM = null;
   $('#modeHint').textContent = MODE_HINT[m];
+  $('#modeHint').classList.toggle('hidden', !MODE_HINT[m]);
+  syncModeSeg();
 }
+function syncModeSeg() { $$('#modeSeg button').forEach(b => b.setAttribute('aria-checked', b.dataset.mode === $('#mode').value)); }
 $('#mode').onchange = syncMode;
+$$('#modeSeg button').forEach(b => b.onclick = () => { $('#mode').value = b.dataset.mode; syncMode(); });
 let DRAG_FROM = null;   // drag_to in the picker: the first click chooses the element, the second the target
 syncMode();
 $('#shot').onclick = async e => {
@@ -3109,7 +3224,7 @@ function strip(recent) {
 }
 function verifyCell(t) {
   const v = t.verify;
-  if (!v) return `<button class="btn small" onclick="verifyTest('${t.id}', this)" title="Прогнать тест на «испорченных» версиях страницы">Проверить мутациями</button>`;
+  if (!v) return '<span class="muted" title="Мутационная проверка — в меню «Ещё»">—</span>';
   if (v.status === 'running') return '<span class="badge warn">проверка…</span>';
   if (v.status === 'done') return `<span class="badge ${v.weak ? 'warn' : 'ok'}" title="Доля обнаруженных мутантов">мутанты: ${v.killed}/${v.total}</span>` +
     (v.weak ? '<div class="hint">слабые проверки</div>' : '');
@@ -3145,7 +3260,7 @@ async function loadTests() {
         ${t.proposals ? `<span class="badge warn" title="Самолечение ждёт ревью">ревью локаторов: ${t.proposals}</span>` : ''}
         ${(t.outdated || []).length ? `<span class="badge warn" title="${esc(t.outdated.map(o => o.why).join('\n'))}">устарел</span>` : ''}
         <div class="muted" style="font-size:12px">${esc(t.url)}</div>
-        <div class="chips" style="margin-top:3px">${t.tags.map(x => `<span class="badge">#${esc(x)}</span>`).join('')}<button class="linkbtn" onclick="editTags('${t.id}')">${t.tags.length ? 'теги' : '+ тег'}</button></div></td>
+        <div class="chips" style="margin-top:3px">${t.tags.map(x => `<span class="badge">#${esc(x)}</span>`).join('')}</div></td>
       <td class="wide">${t.steps}</td>
       <td>${t.recent.length ? strip(t.recent) : '—'}
         ${t.flip_rate != null && t.flip_rate > 0 ? `<div class="hint">смена результата: ${Math.round(t.flip_rate * 100)}%</div>` : ''}
@@ -3154,10 +3269,12 @@ async function loadTests() {
       <td class="wide">${verifyCell(t)}</td>
       <td class="wide">${z?.key ? (z.url ? `<a href="${esc(z.url)}" target="_blank" rel="noopener">${esc(z.key)}</a>` : esc(z.key)) : z?.case_id ? `<span class="muted" title="Автоматизирует ручной кейс">кейс ${esc(z.case_id)}</span>` : '—'}</td>
       <td class="row"><button class="btn primary small" onclick="runTest('${t.id}')">Запустить</button>
-        ${canRole('editor') ? `<button class="btn small wide" onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
-        <details class="menu"><summary class="btn small">Ещё ▾</summary><div class="items">
+        <details class="menu"><summary class="btn small" aria-label="Ещё действия с тестом">Ещё ▾</summary><div class="items">
+          ${canRole('editor') ? `<button onclick="editInStudio('${t.id}', this, true)" title="Наглядный прогон: тест выполняется в Studio шаг за шагом, Live View показывает каждый шаг; упавший шаг можно сразу исправить">Прогон в Studio</button>` : ''}
           <button onclick="openTest('${t.id}')">Подробнее: история, ревью, мутации</button>
           <button onclick="openTest('${t.id}').then(() => editSteps('${t.id}'))">Редактировать шаги</button>
+          <button onclick="editTags('${t.id}')">Теги…</button>
+          ${!t.verify || t.verify.status !== 'running' ? `<button onclick="verifyTest('${t.id}', this)" title="Прогнать тест на «испорченных» версиях страницы">${t.verify ? 'Проверить мутациями снова' : 'Проверить мутациями'}</button>` : ''}
           ${t.status !== 'ready' ? `<button onclick="setStatus('${t.id}', 'ready')" title="Тест проверен человеком и входит в регрессионный набор">В набор (проверен)</button>` : ''}
           ${t.status === 'draft' ? `<button onclick="setStatus('${t.id}', 'review')">Отправить на ревью</button>` : ''}
           ${t.status !== 'draft' ? `<button onclick="setStatus('${t.id}', 'draft')">В черновики</button>` : ''}
@@ -3339,13 +3456,21 @@ async function runTest(id, browser) {
 function runScreen() { return $('#runScreen').value === 'custom' ? ($('#runScreen').dataset.custom || '') : $('#runScreen').value; }
 $('#runScreen').onchange = async e => {
   const box = e.target;
-  if (box.value !== 'custom') return;
+  if (box.value !== 'custom') return markRunOpts();
   const v = (await ask({title: 'Другой экран', text: 'Размер окна браузера для «Запустить» и «Запустить набор» или устройство Playwright.',
                         field: {label: 'Ширина×высота или устройство', value: box.dataset.custom || '', placeholder: '1680x1050 или iPad Mini'},
                         actions: [{label: 'Выбрать экран', kind: 'primary'}]}))?.trim();
   if (v) { box.dataset.custom = v; box.selectedOptions[0].textContent = `Другой: ${v}`; }
   else if (!box.dataset.custom) box.value = '';
+  markRunOpts();
 };
+// the run options sit in a menu: its button shows what is not the default, so a changed screen is not forgotten
+function markRunOpts() {
+  const on = [runScreen() && (runScreen() === 'custom' ? '' : runScreen().replace('x', '×')), $('#runHeaded').checked && 'окно', $('#runDrafts').checked && 'черновики'].filter(Boolean);
+  $('#runOptsMark').textContent = on.length ? `(${on.join(', ')}) ` : '';
+}
+$('#runHeaded').addEventListener('change', markRunOpts);
+$('#runDrafts').addEventListener('change', markRunOpts);
 const RETRYABLE = ['failed', 'error', 'flaky'];
 async function retryRun(rid, btn) {
   if (btn) btn.disabled = true;
@@ -3552,6 +3677,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   const box = $('#testBox'); box.classList.remove('hidden');
   const stepN = sid => t.steps.findIndex(s => s.id === sid) + 1;
   let html = `<div class="row"><h3 class="grow" style="margin:0">${esc(t.name)}</h3>
+      <button class="btn small" onclick="openVersions('${t.id}')" title="Прежние версии теста: сравнить с текущей или откатить">История изменений</button>
       ${linkBtn(projPath('tests', t.id))}
       <button class="btn small" onclick="closeDetail('#testBox')" aria-label="Закрыть">✕</button></div>
     <div class="muted" style="font-size:12px">${esc(t.url)} · шагов: ${t.steps.length}${t.authoring_usage?.requests ? ' · генерация' + usageText(t.authoring_usage) : ''}</div>
@@ -3566,8 +3692,7 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   html += `<div class="sub" id="stepsBox">${stepsViewHtml(t)}</div>`;
 
   const props = t.heal_proposals || [];
-  html += `<div class="sub"><b>Ревью самолечения</b>`;
-  html += props.length ? props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
+  if (props.length) html += `<div class="sub"><b>Ревью самолечения</b>` + props.map(p => `<div class="card" style="margin-top:8px;background:var(--bg)">
       <div><b>Шаг ${stepN(p.step_id)}:</b> ${esc(p.description)}</div>
       <div class="hint">ИИ: ${esc(p.reason)}</div>
       <div class="grid2"><div><label>Было</label><div class="loc">${p.old.map(c => esc(candText(c))).join('<br>') || '—'}</div></div>
@@ -3575,17 +3700,14 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
       ${p.screenshot ? `<img class="shot" style="margin-top:6px" src="/api/runs/${p.run_id}/files/${p.screenshot}" alt="Найденный элемент обведён">` : ''}
       <div class="row" style="margin-top:8px"><span class="muted grow" style="font-size:12px">прогон ${fmtTime(p.at)}</span>
         <button class="btn" onclick="healDecision('${t.id}', '${p.id}', 'reject')">Отклонить</button>
-        <button class="btn primary" onclick="healDecision('${t.id}', '${p.id}', 'accept')">Принять</button></div></div>`).join('')
-    : '<div class="hint">Нет предложений. Когда сломанный локатор чинит ИИ, новый локатор ждёт здесь вашего решения (режим «на ревью»).</div>';
-  html += '</div>';
+        <button class="btn primary" onclick="healDecision('${t.id}', '${p.id}', 'accept')">Принять</button></div></div>`).join('') + '</div>';
 
   const st = t.status || 'ready', comments = t.comments || [];
-  html += `<div class="sub"><div class="row"><b class="grow">Ревью теста: ${{draft: 'черновик', review: 'на ревью', ready: 'в наборе'}[st]}</b>
+  html += `<div class="sub"><div class="row"><b class="grow" title="Тест, записанный агентом, входит в регрессию только после проверки человеком. Комментарии — к шагам или ко всему тесту">Ревью теста: ${{draft: 'черновик', review: 'на ревью', ready: 'в наборе'}[st]}</b>
       ${st !== 'ready' ? `<button class="btn primary small" onclick="setStatus('${t.id}', 'ready');openTest('${t.id}', true)">Проверен — в набор</button>` : ''}
       ${st === 'draft' ? `<button class="btn small" onclick="setStatus('${t.id}', 'review');openTest('${t.id}', true)">На ревью</button>` : ''}</div>
     ${t.review ? `<div class="hint">${esc(t.review.by)} · ${fmtTime(t.review.at)}</div>` : ''}
     ${st === 'review' && t.review_reason ? `<div class="hint"><b>Почему на ревью:</b> ${esc(t.review_reason)} — шаги изменил агент без человека; проверьте их, прежде чем вернуть тест в набор.</div>` : ''}
-    <div class="hint">Тест, записанный агентом, входит в регрессию только после проверки человеком. Комментарии — к шагам или ко всему тесту.</div>
     ${[{id: '', description: 'Весь тест'}, ...t.steps].map((s, i) => {
       const cs = comments.filter(c => c.step_id === s.id);
       return (i === 0 || cs.length) ? `<div style="margin-top:4px"><b style="font-size:12px">${i ? `Шаг ${i}. ` : ''}${esc(s.description)}</b>` +
@@ -3595,15 +3717,15 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
     <div class="row" style="margin-top:6px"><select id="cmStep" style="width:auto"><option value="">весь тест</option>${t.steps.map((s, i) => `<option value="${s.id}">шаг ${i + 1}: ${esc(s.description.slice(0, 50))}</option>`).join('')}</select>
       <input id="cmText" class="grow" placeholder="Комментарий"><button class="btn small" onclick="addComment('${t.id}')">Добавить</button></div></div>`;
 
-  html += `<div class="sub"><div class="row"><b class="grow">Версии</b></div><div id="versions" class="hint">…</div></div>`;
-
-  html += `<div class="sub"><div class="row"><b class="grow">Подготовка и очистка данных</b>
+  const prepared = (t.before || []).length + (t.after || []).length;
+  html += `<details class="sub opt" ${prepared ? 'open' : ''}><summary><b>Подготовка и очистка данных</b>${prepared ? ` · запросов: ${prepared}` : ' · нет'}</summary>
+    <div class="row" style="margin-top:6px"><span class="grow"></span>
       <button class="btn small" onclick="dataRow('before')">+ запрос до теста</button>
       <button class="btn small" onclick="dataRow('after')">+ запрос после теста</button>
       <button class="btn primary small" onclick="saveData('${t.id}', this)">Сохранить</button></div>
     <div class="hint">Запросы к API тестируемого приложения (с куками браузера теста). «До теста» создаёт данные и сохраняет поля ответа в переменные — в шагах они доступны как <code>{{vars.имя}}</code>; «после теста» выполняется всегда, даже при падении. Удалять (DELETE) можно только после теста и только созданное в этом прогоне. Эти запросы пишет человек — агент их не генерирует.</div>
     <div id="dataEditor">${['before', 'after'].map(ph => `<div data-phase="${ph}"><b style="font-size:12px">${ph === 'before' ? 'До теста' : 'После теста'}</b>${(t[ph] || []).map(s => dataRowHtml(s)).join('')}</div>`).join('')}</div>
-    <span class="muted" id="dataMsg"></span></div>`;
+    <span class="muted" id="dataMsg"></span></details>`;
 
   const v = t.verify;
   html += `<div class="sub"><div class="row"><b class="grow">Качество проверок (мутационное тестирование)</b>
@@ -3612,33 +3734,22 @@ async function openTest(id, quiet) {     // quiet: a refresh of the open test
   if (!v) html += '<div class="hint">Тест ещё не проверялся. Он будет прогнан на «испорченных» версиях страницы и обязан на каждой упасть.</div>';
   else if (v.status === 'running') html += '<div class="hint">Идёт проверка…</div>';
   else if (v.status !== 'done') html += `<div class="hint err">${esc(v.error || v.status)}</div>`;
-  else html += `<div class="hint">Обнаружено мутантов: <b>${v.killed} из ${v.total}</b>${v.weak ? ' — тест прошёл на сломанной странице, проверки слабые' : ' — проверки ловят поломки'} · ${fmtTime(v.finished)}</div>` +
-    v.mutants.map(m => `<div class="hint" style="margin:2px 0">${m.result === 'killed' ? '<span class="ok">✔ обнаружен</span>' : m.result === 'survived' ? '<span class="err">✘ не обнаружен</span>' : '<span class="muted">— не применим</span>'} ${esc(m.description)}${m.error ? ` <span class="muted">(${esc(m.error)})</span>` : ''}</div>`).join('');
+  else html += `<details class="opt"><summary>Обнаружено мутантов: <b>${v.killed} из ${v.total}</b>${v.weak ? ' — тест прошёл на сломанной странице, проверки слабые' : ' — проверки ловят поломки'} · ${fmtTime(v.finished)}</summary>` +
+    v.mutants.map(m => `<div class="hint" style="margin:2px 0">${m.result === 'killed' ? '<span class="ok">✔ обнаружен</span>' : m.result === 'survived' ? '<span class="err">✘ не обнаружен</span>' : '<span class="muted">— не применим</span>'} ${esc(m.description)}${m.error ? ` <span class="muted">(${esc(m.error)})</span>` : ''}</div>`).join('') + '</details>';
   html += '</div>';
 
-  html += `<div class="sub"><b>История прогонов</b>` + (history.length ? `<table><thead><tr><th>Когда</th><th>Итог</th><th>Попытки</th><th>Самолечение</th><th>Запуск</th><th></th></tr></thead><tbody>` +
-    history.map(h => `<tr class="click" onclick="openRun('${h.id}')"><td>${fmtTime(h.started)}</td><td>${runBadge(h.status)}${h.quarantined ? ' <span class="badge off">карантин</span>' : ''}</td>
-      <td>${(h.outcomes || []).map(o => o ? '✔' : '✘').join(' ')}</td><td>${h.healed || ''}${h.proposals ? ` (на ревью: ${h.proposals})` : ''}</td><td class="muted">${esc({manual: 'вручную', pipeline: 'конвейер', suite: 'набор', cli: 'CLI', mcp: 'IDE (MCP)'}[h.trigger] || h.trigger)}</td>
-      <td>${RETRYABLE.includes(h.status) ? `<button class="btn small" onclick="event.stopPropagation();retryRun('${h.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить</button>` : ''}</td></tr>`).join('') + '</tbody></table>'
-    : '<div class="hint">Запусков ещё не было — нажмите «Запустить».</div>') + '</div>';
+  html += `<div class="sub"><div class="row"><b class="grow">Последние прогоны</b>
+      ${history.length > RUNS_INLINE ? `<button class="btn small" onclick="openRunsHistory('${t.id}')">Все прогоны (${history.length})</button>` : ''}</div>` +
+    (history.length ? runsTable(history.slice(0, RUNS_INLINE)) : '<div class="hint">Запусков ещё не было — нажмите «Запустить».</div>') + '</div>';
 
-  if (traffic.length) {
-    html += `<div class="sub"><div class="row"><b class="grow">Запросы сценария (записаны при генерации)</b>
-        <a class="btn small" target="_blank" href="/api/tests/${t.id}/export?format=api">API-тесты (.py)</a>
-        <a class="btn small" href="/api/tests/${t.id}/export?format=har">.har</a></div>
-      <div class="hint">«Замокать» добавляет в начало теста шаг, который отвечает на этот запрос записанным ответом, — для нестабильных внешних сервисов. Секреты в записи замаскированы.</div>
-      <table><thead><tr><th>Запрос</th><th>Ответ</th><th>Шаг</th><th></th></tr></thead><tbody>` +
-      traffic.map(e => `<tr><td class="loc">${esc(e.method)} ${esc(e.url.length > 110 ? e.url.slice(0, 110) + '…' : e.url)}${e.third_party ? ' <span class="badge warn">внешний сервис</span>' : ''}</td>
-        <td>${e.status} <span class="muted">${esc(e.mime || '')}</span></td><td>${e.step >= 0 ? e.step + 1 : '—'}</td>
-        <td class="row"><button class="btn small" onclick="mockRequest('${t.id}', ${e.index})">Замокать</button>
-          ${e.method !== 'DELETE' && !e.third_party ? `<button class="btn small" onclick="toBefore('${t.id}', ${e.index})" title="Выполнять этот запрос перед тестом для подготовки данных">В подготовку</button>` : ''}</td></tr>`).join('') + '</tbody></table></div>';
-  }
+  if (traffic.length) html += `<div class="sub"><div class="row"><b class="grow">Запросы сценария</b>
+      <span class="muted">записано при генерации: ${traffic.length}</span>
+      <button class="btn small" onclick="openTraffic('${t.id}')">Открыть</button></div></div>`;
   // a refresh (a run finished) keeps the step editor and what was typed in it
   if (STEP_EDIT?.tid === t.id && $('#stepsBox [data-si]')) readStepEditor();
   box.innerHTML = html;
   if (STEP_EDIT?.tid === t.id) renderStepEditor(); else STEP_EDIT = null;
   if (!quiet) box.scrollIntoView({behavior: 'smooth', block: 'start'});
-  loadVersions(t.id);
   loadTestLinks(t.id);
 }
 // the steps of a saved test: viewed, edited in place (a new version) or re-recorded in the Studio
@@ -3738,12 +3849,36 @@ async function loadTestLinks(tid) {
     ...l.jobs.map(x => 'запуск конвейера ' + a(['pipe', x.id], `от ${fmtTime(x.created)}`))];
   box.innerHTML = parts.length ? 'Связано: ' + parts.join(' · ') : '';
 }
-async function loadVersions(tid) {
+// The test card shows the last runs; all of them and the recorded requests open in a popup.
+const RUNS_INLINE = 3;
+const runsTable = (history, popup) => `<table><thead><tr><th>Когда</th><th>Итог</th><th>Попытки</th><th>Самолечение</th><th>Запуск</th><th></th></tr></thead><tbody>` +
+  history.map(h => `<tr class="click" onclick="${popup ? "$('#histDlg').close();" : ''}openRun('${h.id}')"><td>${fmtTime(h.started)}</td><td>${runBadge(h.status)}${h.quarantined ? ' <span class="badge off">карантин</span>' : ''}</td>
+    <td>${(h.outcomes || []).map(o => o ? '✔' : '✘').join(' ')}</td><td>${h.healed || ''}${h.proposals ? ` (на ревью: ${h.proposals})` : ''}</td><td class="muted">${esc({manual: 'вручную', pipeline: 'конвейер', suite: 'набор', cli: 'CLI', mcp: 'IDE (MCP)'}[h.trigger] || h.trigger)}</td>
+    <td>${RETRYABLE.includes(h.status) ? `<button class="btn small" onclick="event.stopPropagation();${popup ? "$('#histDlg').close();" : ''}retryRun('${h.id}', this)" title="Запустить тест снова в том же браузере и на том же устройстве">Повторить</button>` : ''}</td></tr>`).join('') + '</tbody></table>';
+async function openRunsHistory(tid) {
+  const body = openHistory('История прогонов', '<div class="hint">…</div>');
+  const history = await api('GET', `/api/tests/${tid}/runs`).catch(() => []);
+  body.innerHTML = history.length ? runsTable(history, true) : '<div class="hint">Запусков ещё не было.</div>';
+}
+async function openTraffic(tid) {
+  const body = openHistory('Запросы сценария (записаны при генерации)', '<div class="hint">…</div>');
+  const traffic = await api('GET', `/api/tests/${tid}/traffic`).catch(() => []);
+  body.innerHTML = `<div class="row"><span class="hint grow">«Замокать» добавляет в начало теста шаг, который отвечает на этот запрос записанным ответом, — для нестабильных внешних сервисов. «В подготовку» — выполнять запрос перед тестом. Секреты замаскированы.</span>
+      <a class="btn small" target="_blank" href="/api/tests/${tid}/export?format=api">API-тесты (.py)</a>
+      <a class="btn small" href="/api/tests/${tid}/export?format=har">.har</a></div>
+    <table><thead><tr><th>Запрос</th><th>Ответ</th><th>Шаг</th><th></th></tr></thead><tbody>` +
+    traffic.map(e => `<tr><td class="loc">${esc(e.method)} ${esc(e.url.length > 110 ? e.url.slice(0, 110) + '…' : e.url)}${e.third_party ? ' <span class="badge warn">внешний сервис</span>' : ''}</td>
+      <td>${e.status} <span class="muted">${esc(e.mime || '')}</span></td><td>${e.step >= 0 ? e.step + 1 : '—'}</td>
+      <td class="row"><button class="btn small" onclick="mockRequest('${tid}', ${e.index})">Замокать</button>
+        ${e.method !== 'DELETE' && !e.third_party ? `<button class="btn small" onclick="toBefore('${tid}', ${e.index})" title="Выполнять этот запрос перед тестом для подготовки данных">В подготовку</button>` : ''}</td></tr>`).join('') + '</tbody></table>';
+}
+async function openVersions(tid) {
+  const body = openHistory('История изменений теста', '<div class="hint">…</div>');
   const list = await api('GET', `/api/tests/${tid}/versions`).catch(() => []);
-  $('#versions').innerHTML = list.length ? list.map(v => `<div class="row" style="margin:2px 0"><span class="grow">Версия ${v.version} · ${fmtTime(v.at)}${v.by ? ' · ' + esc(v.by) : ''} · шагов: ${v.steps}</span>
+  body.innerHTML = list.length ? list.map(v => `<div class="row" style="margin:2px 0"><span class="grow">Версия ${v.version} · ${fmtTime(v.at)}${v.by ? ' · ' + esc(v.by) : ''} · шагов: ${v.steps}</span>
       <button class="btn small" onclick="showDiff('${tid}', ${v.version})">Сравнить с текущей</button>
       <button class="btn small" onclick="restoreVersion('${tid}', ${v.version})">Откатить</button></div><div id="diff-${v.version}"></div>`).join('')
-    : 'Изменений ещё не было: версия сохраняется, когда меняются шаги, данные, название или адрес.';
+    : '<div class="hint">Изменений ещё не было: версия сохраняется, когда меняются шаги, данные, название или адрес.</div>';
 }
 async function showDiff(tid, n) {
   const v = await api('GET', `/api/tests/${tid}/versions/${n}`);
@@ -3756,7 +3891,7 @@ async function showDiff(tid, n) {
 async function restoreVersion(tid, n) {
   if (!await ask({title: `Вернуть тест к версии ${n}?`, text: 'Текущее состояние сохранится как новая версия.',
                   actions: [{label: 'Вернуть версию', value: true, kind: 'primary'}]})) return;
-  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); openTest(tid, true); loadTests(); } catch (e) { toast(e.message, 'bad'); }
+  try { await api('POST', `/api/tests/${tid}/versions/${n}/restore`); $('#histDlg').close(); openTest(tid, true); loadTests(); } catch (e) { toast(e.message, 'bad'); }
 }
 async function addComment(tid) {
   const text = $('#cmText').value.trim(); if (!text) return;
@@ -3799,7 +3934,7 @@ async function saveData(tid, btn) {
   finally { btn.disabled = false; }
 }
 async function toBefore(tid, index) {
-  try { await api('POST', `/api/tests/${tid}/traffic/${index}/before`); openTest(tid, true); }
+  try { await api('POST', `/api/tests/${tid}/traffic/${index}/before`); toast('Запрос добавлен в подготовку данных.'); openTest(tid, true); }
   catch (e) { toast(e.message, 'bad'); }
 }
 async function healDecision(tid, pid, decision) {
@@ -4208,6 +4343,7 @@ async function selectAnalysis(aid) {
 $('#anList').addEventListener('click', e => {
   const row = e.target.closest('.an-row');
   if (!row) return;
+  $('#anDlg').close();
   setRoute(projPath('req', row.dataset.aid));
   selectAnalysis(row.dataset.aid);
   $('#anActive').scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -4301,6 +4437,18 @@ function pathHtml(r) {
 }
 const nextBtn = (k, label) => `<button class="btn primary small" onclick="anTab('${k}')">${label} →</button>`;
 const lockBox = text => `<div class="box lock">${text}</div>`;
+// The earlier texts of the requirements (agent fixes and new versions), newest first - in a popup.
+function openReqHistory() {
+  const revs = [...(AN.revisions || [])].reverse();
+  openHistory('История изменений ТЗ', revs.length ? revs.map((r, i) => `<details class="opt" ${i ? '' : 'open'}>
+      <summary>${r.kind === 'version' ? 'Новая версия ТЗ' : 'Исправление агентом'} — ${fmtTime(r.at)}${r.by ? `, ${esc(r.by)}` : ''}</summary>
+      ${r.summary ? `<div class="hint">${esc(r.summary)}</div>` : ''}
+      ${(r.edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
+        <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}
+      ${r.requirements ? `<details class="opt"><summary>Текст до изменения</summary>
+        <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(r.requirements)}</pre></details>` : ''}</details>`).join('')
+    : '<div class="hint">ТЗ ещё не менялось.</div>');
+}
 // Step 1: the requirements and the reviewer's check of them.
 function reqTabHtml(r, busy) {
   const rv = AN.review, v = rv?.validation, revs = AN.revisions || [], last = revs[revs.length - 1];
@@ -4328,11 +4476,8 @@ function reqTabHtml(r, busy) {
   return versionBox(busy) + head + sourcesLine() + fit + `
     <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${fixes ? ` · исправлен агентом: ${fixes}` : ''}${versions ? ` · новых версий: ${versions}` : ''}</summary>
       <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
-      ${last ? `<details class="opt"><summary>${last.kind === 'version' ? 'Новая версия ТЗ' : 'Последнее исправление'} — ${fmtTime(last.at)}${last.by ? `, ${esc(last.by)}` : ''}</summary>
-        <div class="hint">${esc(last.summary || '')}</div>
-        ${(last.edits || []).map(e => `<div class="card" style="margin-top:6px;background:var(--bg);padding:8px;font-size:13px">
-          <div class="muted" style="text-decoration:line-through;white-space:pre-wrap">${esc(e.find)}</div><div style="white-space:pre-wrap">${esc(e.replace)}</div></div>`).join('')}</details>` : ''}
-      <button class="btn small" style="margin-top:6px" onclick="reuseRequirements()">Вставить в поле новых требований</button></details>
+      <div class="row" style="margin-top:6px"><button class="btn small" onclick="reuseRequirements()">Вставить в поле новых требований</button>
+        ${last ? `<button class="btn small" onclick="openReqHistory()" title="Исправления агентом и новые версии ТЗ: что и когда изменилось">История изменений ТЗ (${revs.length})</button>` : ''}</div></details>
     ${v ? `<details class="opt"><summary>Подробности проверки документа — ${v.score}/100${before ? ' до исправлений' : ''}</summary>${validationHtml(v, true)}</details>` : ''}`;
 }
 // Step 2: the findings on the document (the conflicts with the lifecycle - step 3).
@@ -5110,13 +5255,14 @@ async function toPipeline() {
   await loadPipeReviews();
   setPipeSrc('review');
   $('#pipeReview').value = AN.id; pipeReviewChanged();
-  $('#pipeForm').scrollIntoView({behavior: 'smooth'});
+  foldPipeForm(false);
 }
 function pickInPipeline() {     // the scenarios of this analysis, checked in the pipeline's common list
   PIPE_SEL = new Set(SCEN.filter(isReady).map(s => AN.id + ':' + s.id)); PIPE_SCEN_PID = PID;
   showTab('pipe');
   setPipeSrc('picks');
   loadPipeScen();
+  foldPipeForm(false);
 }
 
 // ---- the review: an analysis at the top of the history, its report filled in live
@@ -5251,7 +5397,7 @@ function flowHtml(current) {
 }
 async function loadPipe() {
   if (!PID) return;
-  $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process');return false">настроить</a>`;
+  $('#pipeFlow').innerHTML = flowHtml('') + ` <a href="#" class="hint" onclick="openSettings('process', 'overview');return false">настроить</a>`;
   const tms = PROJ.connections.filter(c => c.enabled && [...TMS, 'custom'].includes(c.preset));
   $('#pipeCasesSrc').classList.toggle('hidden', !tms.length);
   if (!tms.length && PIPE_SRC === 'cases') setPipeSrc('review');
@@ -5259,14 +5405,41 @@ async function loadPipe() {
   loadPipeScen(); loadPipeReviews();
   const pid = PID, jobs = await api('GET', `/api/projects/${pid}/jobs`);
   if (pid !== PID) return;      // another project was chosen meanwhile
-  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="openJob('${j.id}')">
-    <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
-    <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">Запусков пока не было: выберите источник выше и нажмите «Запустить».</td></tr>';
+  renderJobs(jobs);
   if (JOB && JOB.project_id !== PID) { JOB = null; $('#jobBox').classList.add('hidden'); }
   const busy = jobs.find(j => LIVE_JOB.includes(j.status));
   pipeBusy(busy && !(JOB?.id === busy.id && !LIVE_JOB.includes(JOB.status)) ? busy : null);
   if (!JOB && PIPE_BUSY) openJob(PIPE_BUSY.id, true);
+}
+function renderJobs(jobs) {
+  $('#jobsBody').innerHTML = jobs.map(j => `<tr class="click" onclick="$('#jobsDlg').close();openJob('${j.id}')">
+    <td>${fmtTime(j.created)}<div class="muted" style="font-size:12px">${esc(j.feature || (j.links || []).join(', ') || 'текст')}</div></td>
+    <td>${esc(JOB_STATUS[j.status] || j.status)}</td><td>${j.done}/${j.items}</td><td>${esc(j.user || '')}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Запусков пока не было: выберите источник на вкладке «Конвейер» и нажмите «Запустить».</td></tr>';
+}
+// An open run takes the page: the launch form folds to its title, «Новый запуск» unfolds it.
+function foldPipeForm(fold) {
+  $('#pipeFormBody').classList.toggle('hidden', fold);
+  $('#pipeNew').classList.toggle('hidden', !fold);
+  if (!fold) $('#pipeForm').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+// The history in the header is the one of the tab open: checks of requirements, runs of the pipeline.
+const TAB_HISTORY = {
+  req: {label: 'История проверок', title: 'Проверки требований проекта: шаг, сценарии и тесты каждой', open: () => $('#anDlg').showModal()},
+  pipe: {label: 'История запусков', title: 'Запуски конвейера проекта: статус, сколько тестов готово, кто запустил', open: openJobsHistory},
+};
+function syncHistBtn(t) {
+  const h = PID && TAB_HISTORY[t], b = $('#histBtn');
+  b.classList.toggle('hidden', !h);
+  if (h) { b.textContent = h.label; b.title = h.title; }
+}
+function openTabHistory() { TAB_HISTORY[curTab()]?.open(); }
+// Only the list is loaded, a run opens on «Конвейер».
+async function openJobsHistory() {
+  if (!PID) return;
+  $('#jobsDlg').showModal();
+  const pid = PID, jobs = await api('GET', `/api/projects/${pid}/jobs`);
+  if (pid === PID) renderJobs(jobs);
 }
 // While a run of the project is going on, the launch form is hidden: one run at a time, its progress on top.
 const LIVE_JOB = ['running', 'awaiting_review', 'awaiting_cases', 'awaiting_model', 'awaiting_selection', 'awaiting_reuse'];
@@ -5448,7 +5621,7 @@ async function startPicked() {
 }
 async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
   clearTimeout(jobTimer);
-  if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); }
+  if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); foldPipeForm(true); }
   let j;
   try { j = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   if (j.project_id !== PID) return;      // a refresh late after another project was chosen
@@ -6127,21 +6300,21 @@ function beginWith(start) {
 
 // ---- project settings
 function openSettings(sub, sec) {
-  store.set('tg_settings_sub', sub); if (sub === 'data' && sec) store.set('tg_kn_sec', sec);   // one history entry
+  store.set('tg_settings_sub', sub); if (SUB_SECS[sub] && sec) store.set(SUB_SECS[sub].key, sec);   // one history entry
   showTab('proj'); showSub(sub, sec);
 }
 $$('.subnav button').forEach(b => b.onclick = () => showSub(b.dataset.sub, b.dataset.sec));
-// the settings tree: a section with blocks (Тестовые данные) opens its subtree; the last place is remembered
+// the settings tree: a section with blocks (Тестовые данные, Процесс генерации) opens its subtree; the last place is remembered
 function showSub(sub, sec) {
-  if (sub === 'data') sec = sec || store.get('tg_kn_sec') || 'overview';
+  sec = subSec(sub, sec) || undefined;
   $$('.subnav button').forEach(b => b.classList.toggle('on', b.dataset.sub === sub && (b.dataset.sec || '') === (b.dataset.sec ? sec : '') && !(b.classList.contains('has-tree') && sec)));
   $$('.subnav .has-tree').forEach(b => b.classList.toggle('open', b.dataset.sub === sub));
-  $('#knTree').classList.toggle('open', sub === 'data');
+  $$('.subtree').forEach(t => t.classList.toggle('open', t.dataset.tree === sub));
   $$('[data-subpanel]').forEach(p => p.classList.toggle('hidden', p.dataset.subpanel !== sub));
   store.set('tg_settings_sub', sub);
   if (curTab() === 'proj') setRoute(settingsPath(sub, sec));
   if (sub === 'ide') loadTokens();
-  if (sub === 'process') loadUsage();
+  if (sub === 'process') { store.set(SUB_SECS.process.key, sec); showProcSec(sec); if (sec === 'budget') loadUsage(); }
   if (sub === 'access') loadAccess();
   if (sub === 'api') loadApi();
   if (sub === 'blocks') loadBlocks();
@@ -6272,8 +6445,7 @@ async function loadAccess() {
   $('#acVis').disabled = !owner;
   $$('.ownerOnly').forEach(x => x.classList.toggle('hidden', !owner));
   $('#acMsg').textContent = owner ? '' : `Ваша роль — ${roleTitle(PROJ.role)}; участников меняет владелец.`;
-  $$('[data-subpanel="access"] .adminOnly').forEach(x => x.classList.toggle('hidden', !ME.is_admin));
-  if (owner) loadAudit();
+  $$('[data-subpanel="access"] .adminOnly, #auditDlg .adminOnly').forEach(x => x.classList.toggle('hidden', !ME.is_admin));
   if (ME.is_admin) api('GET', '/api/sso').then(s => {
     $('#ssoRules').value = s.group_roles.map(r => `${r.group}; ${r.project}; ${r.role}`).join('\n');
     $('#ssoAdmins').value = s.admin_groups.join(', ');
@@ -6306,6 +6478,8 @@ async function loadAudit() {
   } catch (e) { $('#auMsg').textContent = e.message; }
 }
 $('#auLoad').onclick = loadAudit;
+$('#auOpen').onclick = () => { $('#auditDlg').showModal(); loadAudit(); };
+closeOnBackdrop($('#histDlg')); closeOnBackdrop($('#auditDlg')); closeOnBackdrop($('#resumeDlg')); closeOnBackdrop($('#jobsDlg')); closeOnBackdrop($('#anDlg'));
 $('#auExport').onclick = () => { const m = $('#auMonth').value || new Date().toISOString().slice(0, 7); location.href = `/api/audit/export?month=${m}`; };
 $('#auVerify').onclick = async () => {
   try { const r = await api('GET', '/api/audit/verify');
@@ -6817,6 +6991,29 @@ function riskWarn() {
 document.addEventListener('change', e => {
   if (e.target.matches?.('[data-p="decisions.review_policy"], [data-p="verify.enabled"]')) riskWarn();
 });
+// «Процесс генерации»: one stage on the screen; the overview lists the stages in order, on or off
+const PROC_STAGES = [
+  {title: 'Требования', sub: 'reqs', about: 'источники, Planner, проверка ТЗ, модель приложения'},
+  {title: 'Сценарии', sub: 'scen', about: 'виды проверок, слои, техники, отбор'},
+  {title: 'Генерация теста в браузере', sec: 'authoring', about: 'движок, Auto-Pilot, лимит шагов, скиллы'},
+  {title: 'Прогон', sec: 'run', on: 'run.enabled', about: 'самолечение, браузеры и устройства наборов, нестабильные'},
+  {title: 'Проверка качества (мутации)', sec: 'verify', on: 'verify.enabled', about: 'мутанты, усиление слабых проверок'},
+  {title: 'Публикация', sec: 'publish', on: 'publish.enabled', about: 'система управления тестами, результаты прогонов'},
+  {title: 'Решения команды', sec: 'decisions', about: 'ревью по риску, автопринятие, кто решает'},
+  {title: 'Лимиты расхода', sec: 'budget', about: 'на сессию, запуск и месяц'}];
+function showProcSec(sec) {
+  $$('[data-subpanel="process"] [data-proc]').forEach(c => c.classList.toggle('hidden', !c.dataset.proc.split(' ').includes(sec)));
+  if (sec === 'overview') renderProcStages();
+}
+function renderProcStages() {
+  $('#procStages').innerHTML = PROC_STAGES.map((st, i) => {
+    const box = st.on && $(`[data-p="${st.on}"]`), off = box && !box.checked;
+    return `<div class="row proc-row" style="padding:6px 0;border-top:1px solid var(--line)"><span class="num">${i < 6 ? i + 1 : i === 6 ? '✓' : '₽'}</span>
+      <span class="grow"><b>${esc(st.title)}</b>${box ? ` <span class="badge ${off ? 'off' : 'ok'}">${off ? 'выключен' : 'включён'}</span>` : ''}
+        <div class="hint">${esc(st.about)}</div></span>
+      <button class="btn small" onclick="showSub('${st.sub || 'process'}'${st.sec ? `, '${st.sec}'` : ''})">Настроить →</button></div>`;
+  }).join('');
+}
 function fillProcess() {
   setTimeout(riskWarn);      // after the fields are filled
   const L = PROJ.llm;
@@ -7200,7 +7397,7 @@ function knExploredHtml(x) {
   if (x.deeper) why.push(`глубже ${x.max_depth} уровней осталось ссылок: ${x.deeper}`);
   if (!x.logged_in) why.push('без входа в приложение — страницы за входом не видны');
   return `<div class="box next" style="margin-top:8px"><b>Черновик модели неполный.</b> Planner обошёл ${x.pages} стр.${why.length ? ': ' + why.map(esc).join('; ') : ''}.
-    <div class="hint">Чего Planner не видел, в модели нет — тесты по этим частям получат неверную модель. Перед подтверждением дополните модель требованиями (вкладка «Требования») или сущностями вручную, либо увеличьте лимиты и задайте тест входа в <a href="#" onclick="openSettings('process');return false">«Процесс генерации → Planner»</a> и исследуйте сайт заново.</div></div>`;
+    <div class="hint">Чего Planner не видел, в модели нет — тесты по этим частям получат неверную модель. Перед подтверждением дополните модель требованиями (вкладка «Требования») или сущностями вручную, либо увеличьте лимиты и задайте тест входа в <a href="#" onclick="openSettings('reqs');return false">«Требования → Planner»</a> и исследуйте сайт заново.</div></div>`;
 }
 function renderKnConfirm() {
   const c = KN.confirmation || {state: 'none', missing: [], units: []};
