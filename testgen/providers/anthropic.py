@@ -93,8 +93,19 @@ def _context_editing_failed(e: Exception) -> bool:
     return any(k in text for k in ("context_management", "context-management", CLEAR_TOOL_USES))
 
 
+def _tool_choice_refused(e: Exception) -> bool:
+    """A gateway refused tool_choice itself ("tool_choice type 'auto' is not supported by this gateway phase"
+    from LiteLLM over a Responses API) - the tools are fine, only the explicit choice is not."""
+    if not isinstance(e, anthropic.APIStatusError) or e.status_code not in (400, 422):
+        return False
+    return "tool_choice" in f"{getattr(e, 'message', '')} {getattr(e, 'body', '')}".lower()
+
+
 # Connections (API address, model) where context editing failed: the studio cuts old screenshots itself.
 NO_CONTEXT_EDITING: set[tuple[str, str]] = set()
+# Connections (a gateway of the project's own) that refused tool_choice: the tools go without it (auto is
+# the default anyway; several calls in one answer are handled by the agent).
+NO_TOOL_CHOICE: set[tuple[str, str]] = set()
 # Connections (a gateway of the project's own) that refused a streamed request: they get plain ones.
 NO_STREAM: set[tuple[str, str]] = set()
 STREAM_REFUSED = {400, 404, 405, 415, 422, 501}
@@ -186,7 +197,8 @@ class AnthropicProvider:
             betas.append(FALLBACK_BETA)
         if req.tools:
             p["tools"] = req.tools
-            p["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": req.one_tool}
+            if self._key(req.model) not in NO_TOOL_CHOICE:
+                p["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": req.one_tool}
         if req.keep_images:
             if "context_editing" in self.features and self._key(req.model) not in NO_CONTEXT_EDITING:
                 betas.append(CONTEXT_BETA)
@@ -217,13 +229,19 @@ class AnthropicProvider:
     async def _send(self, req: Request, call) -> Reply:
         p, betas = self._params(req)
         try:
-            try:
-                resp = await call(p, betas)
-            except anthropic.APIStatusError as e:
-                if "context_management" not in p or not _context_editing_failed(e):
-                    raise
-                NO_CONTEXT_EDITING.add(self._key(req.model))
-                p, betas = self._params(req)          # now without context editing
+            for _ in range(3):                        # each refused feature is dropped once, then the request again
+                try:
+                    resp = await call(p, betas)
+                    break
+                except anthropic.APIStatusError as e:
+                    if "context_management" in p and _context_editing_failed(e):
+                        NO_CONTEXT_EDITING.add(self._key(req.model))
+                    elif "tool_choice" in p and _tool_choice_refused(e):
+                        NO_TOOL_CHOICE.add(self._key(req.model))
+                    else:
+                        raise
+                    p, betas = self._params(req)      # now without the refused feature
+            else:
                 resp = await call(p, betas)
         except Exception as e:
             if is_error(e):
