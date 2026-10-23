@@ -34,6 +34,19 @@ def text(t: str) -> Resp:
     return Resp([SimpleNamespace(type="text", text=t)])
 
 
+def _model_named(title: str):
+    """The pydantic model a streamed request's JSON schema was made of (its title is the class name)."""
+    import pydantic
+
+    todo = list(pydantic.BaseModel.__subclasses__())
+    while todo:
+        c = todo.pop()
+        if c.__name__ == title and c.__module__.startswith("testgen"):
+            return c
+        todo.extend(c.__subclasses__())
+    return None
+
+
 class FakeMessages:
     def __init__(self, owner):
         self.owner = owner
@@ -53,6 +66,9 @@ class FakeMessages:
     def stream(self, **kw):
         kw = kw | {"messages": list(kw["messages"])}
         kind = "parse" if "format" in (kw.get("output_config") or {}) else "create"
+        if kind == "parse" and "output_format" not in kw:
+            # scripts tell a structured request by its schema class, as a plain parse sends it: found by the title
+            kw["output_format"] = _model_named(kw["output_config"]["format"].get("schema", {}).get("title", ""))
         self.owner.calls.append((kind, kw))
         owner = self.owner
 

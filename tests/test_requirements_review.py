@@ -89,6 +89,10 @@ def test_the_reviewer_works_on_a_clean_context_with_the_lifecycle(fake_llm):
     assert lc["model"] == {"entities": 2, "roles": 2, "state": "none"}
     assert review.blocking(out)
     assert "расхождений 1, критичных 1" in review.summary(out)
+    # the document check is streamed with a wait of its own: a gateway does not cut off its long report (504)
+    checks = [kw for _, kw in fake_llm.calls if kw.get("output_format") is validation.Validation]
+    assert len(checks) == 1 and "format" in checks[0]["output_config"]
+    assert checks[0]["timeout"].read == validation.WAIT
 
     [(_, kw)] = [c for c in fake_llm.calls if c[0] == "create"]
     # A clean conversation: one task, the document and the model - nothing else of the studio.
