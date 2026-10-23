@@ -325,7 +325,7 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `requirements.confirm_model`; в тестах студии выключена фикстурой `lifecycle_confirmed`). Скиллы модели —
   слот `requirements.model_skills` (`application-model`), в сценариях — `test-data-roles`.
 - `testgen/validation.py` — проверка ТЗ на соответствие стандарту (`requirements.standard`, `checklist`,
-  скиллы этапа `requirements`): разделы, замечания, вопросы, оценка; хранится в анализе (`validation`). Карта сайта
+  скиллы этапа `requirements`): разделы, замечания, вопросы, оценка; хранится в анализе (`validation`). Отчёт длинный — запрос стримится с ожиданием `WAIT` (шлюз без потока обрывает его 504). Карта сайта
   Planner (текст с `explorer.MAP_TITLE`) проверяется как обход, а не документ авторов (`SITE_MAP`): необъявленное
   разметкой (правила сервера, тексты ошибок после отправки) — вопрос команде, не дефект выше major.
 - `testgen/review.py` — ревьюер требований, субагент на чистом контексте: `review()` параллельно запускает

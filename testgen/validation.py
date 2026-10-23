@@ -71,6 +71,11 @@ def _task(standard: str, checklist: str, site_map: bool = False) -> str:
     return text + (SITE_MAP if site_map else "") + "\nValidate the document."
 
 
+# Seconds of silence in the streamed report before it is given up. The report is long (up to 16 000 tokens): a gateway
+# that waits for a whole answer cuts it off (504 after ~5 min) - streamed, it keeps coming while the model writes.
+WAIT = 300
+
+
 async def validate(project: dict, document: str, standard: str = "", notes: str = "") -> dict:
     """The report on `document` -> Validation as a dict, with the standard it was checked against."""
     cfg = project["pipeline"]["requirements"]
@@ -79,7 +84,8 @@ async def validate(project: dict, document: str, standard: str = "", notes: str 
     task = _task(standard, cfg.get("checklist", ""), document.lstrip().startswith(MAP_TITLE)) + notes
     reply = await llm.parse(cfg, system=system, context=f"The document:\n{document[:150_000]}",
                             messages=[{"role": "user", "content": task}],
-                            schema=Validation, max_tokens=16000, project_id=project["id"], stage_name="requirements")
+                            schema=Validation, max_tokens=16000, project_id=project["id"], stage_name="requirements",
+                            stream=True, timeout=WAIT)
     if reply.stop == "max_tokens":
         raise RuntimeError("Отчёт не поместился в лимит ответа: проверьте документ по частям.")
     if reply.parsed is None:
