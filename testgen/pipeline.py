@@ -725,7 +725,12 @@ class Job:
                 self._log("Тестовые данные сценариев записаны в модель приложения («Проект → Тестовые данные»)")
             self._log(f"Сценариев: {len(self.scenarios)} — сохранены в истории анализа требований")
             if not self.scenarios:
-                self._log("По этим требованиям сценариев не получилось", "warn")
+                # Nothing to test is not a result: the run fails and says what to give it.
+                crawl = next((r["title"] for r in self.requirements if r["source"] == "Planner"), "")
+                raise ValueError("По этим требованиям сценариев не получилось: модель не нашла, что проверять. "
+                                 + (f"{crawl} — для сценариев этого мало: задайте тест входа или увеличьте лимиты "
+                                    "в «Проект → Требования → Planner», или добавьте ТЗ"
+                                    if crawl else "Уточните требования: что делает пользователь и что должно получиться"))
         else:
             self.scenarios = [{"title": self.requirements[0]["title"] or "Сценарий", "type": "", "priority": "",
                                "preconditions": "", "instructions": requirements, "expected_result": "",

@@ -28,6 +28,29 @@ def test_explore_maps_pages_and_skips_dangerous_links(stand, project):
     assert explorer.latest(project["id"])["id"] == m["id"]
 
 
+def test_explore_single_page_app_tabs_and_hash_routes(stand, project):
+    """A single-page app: tabs are clicked (a view of the page), hash routes are pages; an action button is not."""
+    m = arun(explorer.explore(project, f"{stand.url}/spa.html"))
+    assert m["status"] == "done", m
+    views = {p["view"] for p in m["pages"] if p.get("view")}
+    assert {"Заказы", "Товары"} <= views and "Сохранить" not in views
+    urls = {p["url"].split(stand.url)[1] for p in m["pages"]}
+    assert {"/spa.html", "/spa.html#/help", "/spa.html#/profile"} <= urls      # a link and a button to a route
+    assert not any("Сохранено" in (p.get("text") or "") for p in m["pages"])
+    req = explorer.to_requirements(m)
+    assert "/spa.html › вкладка «Заказы»" in req and "Список заказов" in req and "/spa.html#/help" in req
+    assert explorer.coverage(project["id"])["total"] == len(urls)                  # views are not screens of their own
+
+
+def test_page_address_keeps_hash_routes_only():
+    assert explorer._norm("http://a/app/#/orders/1") == "http://a/app#/orders/1"
+    assert explorer._norm("http://a/app/#!/orders") == "http://a/app#!/orders"
+    assert explorer._norm("http://a/page.html#section") == "http://a/page.html"
+    assert explorer._where("http://a/#/p/1/tests") == "/#/p/1/tests"
+    assert explorer.UNSAFE.search("Сохранить") and explorer.UNSAFE.search("Run") and explorer.UNSAFE.search("Удалить")
+    assert not explorer.UNSAFE.search("Заказы") and not explorer.UNSAFE.search("Address")
+
+
 REGISTER = """<form id="register" novalidate>
   <h2>Создать аккаунт</h2>
   <div class="field"><div class="caption">Имя *</div>
@@ -161,7 +184,8 @@ def test_cli_exit_codes_and_junit(stand, project, save_test, tmp_path):
 
 
 def test_pipeline_job_explores_when_there_is_no_spec(stand, project, fake_llm):
-    """Planner as a source: the map goes to scenario design (the fake designs nothing, which is enough here)."""
+    """Planner as a source: the map goes to scenario design. The fake designs nothing: the run stops and says the
+    map was too poor for scenarios, not "done" with nothing."""
     from fakes import Resp
     from testgen.scenarios import ScenarioPlan
 
@@ -173,6 +197,6 @@ def test_pipeline_job_explores_when_there_is_no_spec(stand, project, fake_llm):
     fake_llm.script = script
     job = pipeline.Job(project, [], "", stand.url, {}, explore=True)
     arun(job.run())
-    assert job.status == "done", job.error
+    assert job.status == "error" and "сценариев не получилось" in job.error and "Карта сайта: страниц" in job.error
     assert job.requirements[0]["source"] == "Planner"
     assert "Карта приложения" in seen["context"] and "/form.html" in seen["context"]

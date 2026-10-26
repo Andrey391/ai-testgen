@@ -2383,7 +2383,7 @@ async def get_explore(pid: str, eid: str):
     r = explorer.get(pid, eid)
     if not r:
         raise HTTPException(404, "Исследование не найдено")
-    out = r | {"pages": [{k: pg.get(k) for k in ("url", "title", "depth", "error")} for pg in r["pages"]]}
+    out = r | {"pages": [{k: pg.get(k) for k in ("url", "title", "view", "depth", "error")} for pg in r["pages"]]}
     if r["status"] == "done":
         out["requirements"] = explorer.to_requirements(r)
     return out
