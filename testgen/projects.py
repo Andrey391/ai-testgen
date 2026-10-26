@@ -166,12 +166,18 @@ def secrets_kind(pid: str) -> str:
 
 
 LANGUAGES = {"ru": "Russian", "en": "English"}
+DEFAULT_LANGUAGE = "ru"     # a project that has not chosen: everything the models write is in Russian
+
+
+def language(project: dict | None) -> str:
+    """The language of generated texts and Gherkin: the project's, Russian by default."""
+    lang = (project or {}).get("language") or ""
+    return lang if lang in LANGUAGES else DEFAULT_LANGUAGE
 
 
 def language_rule(project: dict | None) -> str:
-    """A prompt line fixing the language of generated texts, "" when the project leaves it to the input."""
-    lang = LANGUAGES.get((project or {}).get("language") or "")
-    return f"\n- Write every description, title and text you produce in {lang}." if lang else ""
+    """A prompt line fixing the language of generated texts (language())."""
+    return f"\n- Write every description, title and text you produce in {LANGUAGES[language(project)]}."
 
 
 def normalize_pipeline(p: dict | None) -> dict:
@@ -319,8 +325,8 @@ def update(pid: str, patch: dict) -> dict:
         if key in patch:
             p[key] = str(patch[key] or "").strip()
     if "language" in patch:
-        # Language of step descriptions, scenarios and Gherkin: "" = as the scenario / requirements are written.
-        p["language"] = patch["language"] if patch["language"] in ("", "ru", "en") else ""
+        # Language of everything the models write and of Gherkin (language()): ru by default.
+        p["language"] = patch["language"] if patch["language"] in LANGUAGES else DEFAULT_LANGUAGE
     if "start" in patch:
         # The first step chosen after the wizard: where the project opens until the person picks a tab.
         p["start"] = patch["start"] if patch["start"] in START else ""

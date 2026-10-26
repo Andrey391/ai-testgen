@@ -38,7 +38,7 @@ from urllib.parse import quote_plus
 
 from pydantic import BaseModel
 
-from . import checks, fs, knowledge, llm, skills, testdata
+from . import checks, fs, knowledge, llm, projects, skills, testdata
 from .browser import BrowserSession, describe_element, group_candidates, listed
 from .steps import MAX_MODULE_DEPTH, needs_element, origin, perform, spec
 
@@ -49,15 +49,13 @@ HEAL_SYSTEM = ("You repair broken UI test locators. The page changed and the rec
 ANALYSIS_SYSTEM = ("You are a senior QA engineer triaging a failed automated UI test. From the test, "
                    "the step that failed, the error, the screenshot taken right after the failure, what "
                    "the browser reported (console errors, failed requests) and the test's recent history, "
-                   "decide why it failed. Be concrete and brief. Write in the language of the test "
-                   "descriptions.")
+                   "decide why it failed. Be concrete and brief.")
 
 VISUAL_SYSTEM = ("You review a failed visual regression check of a web UI test. You get the baseline "
                  "image, the current image and a diff where changed pixels are red. Decide whether the "
                  "difference is a bug (broken layout, missing or overlapping content, wrong styles), an "
                  "expected change (a deliberate redesign or new content: the baseline should be updated), "
-                 "or noise (anti-aliasing, fonts, animation, dynamic data). Write in the language of the "
-                 "test descriptions.")
+                 "or noise (anti-aliasing, fonts, animation, dynamic data).")
 
 OUTLINE_JS = """el => { el.dataset.tgOutline = el.style.outline || '';
   el.style.outline = '3px solid #e8590c'; el.style.outlineOffset = '2px'; }"""
@@ -81,6 +79,12 @@ class VisualVerdict(BaseModel):
     summary: str
 
 
+def _rules(project_id: str, cfg: dict) -> str:
+    """The language of the answer (the project's, Russian by default) and the skills of the stage."""
+    return projects.language_rule(projects.get(project_id) if project_id else None) + (
+        skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
+
+
 async def heal(bs: BrowserSession, step: dict, cfg: dict | None = None,
                project_id: str = "") -> tuple[str, str] | None:
     """-> (ref of the element that now plays the step's role, the LLM's reason) or None."""
@@ -88,7 +92,7 @@ async def heal(bs: BrowserSession, step: dict, cfg: dict | None = None,
     snap = await bs.snapshot()
     elements = "\n".join(describe_element(e) for e in listed(snap["elements"], 250, 60))
     old = ", ".join(f"{c['kind']}={c.get('name') or c.get('value')}" for c in step["locator"])
-    system = HEAL_SYSTEM + (skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
+    system = HEAL_SYSTEM + _rules(project_id, cfg)
     reply = await llm.parse(cfg, system=system, schema=HealChoice, max_tokens=4000, project_id=project_id,
                             stage_name="run", messages=[{"role": "user", "content": (
                                 f"Test step: {step['description']}\nAction: {step['action']}\n"
@@ -145,7 +149,7 @@ async def analyze(test: dict, report: dict, cfg: dict | None = None, project_id:
     if failed.get("screenshot"):
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                     "data": failed["screenshot"]}})
-    system = ANALYSIS_SYSTEM + (skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
+    system = ANALYSIS_SYSTEM + _rules(project_id, cfg)
     reply = await llm.parse(cfg, system=system, messages=[{"role": "user", "content": content}],
                             schema=FailureAnalysis, max_tokens=4000, project_id=project_id, stage_name="run")
     if reply.stop == "refusal" or reply.parsed is None:
@@ -162,7 +166,7 @@ async def judge_visual(test: dict, step: dict, images: dict[str, bytes], cfg: di
             content += [{"type": "text", "text": f"{label.capitalize()} image:"},
                         {"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                                      "data": base64.b64encode(images[label]).decode()}}]
-    system = VISUAL_SYSTEM + (skills.prompt(project_id, cfg.get("skills", [])) if project_id else "")
+    system = VISUAL_SYSTEM + _rules(project_id, cfg)
     reply = await llm.parse(cfg, system=system, messages=[{"role": "user", "content": content}],
                             schema=VisualVerdict, max_tokens=4000, project_id=project_id, stage_name="run")
     if reply.stop == "refusal" or reply.parsed is None:

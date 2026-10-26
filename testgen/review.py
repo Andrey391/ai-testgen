@@ -77,7 +77,7 @@ LIFECYCLE = """You are an independent reviewer of requirements. You work alone, 
 
 `location` quotes the document (a section, a requirement number or a short quote); `model_rule` quotes the model (empty when the model says nothing on it). severity: critical - blocks development or testing, a scenario of the document cannot be carried out; major - will cause defects or rework; minor - a detail. Do not invent rules the model does not state and do not report style or wording of the document: another reviewer checks those. `questions` - what the authors must answer about the lifecycle before tests can be designed. With an empty model, check the lifecycle the document describes (gap) and list what it introduces (new).
 
-When a part of the model you need is not shown, ask for it with model_lookup (an entity or role name). Finish with the `report` tool."""
+When a part of the model you need is not shown, ask for it with model_lookup (an entity or role name). Finish with the `report` tool. Write in the language of the document."""
 
 LOOKUP_TOOL = {
     "name": "model_lookup",
@@ -116,6 +116,8 @@ def _model_state(doc: dict) -> dict:
 async def lifecycle(project: dict, document: str, log=None, notes: str = "") -> dict:
     """The document against the lifecycle of the system: LifecycleReport as a dict, with the model it was
     checked against (how many entities and roles, confirmed or not)."""
+    if not document.strip():
+        raise ValueError("Нет текста требований для сверки с жизненным циклом")
     pid = project["id"]
     cfg = project["pipeline"]["requirements"]
     doc = knowledge.get(pid)
@@ -126,12 +128,14 @@ async def lifecycle(project: dict, document: str, log=None, notes: str = "") -> 
             f"The application model ({'confirmed by a person' if state['state'] == 'confirmed' else 'not confirmed yet'}):\n"
             f"{model}\n")
     system = LIFECYCLE + projects.language_rule(project) + skills.prompt(pid, cfg.get("skills", []))
-    messages = [{"role": "user", "content": "Review the document against the lifecycle of the system." + notes}]
+    # The document goes with the task, not as a second block of the system prompt: a gateway that keeps only
+    # the first block of it (with tools) left the reviewer with no document - it answered "provide the document".
+    messages = [{"role": "user", "content": f"The document:\n{document[:150_000]}\n\n"
+                                            "Review the document against the lifecycle of the system." + notes}]
     for turn in range(MAX_TURNS):
         offer = [REPORT_TOOL] if turn == MAX_TURNS - 1 else tools
-        reply = await llm.chat(cfg, system=system, context=f"{head}\nThe document:\n{document[:150_000]}",
-                               messages=messages, tools=offer, max_tokens=16000, project_id=pid,
-                               stage_name="requirements", stream=True, timeout=WAIT)
+        reply = await llm.chat(cfg, system=system, context=head, messages=messages, tools=offer, max_tokens=16000,
+                               project_id=pid, stage_name="requirements", stream=True, timeout=WAIT, cache_all=True)
         messages.append({"role": "assistant", "content": reply.content})
         if reply.stop == "refusal":
             raise RuntimeError("Модель отказалась проверять документ")

@@ -284,7 +284,7 @@ def build(backend: Backend | None = None) -> FastMCP:
         t = _test(test, project)
         p = projects.get(t["project_id"]) or {"name": "", "pipeline": projects.normalize_pipeline(None)}
         if format == "gherkin":
-            return exporters.to_gherkin(t | {"project": p.get("name", "")}, p.get("language", ""))
+            return exporters.to_gherkin(t | {"project": p.get("name", "")}, projects.language(p))
         if format == "api":
             return exporters.to_api_tests(t, traffic.load(t["project_id"], t["id"]))
         return exporters.to_playwright(t, p["pipeline"]["run"]["a11y_impact"])

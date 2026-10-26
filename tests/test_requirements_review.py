@@ -96,7 +96,11 @@ def test_the_reviewer_works_on_a_clean_context_with_the_lifecycle(fake_llm):
 
     [(_, kw)] = [c for c in fake_llm.calls if c[0] == "create"]
     # A clean conversation: one task, the document and the model - nothing else of the studio.
-    assert kw["messages"] == [{"role": "user", "content": "Review the document against the lifecycle of the system."}]
+    [task] = kw["messages"]
+    # the document goes with the task: a gateway keeping only the first block of the system prompt does not lose it
+    assert task["role"] == "user" and task["content"] == (f"The document:\n{SPEC}\n\n"
+                                                          "Review the document against the lifecycle of the system.")
+    assert "Write in the language of the document" in dump(kw["system"])
     sent = dump(kw)
     assert "Менеджер редактирует отправленный заказ" in sent and "отправленный не меняется" in sent
     assert "independent reviewer of requirements" in sent
