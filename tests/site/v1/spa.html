@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Одностраничное приложение</title>
+<link rel="icon" href="data:,"></head>
+<body>
+<header>
+  <nav>
+    <button data-tab="orders">Заказы</button>
+    <button data-tab="goods">Товары</button>
+    <button data-tab="save">Сохранить</button>
+    <button id="profile">Профиль</button>
+    <a href="#/help">Справка</a>
+  </nav>
+</header>
+<main id="screen"><h1>Главная</h1><p>Выберите раздел.</p></main>
+<script>
+  const screen = document.getElementById('screen');
+  const show = html => { screen.innerHTML = html; };
+  const SCREENS = {
+    orders: '<h1>Заказы</h1><p>Список заказов: номер, статус, сумма.</p>',
+    goods: '<h1>Товары</h1><form><label>Название <input name="title" required></label><button>Найти</button></form>',
+    save: '<h1>Сохранено</h1><p>Изменения сохранены.</p>',
+  };
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => show(SCREENS[b.dataset.tab]));
+  document.getElementById('profile').onclick = () => { location.hash = '#/profile'; };
+  const route = () => {
+    if (location.hash === '#/help') show('<h1>Справка</h1><p>Как работать с заказами и товарами.</p>');
+    else if (location.hash === '#/profile') show('<h1>Профиль</h1><p>Имя и почта покупателя.</p>');
+  };
+  window.addEventListener('hashchange', route);
+  route();
+</script>
+</body>
+</html>

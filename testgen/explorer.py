@@ -8,10 +8,13 @@ pipeline (authoring, runs, publishing) works as with a Jira ticket.
 
 Only the given page and its child pages are explored: links of the same site
 whose path lies under the start path (/catalog -> /catalog/42, not /admin); from
-the site root that is the whole site. It only ever follows <a href> links with GET: no clicks, no
-form submissions, and links that look like they change state (log out, delete,
-unsubscribe...) or download files are skipped - the same "no irreversible
-actions" rule the authoring agent follows. To explore behind a login, a saved test is
+the site root that is the whole site. It follows <a href> links with GET, hash routes of single-page
+apps (#/orders) included, and clicks only the tabs and menu buttons of a page
+(role=tab, data-tab, buttons in nav - TABS_JS): a click that changes the address
+queues it, one that only changes the page is recorded as a view of that page.
+No form submissions, no other clicks; links and tabs that look like they change
+state (log out, delete, save, send, pay...) or download files are skipped - the
+same "no irreversible actions" rule the authoring agent follows. To explore behind a login, a saved test is
 replayed first: the one named in explore.login_test, otherwise the project's login test
 (the role "login", «Сделать тестом входа»). A map of one or two pages with a login form
 and no login test says so (`login_wall`, LOGIN_WALL): the application is behind a login.
@@ -33,7 +36,13 @@ from .steps import needs_element, perform
 
 SKIP = re.compile(r"log-?out|sign-?out|выход|выйти|delete|remove|destroy|удал|unsubscribe|отпис|"
                   r"deactivat|\.(pdf|zip|rar|7z|exe|msi|dmg|docx?|xlsx?|pptx?|csv|mp4|mp3)(\?|$)", re.I)
+# A tab or menu button whose label says it acts rather than shows: never clicked.
+UNSAFE = re.compile(SKIP.pattern + r"|сохран|отправ|оплат|купить|заказать|подтверд|запуст|начать|генерир|импорт|экспорт|"
+                    r"созда|добав|принять|отклон|\b(save|submit|send|pay|buy|checkout|confirm|run|start|create|add|"
+                    r"import|export|accept|reject|approve)\b", re.I)
 MAX_REQUIREMENTS = 60_000
+TEXT_PER_PAGE = 3000       # of a page's text in the requirements: a help page or a long form says what the app does
+MAX_VIEWS = 15             # tabs clicked per page
 MAP_TITLE = "# Карта приложения"
 LOGIN_WALL = ("Приложение за входом: запишите тест входа в Studio и отметьте «Сделать тестом входа» "
               "(«Тесты → Ещё ▾»), затем исследуйте сайт ещё раз")
@@ -107,17 +116,50 @@ PAGE_JS = r"""() => {
   const links = [...document.querySelectorAll('a[href]')].filter(visible)
     .map(a => ({href: a.href, text: clean(a.innerText || a.getAttribute('aria-label')).slice(0, 60)}))
     .filter(l => /^https?:/.test(l.href));
-  return {title: document.title, headings: [...document.querySelectorAll('h1, h2')].filter(visible)
-      .map(h => clean(h.innerText)).filter(Boolean).slice(0, 10),
-    forms, buttons: [...new Set(buttons)].slice(0, 20), links: links.slice(0, 150),
-    text: clean(document.body ? document.body.innerText : '').slice(0, 600)};
+  return {title: document.title, headings: [...document.querySelectorAll('h1, h2, h3')].filter(visible)
+      .map(h => clean(h.innerText)).filter(Boolean).slice(0, 40),
+    forms, buttons: [...new Set(buttons)].slice(0, 40), links: links.slice(0, 150),
+    text: clean(document.body ? document.body.innerText : '').slice(0, 6000)};
+}"""
+
+# Tabs and menu buttons of the page (single-page apps switch screens with them, not with links): each gets
+# data-tg-nav="<n>" to be clicked by; their labels in that order. A link with a real address is crawled as a link,
+# a control inside a form or with a label that acts (UNSAFE) is never clicked.
+TABS_JS = r"""([unsafe, max]) => {
+  const re = new RegExp(unsafe, 'i');
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  const visible = el => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el);
+    return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none'; };
+  const SEL = '[role=tab], [data-tab], [role=tablist] button, nav button, [role=navigation] button, [role=menubar] [role=menuitem]';
+  document.querySelectorAll('[data-tg-nav]').forEach(e => e.removeAttribute('data-tg-nav'));
+  const out = [], seen = new Set();
+  for (const el of document.querySelectorAll(SEL)) {
+    if (out.length >= max) break;
+    if (!visible(el) || el.closest('form') || el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+    if (el.matches('a[href]') && !/^(#|javascript:)/i.test(el.getAttribute('href'))) continue;
+    const label = clean(el.innerText || el.getAttribute('aria-label') || el.title).slice(0, 60);
+    if (!label || re.test(label) || seen.has(label)) continue;
+    seen.add(label);
+    el.setAttribute('data-tg-nav', String(out.length));
+    out.push(label);
+  }
+  return out;
 }"""
 
 
 def _norm(url: str) -> str:
-    url = urldefrag(url)[0]
+    """The address of a page: without the trailing slash and the anchor; a hash route of a single-page app
+    (#/orders, #!/orders) is a page of its own and stays."""
+    url, frag = urldefrag(url)
     u = urlparse(url)
-    return u._replace(path=u.path.rstrip("/") or "/").geturl()
+    url = u._replace(path=u.path.rstrip("/") or "/").geturl()
+    return f"{url}#{frag}" if frag.startswith(("/", "!/")) else url
+
+
+def _where(url: str) -> str:
+    """The path of a page with its hash route: /, /guide, /#/p/1/tests."""
+    u = urlparse(_norm(url))
+    return (u.path or "/") + (f"#{u.fragment}" if u.fragment else "")
 
 
 def _same_site(url: str, start: str) -> bool:
@@ -193,6 +235,53 @@ async def learn_model(project: dict, result: dict, log=None) -> None:
             log(f"Модель приложения не обновлена: {llm.api_error_text(e)}")
 
 
+async def _views(bs: BrowserSession, page: dict, result: dict, queue: list, seen: set, cfg: dict, log=None) -> None:
+    """The tabs and menu buttons of `page` (TABS_JS), each clicked on the page as it opened: a click that moves to
+    another address of the site queues it, one that only changes the page is recorded as its view ("view" - the
+    label). A view that shows what a page or a view of the map shows already (the same tab of the menu every screen
+    has) is not recorded."""
+    base, depth = page["url"], page["depth"]
+    try:
+        labels = await bs.page.evaluate(TABS_JS, [UNSAFE.pattern, MAX_VIEWS])
+    except Exception:
+        return
+    shown = {p.get("text") for p in result["pages"]}
+    for n, label in enumerate(labels):
+        if len(result["pages"]) >= cfg["max_pages"]:
+            break
+        try:
+            if n:       # back to the page as it opened: the tab is found again by its label
+                if _norm(bs.url) == base:       # the same address (a hash route too): goto would not load it again
+                    await bs.page.reload(wait_until="domcontentloaded", timeout=30000)
+                else:
+                    await bs.page.goto(base, wait_until="domcontentloaded", timeout=30000)
+                await bs.settle()
+                again = await bs.page.evaluate(TABS_JS, [UNSAFE.pattern, MAX_VIEWS])
+                if label not in again:
+                    continue
+                n = again.index(label)
+            await bs.page.locator(f'[data-tg-nav="{n}"]').first.click(timeout=5000)
+            await bs.settle()
+            url = _norm(bs.url)
+            if url != base:
+                if url not in seen and _in_scope(url, result["start"]) and not SKIP.search(url):
+                    queue.append((url, depth + 1))
+                continue
+            view = await bs.page.evaluate(PAGE_JS)
+        except Exception:
+            continue
+        if view.get("text") in shown:
+            continue
+        shown.add(view.get("text"))
+        result["pages"].append(view | {"url": base, "view": label, "depth": depth + 1, "status": page.get("status")})
+        if log:
+            log(f"Страница {len(result['pages'])}: {page.get('title') or base} › {label}")
+        if depth + 1 < cfg["max_depth"]:
+            for a in view.get("links", []):
+                if not SKIP.search(a["text"]) and _norm(a["href"]) not in seen:
+                    queue.append((a["href"], depth + 2))
+
+
 async def explore(project: dict, url: str = "", log=None, state: dict | None = None, learn: bool = False) -> dict:
     """Crawl the start page and its child pages -> the map (also saved as the project's latest map). `learn`: then the
     application model learns from it (learn_model)."""
@@ -242,6 +331,8 @@ async def explore(project: dict, url: str = "", log=None, state: dict | None = N
                         result["skipped"] += 1
                     elif _norm(a["href"]) not in seen:
                         queue.append((a["href"], depth + 1))
+                if not page.get("error"):
+                    await _views(bs, page, result, queue, seen, cfg, log)
             else:
                 deeper = {_norm(a["href"]) for a in page.get("links", []) if not SKIP.search(a["text"])
                           and _in_scope(_norm(a["href"]), start)}
@@ -321,7 +412,12 @@ def to_requirements(result: dict) -> str:
     out = [f"{MAP_TITLE} {result['start']}",
            "Требования восстановлены автоматическим обходом интерфейса (Planner), ТЗ нет. Ожидаемое поведение "
            "выводи из интерфейса и общепринятых правил для таких страниц и форм; не придумывай функции, которых "
-           "на страницах нет. Сценарии не должны выполнять необратимых действий (оплата, удаление, отправка).",
+           "на страницах нет. То, что на них есть, проверяй всегда, даже если карта короткая: открывается каждая "
+           "страница и вкладка, работают меню и ссылки, раскрываются блоки и окна, форма не принимает пустые "
+           "обязательные поля и неверный формат. Значения списков, названия записей и тексты в таблицах — данные "
+           "стенда, а не функции: сценарии не опираются на них. Текст справки или описания продукта на страницах "
+           "описывает функции приложения. Сценарии не должны выполнять необратимых действий (оплата, удаление, "
+           "отправка).",
            "У полей форм указано то, что объявляет страница: обязательность, длина, формат, диапазон, подсказки и "
            "тексты ошибок, уже заложенные в разметку. Чего страница не объявляет (правила сервера, тексты ошибок, "
            "которые появляются только после отправки, переходы), обходом не узнать: негативный сценарий проверяет, "
@@ -329,8 +425,8 @@ def to_requirements(result: dict) -> str:
     for p in result["pages"]:
         if p.get("error"):
             continue
-        path = urlparse(p["url"]).path or "/"
-        block = [f"\n## {p.get('title') or path} — {path}"]
+        path = _where(p["url"])
+        block = [f"\n## {p.get('title') or path} — {path}" + (f" › вкладка «{p['view']}»" if p.get("view") else "")]
         if p.get("headings"):
             block.append("Заголовки: " + " · ".join(p["headings"]))
         for f in p.get("forms") or []:
@@ -342,12 +438,12 @@ def to_requirements(result: dict) -> str:
                          + (f"; сообщения формы: {_quoted(f['errors'])}" if f.get("errors") else ""))
         if p.get("buttons"):
             block.append("Кнопки: " + ", ".join(p["buttons"]))
-        targets = sorted({urlparse(a["href"]).path or "/" for a in p.get("links", [])
+        targets = sorted({_where(a["href"]) for a in p.get("links", [])
                           if _in_scope(a["href"], result["start"])} - {path})
         if targets:
             block.append("Ссылки на: " + ", ".join(targets[:30]))
         if p.get("text"):
-            block.append(f"Текст: {p['text'][:400]}")
+            block.append(f"Текст: {p['text'][:TEXT_PER_PAGE]}")
         out.append("\n".join(block))
     return "\n".join(out)[:MAX_REQUIREMENTS]
 
@@ -391,7 +487,7 @@ def coverage(pid: str) -> dict | None:
     if not m:
         return None
     tests = [(t["name"], _paths_of(t)) for t in storage.all_tests(pid)]
-    live = [p for p in m["pages"] if not p.get("error")]
+    live = [p for p in m["pages"] if not p.get("error") and not p.get("view")]     # a view is a state of its page
     titles = [p.get("title") or "" for p in live]
     # the site name repeated on every page says nothing about the page itself
     common = max(set(titles), key=titles.count) if titles else ""
@@ -400,7 +496,7 @@ def coverage(pid: str) -> dict | None:
     for p in live:
         path = urlparse(p["url"]).path.rstrip("/") or "/"
         by = [name for name, paths in tests if path in paths]
-        pages.append({"url": p["url"], "path": path, "title": p.get("title", ""), "tests": by,
+        pages.append({"url": p["url"], "path": _where(p["url"]), "title": p.get("title", ""), "tests": by,
                       "forms": len(p.get("forms") or []), "summary": summary(p, common)})
     return {"at": m["at"], "start": m["start"], "pages": pages, "total": len(pages),
             "covered": sum(bool(p["tests"]) for p in pages), "site_title": common}
