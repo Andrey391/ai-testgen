@@ -113,9 +113,8 @@ def test_usage_scopes_nest():
 
 def test_own_gateway_gets_the_key_as_bearer_too():
     from testgen import llm
-    headers = llm.make_client("sk-test", "https://gw.example").auth_headers
+    headers = llm.make_client("sk-test", "https://gw.example").default_headers     # what every request carries
     assert headers["X-Api-Key"] == "sk-test" and headers["Authorization"] == "Bearer sk-test"
-
 
 def test_model_comes_from_the_project_settings():
     from types import SimpleNamespace

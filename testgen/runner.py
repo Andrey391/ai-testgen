@@ -298,7 +298,11 @@ async def run_steps(bs: BrowserSession, owner: dict, steps: list[dict], cfg: dic
             try:
                 res["screenshot"] = await bs.screenshot_b64()
             except Exception:
-                res["screenshot"] = ""
+                try:        # the step started a navigation (a login button): the page is shot once it has loaded
+                    await bs.settle()
+                    res["screenshot"] = await bs.screenshot_b64()
+                except Exception:
+                    res["screenshot"] = ""
             if run_dir and res["screenshot"]:
                 res["shot"] = f"{prefix}{step['id']}.jpg"
                 (run_dir / res["shot"]).write_bytes(base64.b64decode(res["screenshot"]))

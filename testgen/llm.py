@@ -81,9 +81,10 @@ def usd_rub() -> float:
 def make_client(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
     """Empty values fall back to the SDK's environment (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL).
     A gateway of the project's own (base_url) gets the key both as x-api-key and as
-    "Authorization: Bearer": many gateways with the Messages API accept only the latter."""
-    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None,
-                                    auth_token=(api_key or None) if base_url else None)
+    "Authorization: Bearer": many gateways with the Messages API accept only the latter. Both go as headers of
+    the client: the SDK takes only one of api_key and auth_token (2.x refuses both) and sends each its own way."""
+    both = {"X-Api-Key": api_key, "Authorization": f"Bearer {api_key}"} if api_key and base_url else None
+    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None, default_headers=both)
 
 
 _clients: dict[tuple, anthropic.AsyncAnthropic] = {}

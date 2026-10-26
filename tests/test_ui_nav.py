@@ -122,8 +122,8 @@ def test_reload_keeps_the_screen(page, studio_url, project, save_test):
     expect(page.locator("#testBox")).to_contain_text("Тест с адресом")
 
     page.click("nav button[data-tab=proj]")
-    page.locator(".subnav button[data-sub=process]").click()
-    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/settings/process")
+    page.locator(".subnav button[data-sub=process]:not([data-sec])").click()     # the section, not a node of its tree
+    expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/settings/process/overview")    # opens on its overview
     page.reload()
     expect(page.locator("[data-subpanel=process]")).to_be_visible()
     assert page.errors == []
