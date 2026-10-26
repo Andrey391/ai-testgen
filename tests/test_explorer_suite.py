@@ -184,7 +184,8 @@ def test_cli_exit_codes_and_junit(stand, project, save_test, tmp_path):
 
 
 def test_pipeline_job_explores_when_there_is_no_spec(stand, project, fake_llm):
-    """Planner as a source: the map goes to scenario design (the fake designs nothing, which is enough here)."""
+    """Planner as a source: the map goes to scenario design. The fake designs nothing: the run stops and says the
+    map was too poor for scenarios, not "done" with nothing."""
     from fakes import Resp
     from testgen.scenarios import ScenarioPlan
 
@@ -196,6 +197,6 @@ def test_pipeline_job_explores_when_there_is_no_spec(stand, project, fake_llm):
     fake_llm.script = script
     job = pipeline.Job(project, [], "", stand.url, {}, explore=True)
     arun(job.run())
-    assert job.status == "done", job.error
+    assert job.status == "error" and "сценариев не получилось" in job.error and "Карта сайта: страниц" in job.error
     assert job.requirements[0]["source"] == "Planner"
     assert "Карта приложения" in seen["context"] and "/form.html" in seen["context"]
