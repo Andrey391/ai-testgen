@@ -57,6 +57,14 @@ def _strip(results: list[dict]) -> list[dict]:
     return [{k: v for k, v in r.items() if k != "screenshot"} for r in results]
 
 
+def shown(run: dict) -> dict:
+    """The run as whoever polls it sees it: its outcome is known a moment before finish() records it in the test and
+    the history - until then the run is still going, so the list of tests read after it shows the run."""
+    if run.get("status") != "running" and not run.get("finished") and run.get("id") in LIVE:
+        return run | {"status": "running"}
+    return run
+
+
 def public(run: dict) -> dict:
     return run | {"results": _strip(run.get("results") or []),
                   "attempts": [a | {"results": _strip(a.get("results") or [])} for a in run.get("attempts") or []]}

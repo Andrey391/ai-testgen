@@ -174,7 +174,10 @@ def test_missing_or_foreign_address_says_not_found(page, studio_url, project, sa
 def test_old_notification_links_open_the_screen(page, studio_url, project, save_test):
     t = save_test("Из уведомления", [new_step("navigate", "open", project["base_url"])])
     page.goto(f"{studio_url}/#test={t['id']}")
-    expect(page.locator("#testBox h3")).to_have_text("Из уведомления")
+    # an old link goes the whole way of the start (login, projects, the test, its project, the list) - as _open, the
+    # check waits for it: on a loaded CI it took longer than the 5 s of one expect
+    page.wait_for_load_state("networkidle")
+    expect(page.locator("#testBox h3")).to_have_text("Из уведомления", timeout=15000)
     expect(page).to_have_url(f"{studio_url}/#/p/{project['id']}/tests/{t['id']}")
     assert page.errors == []
 
