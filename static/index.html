@@ -1138,8 +1138,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <label>Название</label><input id="pName">
           <label>Описание</label><textarea id="pDesc" rows="2"></textarea>
           <label>URL приложения по умолчанию</label><input id="pUrl" placeholder="https://staging.example.com">
-          <label>Язык шагов, сценариев и Gherkin</label>
-          <select id="pLang"><option value="">как написан сценарий / требования</option><option value="ru">русский (Gherkin: Дано / Когда / Тогда)</option><option value="en">английский</option></select>
+          <label>Язык текстов ИИ и Gherkin</label>
+          <select id="pLang"><option value="ru">русский (Gherkin: Дано / Когда / Тогда)</option><option value="en">английский</option></select>
+          <div class="hint">На этом языке ИИ пишет всё: замечания ревьюера, сценарии, шаги тестов, разбор падений.</div>
           <div class="hint">Учётные записи тестируемого приложения и их привязка к ролям — в <a href="#" onclick="showSub('data', 'accounts'); return false">«Тестовые данные → Учётные записи»</a>.</div>
           <div class="row" style="margin-top:10px"><span class="muted grow" id="pMsg"></span>
             <button class="btn primary" id="pSave">Сохранить</button></div>
@@ -6511,7 +6512,7 @@ $('#ssoSave').onclick = async () => {
 function loadSettings() {
   if (!PROJ) return;
   $('#pName').value = PROJ.name; $('#pDesc').value = PROJ.description || ''; $('#pUrl').value = PROJ.base_url || '';
-  $('#pLang').value = PROJ.language || '';
+  $('#pLang').value = PROJ.language || 'ru';
   renderAccounts();
   const mb = PROJ.mailbox || {};
   $('#mbKind').value = mb.kind || ''; $('#mbUrl').value = mb.url || ''; $('#mbHost').value = mb.host || '';

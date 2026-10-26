@@ -2021,7 +2021,7 @@ async def export(tid: str, format: str = "playwright", testit: bool = False):
     p = projects.get(t["project_id"]) or {"pipeline": projects.normalize_pipeline(None)}
     name = "".join(c if c.isalnum() else "_" for c in t["name"]).lower()
     if format == "gherkin":
-        text, fname = exporters.to_gherkin(t | {"project": p.get("name", "")}, p.get("language", "")), f"{name}.feature"
+        text, fname = exporters.to_gherkin(t | {"project": p.get("name", "")}, projects.language(p)), f"{name}.feature"
     elif format == "api":
         text, fname = exporters.to_api_tests(t, traffic.load(t["project_id"], tid)), f"test_{name}_api.py"
     elif format == "har":

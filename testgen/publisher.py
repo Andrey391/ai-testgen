@@ -27,7 +27,7 @@ import time
 
 from pydantic import BaseModel
 
-from . import exporters, llm, mcp_hub, skills, testit
+from . import exporters, llm, mcp_hub, projects, skills, testit
 from .providers.base import check_call
 
 MAX_TURNS = 30
@@ -137,7 +137,7 @@ def _test_payload(test: dict) -> dict:
         "source": test.get("source", ""), "tags": test.get("tags") or [],
         "steps": [{"n": i + 1, "action": s["action"], "description": s["description"],
                    "value": s.get("value", "")} for i, s in enumerate(test["steps"])],
-        "gherkin": exporters.to_gherkin(test),
+        "gherkin": exporters.to_gherkin(test, test.get("language") or projects.DEFAULT_LANGUAGE),
     }
 
 
@@ -149,7 +149,7 @@ async def _agent(project: dict, conn: dict, stage_cfg: dict, skill_names: list[s
             raise PublishError(toolbox.errors[0])
         if not toolbox.tools:
             raise PublishError(f"У подключения «{conn['name']}» нет подходящих инструментов")
-        system = system + skills.prompt(project["id"], skill_names)
+        system = system + projects.language_rule(project) + skills.prompt(project["id"], skill_names)
         messages = [{"role": "user", "content": task}]
         tools = toolbox.tools + [final]
         for _ in range(MAX_TURNS):

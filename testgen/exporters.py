@@ -740,7 +740,7 @@ def bundle(project: dict, tests: list[dict], a11y_impact: str = "serious",
         out[f"tests/test_{name}.py"] = "\n".join(
             _header(f"Test: {t['name']}", scenario) + _imports(needs, code) + ["", ""]
             + ["\n\n".join(blocks) + ("\n\n" if blocks else "") + fn])
-        out[f"features/{name}.feature"] = to_gherkin(t | {"project": project.get("name", "")}, project.get("language", ""))
+        out[f"features/{name}.feature"] = to_gherkin(t | {"project": project.get("name", "")}, project.get("language") or "ru")
     shared_helpers = _helpers_code(ctx) if login else ""
     login_all = "\n\n".join(b for b in (shared_helpers, "\n\n".join(c for _, c in ctx.modules.values()), login_code) if b)
     out["conftest.py"] = conftest(app_url, login_all, login_needs)
