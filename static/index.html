@@ -4504,14 +4504,13 @@ function lcTabHtml(r, busy) {
   const rv = AN.review;
   if (!rv) return lockBox('Сначала требования должны быть проверены ревьюером — шаг 1.');
   const err = rv.errors?.[LC_CHECK], ts = rv.themes.filter(lcTheme), left = ts.filter(themeLeft);
-  const todo = rv.themes.filter(t => t.status === 'todo');
   let html = '';
   if (err) html += `<div class="box bad"><div class="row"><b class="grow">Сверка с жизненным циклом системы не выполнена</b>
       <button class="btn primary small" onclick="recheckLifecycle(this)" ${busy ? 'disabled' : ''}>Повторить сверку</button></div>
       <div class="hint">${esc(err)}. Замечания к документу и решения по ним сохранятся.</div></div>`;
   else if (rv.lifecycle) html += lifecycleHtml(rv.lifecycle, true);
-  if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: без ответа ${left.filter(t => t.status === 'open').length} из ${ts.length}${todo.length ? `, ждут исправления в ТЗ: ${todo.length}` : ''}</b>
-      ${todo.length ? `<button class="btn primary small" onclick="fixFindings(this)" ${busy ? 'disabled' : ''} title="Агент внесёт ответы в ТЗ; прежний текст сохранится">Исправить ТЗ агентом (${todo.length})</button>` : ''}</div>
+  if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: ${leftLine(ts)}</b>
+      ${fixButton(rv, ts, busy)}</div>
       <div class="hint">Ответьте, как должно быть, и сохраните ответ — агент исправит ТЗ; или отметьте неактуальным. Ответы аналитика одним текстом агент разнесёт сам.</div>
       ${settleTools(rv, 'lc', busy)}${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
     ${left.map(t => themeCard(rv, t, true)).join('')}`;
@@ -4764,13 +4763,25 @@ function reviewHtml(rv, st) {
     + `<details class="opt"><summary>Подробности проверки${v ? ` — ${v.score}/100` : ''}</summary>
       ${v ? validationHtml(v, true) : ''}${rv.lifecycle ? lifecycleHtml(rv.lifecycle, true) : ''}</details>`;
 }
+// What is left of the themes of a step: the counts are of these themes only, as the step's caption counts them.
+function leftLine(ts) {
+  const n = st => ts.filter(t => t.status === st).length;
+  return `осталось ${ts.filter(themeLeft).length} из ${ts.length}: без ответа ${n('open')}, ждут исправления в ТЗ ${n('todo')}`
+    + (n('fixed') ? `, исправлено ${n('fixed')}` : '') + (n('dismissed') ? `, не актуально ${n('dismissed')}` : '');
+}
+// «Исправить ТЗ агентом» fixes every answered theme of the analysis: the themes of the other step are named apart.
+function fixButton(rv, ts, busy, id = '') {
+  const all = rv.themes.filter(t => t.status === 'todo').length, here = ts.filter(t => t.status === 'todo').length;
+  const other = all - here, where = ts.some(lcTheme) ? 'замечаний к документу (шаг 2)' : 'расхождений жизненного цикла (шаг 3)';
+  if (!all) return id ? `<button class="btn primary small" id="${id}" disabled title="Сначала ответьте на замечания ниже">Исправить ТЗ агентом</button>` : '';
+  return `<button class="btn primary small" ${id ? `id="${id}"` : ''} onclick="fixFindings(this)" ${busy ? 'disabled' : ''}
+    title="Агент внесёт ответы в ТЗ; прежний текст сохранится${other ? `. Вместе с ними — ${other} ${where}` : ''}">Исправить ТЗ агентом (${all})</button>`;
+}
 // Step 2 at work: what is left to settle on the document, the tools to settle it, the list of themes `ts`.
 function findingsWork(rv, ts, busy) {
   const block = ts.filter(t => t.blocking), quality = ts.filter(t => !t.blocking);
-  const blockOpen = block.filter(t => t.status === 'open'), todo = rv.themes.filter(t => t.status === 'todo');
   return versionBox(busy) + `<div class="box next">
-      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: без ответа ${blockOpen.length} из ${block.length}${todo.length ? `, ждут исправления в ТЗ: ${todo.length}` : ''}</b>
-        <button class="btn primary small" id="fixBtn" onclick="fixFindings(this)" ${busy || !todo.length ? 'disabled' : ''} title="${todo.length ? 'Агент внесёт ответы в ТЗ; прежний текст сохранится' : 'Сначала ответьте на замечания ниже'}">Исправить ТЗ агентом${todo.length ? ` (${todo.length})` : ''}</button></div>
+      <div class="row" style="gap:6px"><b class="grow">Блокируют тест-дизайн: ${leftLine(block)}</b>${fixButton(rv, ts, busy, 'fixBtn')}</div>
       <div class="hint">Ответьте, как должно быть, и сохраните ответ — замечание будет ждать исправления в ТЗ; или отметьте неактуальным. Похожие замечания собраны в темы: один ответ на тему.${quality.length ? ` Качество документа (${quality.length}) — не обязательно.` : ''}</div>
       ${settleTools(rv, 'doc', busy)}
       ${FIX_MSG ? `<div class="hint">${esc(FIX_MSG)}</div>` : ''}</div>
