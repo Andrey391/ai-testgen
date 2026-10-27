@@ -2112,7 +2112,7 @@ def run_or_404(rid: str) -> dict:
 @app.get("/api/runs/{rid}")
 async def get_run(rid: str):
     # Screenshots stay on the server as files: the UI polls this every second.
-    return runs.public(run_or_404(rid))
+    return runs.public(runs.shown(run_or_404(rid)))
 
 
 @app.post("/api/runs/{rid}/retry")

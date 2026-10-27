@@ -227,13 +227,13 @@ def build(backend: Backend | None = None) -> FastMCP:
         from .worker import start_run
         start_run(p, t, run, backend.submit, trigger="mcp", user=_user())
         rid = run["id"]
-        await _until(lambda: (runs.get(rid) or {}).get("status") != "running", wait_seconds)
+        await _until(lambda: runs.shown(runs.get(rid) or {}).get("status") != "running", wait_seconds)
         return _run_summary(runs.get(rid) or run, backend)
 
     @mcp.tool(description="A run by id: status, steps, analysis, browser events, trace link.")
     async def get_run(run_id: str, wait_seconds: int = 0) -> dict:
         _run(run_id)
-        await _until(lambda: (runs.get(run_id) or {}).get("status") != "running", wait_seconds)
+        await _until(lambda: runs.shown(runs.get(run_id) or {}).get("status") != "running", wait_seconds)
         run = _run(run_id)
         if not run:
             raise ValueError("Прогон не найден")
