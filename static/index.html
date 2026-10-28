@@ -1328,6 +1328,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
             <label class="inline"><input type="checkbox" data-p="requirements.validate"> Конвейер проверяет новые требования ревьюером перед проектированием сценариев</label>
             <label class="inline"><input type="checkbox" data-p="requirements.learn_model"> Обновлять модель приложения из требований: сущности, зависимости, жизненный цикл, роли и их возможности; тестовые данные сценариев («Проект → Тестовые данные»)</label>
             <label class="inline"><input type="checkbox" data-p="requirements.confirm_model"> Генерировать тесты только по подтверждённому жизненному циклу системы: конвейер ждёт подтверждения модели</label>
+            <label class="inline"><input type="checkbox" data-p="requirements.recheck_after_fix"> Проверять ТЗ заново после исправления агентом: тест-дизайн ждёт повторной проверки исправленного текста</label>
             <label class="inline"><input type="checkbox" data-p="requirements.preflight"> Проверять сценарий перед тестом: у его роли заведена учётная запись, сценарий не нарушает ограничения ролей и жизненный цикл сущностей (иначе тест не запускается)</label>
           </div>
           <label>Скиллы проверки ТЗ</label>
@@ -4240,7 +4241,9 @@ const scTypes = () => Object.fromEntries(Object.entries(PROJ.catalog.types).map(
 const scType = k => PROJ.catalog.types[k]?.label || k;
 const layerBadge = s => s.layer === 'api' ? '<span class="badge" title="Тест API (бэкенд)">API</span> ' : '';
 const SC_PRIOS = {high: 'высокий', medium: 'средний', low: 'низкий'};
-const SC_FIELDS = ['title', 'type', 'layer', 'priority', 'role', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
+const SC_FIELDS = ['title', 'type', 'layer', 'priority', 'role', 'req_ids', 'preconditions', 'instructions', 'expected_result', 'gherkin'];
+// The ids of the requirements a scenario checks: a list from the server, the text of the field while edited.
+const scReqs = s => Array.isArray(s.req_ids) ? s.req_ids.join(', ') : String(s.req_ids || '');
 // A scenario similar to an earlier test or scenario (reuse.py): a person decides what to do with it.
 const REUSE_DECISIONS = {new: 'Создать новый тест', reuse: 'Переиспользовать прежний', refine: 'Доработать прежний'};
 const REUSE_RELATION = {same: 'проверяет то же', refine: 'можно доработать'};
@@ -4401,7 +4404,7 @@ function stepTabs(r, tab, busy) {
   const block = ts.filter(t => !lcTheme(t) && t.blocking), blockLeft = block.filter(themeLeft);
   const tests = SCEN.reduce((k, s) => k + (s.tests || []).length, 0);
   const cap = {
-    review: busy && AN.work === 'fix' ? 'исправляется агентом…' : busy && AN.work === 'review' ? 'проверка идёт…' : !rv ? 'не проверены' : !r.done.review ? 'проверка не завершена'
+    review: busy && AN.work === 'fix' ? 'исправляется агентом…' : busy && AN.work === 'review' ? 'проверка идёт…' : !rv ? 'не проверены' : r.recheck ? 'исправлены — проверьте заново' : !r.done.review ? 'проверка не завершена'
       : `проверены${(AN.revisions || []).length ? `, исправлены: ${AN.revisions.length}` : ''}`,
     findings: !r.done.review ? '—' : !block.length ? 'блокирующих нет' : blockLeft.length ? `осталось ${blockLeft.length} из ${block.length}` : `разобраны: ${block.length}`,
     lifecycle: !rv ? '—' : r.done.lifecycle ? 'подтверждён' : rv.errors?.[LC_CHECK] ? 'сверка не выполнена'
@@ -4425,6 +4428,8 @@ function pathHtml(r) {
     ['Ревьюер проверил ТЗ', r.done.review, r.done.review ? '' : 'шаг 1'],
     ['Ответить на блокирующие замечания и расхождения или отметить «Не актуально»', !open, open ? `осталось ${open} — шаги 2 и 3` : ''],
     ['«Исправить ТЗ агентом»: ответы вносятся в текст ТЗ', !open && !todo, todo ? `ждут исправления: ${todo}` : ''],
+    ...((AN.revisions || []).length && (PROJ.pipeline?.requirements?.recheck_after_fix ?? true)
+      ? [['«Проверить заново» исправленное ТЗ', !r.recheck && !todo, r.recheck ? 'шаг 1' : '']] : []),
     ...(r.learn ? [['Модель приложения учится на ТЗ — сама, когда всё разобрано', r.learned, ''],
                    ['Разобрать обновления модели из этого ТЗ', r.learned && !(r.updates || []).length,
                     (r.updates || []).length ? `ждут решения: ${r.updates.length} — шаг 3` : '']] : []),
@@ -4461,6 +4466,9 @@ function reqTabHtml(r, busy) {
   else if (busy && AN.work === 'review') head = '<div class="box next"><b>Ревьюер проверяет требования</b><div class="hint">Ход проверки — в карточке выше; отчёт появится здесь.</div></div>';
   else if (!rv) head = `<div class="box next"><div class="row"><b class="grow">Требования ещё не проверены ревьюером</b>
       <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить требования</button></div></div>`;
+  else if (r.recheck && !errs.length) head = `<div class="box next"><div class="row" style="gap:8px"><b class="grow">ТЗ исправлено агентом — проверьте его заново</b>
+      <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить заново</button></div>
+      <div class="hint">Исправления могли противоречить друг другу или другим требованиям. Ревьюер проверит исправленный текст и учтёт решения по прежним замечаниям; тест-дизайн начнётся после этой проверки.</div></div>`;
   else if (errs.length) head = `<div class="box bad"><div class="row"><b class="grow">Проверка документа не выполнена</b>
       <button class="btn primary small" onclick="reviewAnalysis()" ${busy ? 'disabled' : ''}>Проверить заново</button></div>
       ${errs.map(([k, e]) => `<div class="hint">«${esc(k)}»: ${esc(e)}</div>`).join('')}</div>`;
@@ -4474,12 +4482,25 @@ function reqTabHtml(r, busy) {
       ${std ? `<button class="linkbtn" onclick="reviewAnalysis('${v.suggested_standard}')" ${busy ? 'disabled' : ''}>Проверить по «${esc(std.title)}»</button> ·` : ''}
       стандарт проекта — в «Проект → Требования».</div>` : '';
   const fixes = revs.filter(x => x.kind !== 'version').length, versions = revs.length - fixes;
-  return versionBox(busy) + head + sourcesLine() + fit + `
+  return versionBox(busy) + head + defectsHtml() + sourcesLine() + fit + `
     <details class="opt" ${rv ? '' : 'open'}><summary>Текст требований${fixes ? ` · исправлен агентом: ${fixes}` : ''}${versions ? ` · новых версий: ${versions}` : ''}</summary>
       <pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${esc(AN.requirements)}</pre>
       <div class="row" style="margin-top:6px"><button class="btn small" onclick="reuseRequirements()">Вставить в поле новых требований</button>
         ${last ? `<button class="btn small" onclick="openReqHistory()" title="Исправления агентом и новые версии ТЗ: что и когда изменилось">История изменений ТЗ (${revs.length})</button>` : ''}</div></details>
     ${v ? `<details class="opt"><summary>Подробности проверки документа — ${v.score}/100${before ? ' до исправлений' : ''}</summary>${validationHtml(v, true)}</details>` : ''}`;
+}
+// Defects of the application the answers to the findings reported («сейчас X, а должно Y»): the agent wrote
+// into the requirements only how it must be; the defects themselves are for the tracker and the tests.
+function defectsHtml() {
+  const ds = AN.defects || [];
+  if (!ds.length) return '';
+  const theme = id => (AN.review?.themes || []).find(t => (t.ids || []).includes(id));
+  return `<details class="opt" open><summary>Дефекты приложения из ответов на замечания (${ds.length})</summary>
+    <div class="hint">Ответы описали, что приложение сейчас работает не так, как должно. В ТЗ записано, как должно быть; сами дефекты заведите в трекере и проверьте тестами.</div>
+    <ol style="margin:6px 0 0 18px;padding:0">${ds.map(d => {
+      const t = theme((d.items || [])[0]);
+      return `<li style="margin-top:4px"><b>Сейчас:</b> ${esc(d.problem)}${d.expected ? `<br><b>Должно:</b> ${esc(d.expected)}` : ''}${t ? ` <span class="muted">— замечание ${esc(String(t.no))}</span>` : ''}</li>`;
+    }).join('')}</ol></details>`;
 }
 // Step 2: the findings on the document (the conflicts with the lifecycle - step 3).
 function findTabHtml(r, busy) {
@@ -4572,7 +4593,16 @@ function scenTabHtml(r, busy) {
   }
   return `<div class="box next"><div class="row"><b class="grow">Требования готовы к тест-дизайну</b>
       <button class="btn primary small" onclick="toPipeline()" ${busy ? 'disabled' : ''} title="Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты">Генерировать тест-кейсы в конвейере →</button></div>
-      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div></div>` + scen;
+      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div></div>` + coverageHtml() + scen;
+}
+// Which numbered requirements of the text the scenarios check: the ones without a scenario are named.
+function coverageHtml() {
+  const c = AN.coverage;
+  if (!c?.ids?.length || !SCEN.length) return '';
+  const done = c.ids.length - c.missing.length;
+  return `<div class="box ${c.missing.length ? 'next' : 'done'}" style="margin-top:8px"><b>Покрытие требований сценариями: ${done} из ${c.ids.length}</b>
+      ${c.missing.length ? `<div class="hint">Без сценариев: ${esc(c.missing.join(', '))}. Добавьте сценарий или укажите номер требования в поле «Проверяет требования» сценария.</div>`
+        : '<div class="hint">У каждого пронумерованного требования есть хотя бы один сценарий.</div>'}</div>`;
 }
 function recheckLifecycle() {
   runWork('lifecycle', 'Сверка требований с жизненным циклом системы…', async () => {
@@ -5156,7 +5186,7 @@ function scenRow(s, i) {
   const row = `<tr class="sc-row${open ? ' open' : ''}" id="sc-row-${s.id}" data-sc="${s.id}">
     <td class="num">${i + 1}</td>
     <td><span class="sc-title">${esc(s.title || 'Без названия')}</span>${open ? '' : `<div class="hint sc-preview">${esc(s.instructions)}</div>`}${reuseHtml(s, `data-decision="${s.id}"`)}${testsHtml(s)}</td>
-    <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
+    <td>${layerBadge(s)}${esc(scType(s.type))}${roleBadge(s)}${scReqs(s) ? `<div class="hint" title="Требования, которые проверяет сценарий">${esc(scReqs(s))}</div>` : ''}</td><td>${esc(SC_PRIOS[s.priority] || s.priority)}</td>
     <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">
       ${AN.status === 'running' ? '' : `<button class="btn small" data-act="del" data-id="${s.id}" title="Удалить сценарий">✕</button>`}</div></td></tr>`;
   if (!open) return row;
@@ -5168,6 +5198,7 @@ function scenRow(s, i) {
       <div><label>Слой</label><select data-f="layer" data-id="${s.id}">${opt(PROJ.catalog.layers, s.layer || 'ui')}</select></div>
       <div><label>Приоритет</label><select data-f="priority" data-id="${s.id}">${opt(SC_PRIOS, s.priority)}</select></div>
       <div><label>Роль</label><input data-f="role" data-id="${s.id}" list="knRoleNames" value="${esc(s.role || '')}" placeholder="роль из «Тестовых данных»"></div>
+      <div><label>Проверяет требования</label><input data-f="req_ids" data-id="${s.id}" value="${esc(scReqs(s))}" placeholder="номера через запятую: M1-REQ-01, M1-REQ-03"></div>
     </div>
     <label>Предусловия</label><textarea data-f="preconditions" data-id="${s.id}" rows="2">${esc(s.preconditions)}</textarea>
     ${s.test_data?.length ? `<label>Тестовые данные (записаны в «Проект → Тестовые данные»)</label><div class="hint" style="white-space:pre-wrap;margin-top:0">${esc(scDataText(s))}</div>` : ''}

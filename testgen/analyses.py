@@ -276,7 +276,34 @@ def _fields(data: dict) -> dict:
     out["layer"] = out["layer"] if out["layer"] in LAYERS else "ui"
     out["test_data"] = data_needs(data.get("test_data"))
     out["match"] = reuse.clean(data.get("match"))     # an earlier test or scenario it repeats (reuse.py)
+    out["covers"] = str(data.get("covers") or "")[:1000]
+    out["req_ids"] = req_ids(data.get("req_ids"))
     return out
+
+
+def req_ids(value) -> list[str]:
+    """The ids of the requirements a scenario checks: distinct, as the document writes them."""
+    if isinstance(value, str):
+        value = re.split(r"[,;\s]+", value)
+    return list(dict.fromkeys(str(x).strip()[:60] for x in (value or [])[:30] if str(x).strip()))
+
+
+# A numbered requirement: a line that begins with its id - M1-REQ-01, REQ-7, ТР-12, FR.3 - and goes on.
+REQ_ID = re.compile(r"^[ \t>*#-]*([A-ZА-ЯЁ][A-ZА-ЯЁ0-9]*(?:[-_.][A-ZА-ЯЁ0-9]+)*[-_.]\d+)(?=[.:)\s])", re.M)
+
+
+def coverage(a: dict) -> dict:
+    """Which numbered requirements of the text the scenarios check (`req_ids` of the scenarios): `ids` - the
+    requirements of the text in their order, `covered` - id -> number of scenarios, `missing` - ids no scenario
+    checks. Text without numbered requirements - empty `ids`."""
+    ids = list(dict.fromkeys(REQ_ID.findall(a.get("requirements") or "")))
+    count: dict[str, int] = {}
+    for s in a.get("scenarios") or []:
+        if not s.get("pending"):
+            for r in s.get("req_ids") or []:
+                count[r] = count.get(r, 0) + 1
+    return {"ids": ids, "covered": {i: count[i] for i in ids if i in count},
+            "missing": [i for i in ids if i not in count]}
 
 
 def data_needs(value) -> list[dict]:
@@ -376,6 +403,8 @@ def clean_fields(data: dict) -> dict:
     out = {k: str(v)[:20_000] for k, v in data.items() if k in FIELDS and v is not None}
     if isinstance(data.get("test_data"), list):
         out["test_data"] = data_needs(data["test_data"])
+    if data.get("req_ids") is not None:
+        out["req_ids"] = req_ids(data["req_ids"])
     if "type" in out and out["type"] not in TYPES:
         raise ValueError("Тип сценария: " + ", ".join(TYPES))
     if "layer" in out and out["layer"] not in LAYERS:
@@ -616,6 +645,13 @@ def revise(pid: str, aid: str, result: dict, user: str = "", run: str = "") -> d
             a["requirements"] = result["requirements"][:200_000]
             a.pop("learned", None)      # the model learns the corrected text, once every finding is settled
             review.fixed(a["review"], result["fixed"], user)
+        # Defects of the application the answers reported ("сейчас X, а должно Y"): not the text of the
+        # requirements - a list of their own, for the tracker and the tests.
+        known = {d["problem"] for d in a.get("defects") or []}
+        for d in result.get("defects") or []:
+            if d["problem"] not in known:
+                known.add(d["problem"])
+                a.setdefault("defects", []).append(d | {"at": time.time(), "by": user} | ({"run": run} if run else {}))
         res = a["review"].setdefault("resolutions", {})
         for i, why in result["failed"].items():
             if i in res:
@@ -704,6 +740,12 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     errors = (rv or {}).get("errors") or {}
     if not rv:
         blocked.append("требования не проверены ревьюером")
+    # The agent fixed the text after the review: the fixed text is reviewed again (the fix may contradict itself
+    # or other requirements) - the reviewer gets the decisions on the earlier findings (review.notes).
+    recheck = bool(rv) and cfg.get("recheck_after_fix", True) and any(
+        r.get("kind") != "version" and r.get("at", 0) > (rv.get("at") or 0) for r in a.get("revisions") or [])
+    if recheck:
+        blocked.append("ТЗ исправлено агентом после проверки — проверьте его заново")
     for name, error in errors.items():
         blocked.append(f"проверка «{name}» не выполнена: {error}")
     # Counted by themes, as a person settles them: a theme of the lifecycle alone (its conflicts and questions,
@@ -739,13 +781,13 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
             blocked.append("жизненный цикл системы не подтверждён" + (f": {', '.join(todo)}" if todo else "")
                            + (f" (не хватает: {'; '.join(c['missing'])})" if c["missing"] else ""))
     # A failed check of the document holds the review back; a failed check of the lifecycle - the lifecycle.
-    done = {"review": bool(rv) and not set(errors) - {LIFECYCLE_CHECK}}
+    done = {"review": bool(rv) and not set(errors) - {LIFECYCLE_CHECK} and not recheck}
     done["findings"] = done["review"] and len(left) == len(lc_left)
     done["lifecycle"] = (bool(rv) and LIFECYCLE_CHECK not in errors and not lc_left and (not learn or learned)
                          and not updates and state == "confirmed")
     step = next((s for s in STEPS[:-1] if not done[s]), "scenarios")
     return {"ready": not blocked, "blocked": blocked, "step": step, "done": done,
-            "settled": bool(rv) and not errors and not left,
+            "settled": bool(rv) and not errors and not left and not recheck, "recheck": recheck,
             "left": len(left) - len(lc_left), "lifecycle_left": len(lc_left),
             "learn": learn, "learned": learned, "updates": updates, "confirm": confirm, "units": units, "parts": parts,
             "state": state, "missing": knowledge.missing(doc) if doc else []}
@@ -847,6 +889,7 @@ def view(a: dict) -> dict:
     out = dict(a)
     out["review"] = review.public(a.get("review"))
     out["readiness"] = readiness(a)
+    out["coverage"] = coverage(a)
     out["scenarios"] = []
     from . import reuse
     for s in a["scenarios"]:

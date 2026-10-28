@@ -3105,6 +3105,7 @@ class ScenarioPatch(BaseModel):
     role: str | None = None
     decision: str | None = None     # a scenario similar to an earlier one: new | reuse | refine (reuse.py)
     test_data: list[dict] | None = None     # the data it needs: the application model is updated (analyses.record_needs)
+    req_ids: list[str] | str | None = None  # the requirements it checks: a list or the text of the form (analyses.coverage)
     preconditions: str | None = None
     instructions: str | None = None
     expected_result: str | None = None
