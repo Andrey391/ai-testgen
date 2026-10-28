@@ -355,10 +355,10 @@ FIXES = {"d0": review.Edit(item="d0", find="1. Покупатель оформл
 
 
 def test_a_model_that_only_thinks_under_structured_output_gets_the_schema_in_the_prompt(monkeypatch, fake_llm):
-    """GLM behind a gateway: with output_config.format it thinks until max_tokens and never answers (the fix of the
+    """GLM behind a gateway: with a json_schema response format it thinks until max_tokens and never answers (the fix of the
     requirements hung for its whole batch time); the same request with the schema in the prompt answers."""
     from testgen import llm
-    from testgen.providers import anthropic as provider
+    from testgen.providers import openai_compat as provider
     monkeypatch.setattr(provider, "NO_STRUCTURED", set())
     p = _project("Только думает")
     answer = review.Revision(summary="Готово", edits=[FIXES["d0"]])
@@ -385,7 +385,7 @@ def test_an_editor_lost_in_thinking_is_not_asked_the_same_at_once(monkeypatch, f
     """GLM behind a gateway drafts every edit in its thinking until the output limit, 5 minutes a request: a theme
     is a request of its own (thinking grows with the task), the requests go a few at a time, a request that only
     thinks is given up at FIX_THINK, and its theme is asked once more - not twice at once by llm.parse."""
-    from testgen.providers import anthropic as provider
+    from testgen.providers import openai_compat as provider
     monkeypatch.setattr(provider, "NO_STRUCTURED", set())
     p = _project("Рассуждает")
     report = {"validation": _findings().model_dump(), "lifecycle": {"summary": "", "conflicts": [CONFLICT],
@@ -432,7 +432,7 @@ def test_the_editor_keeps_each_batch_and_a_failure_loses_only_the_batch_in_work(
     assert any(e["type"] == "log" and e["text"].startswith("Пакет 3 из 3") for e in events)
     # one request per batch, streamed and with a wait of its own
     assert [kind for kind, _ in fake_llm.calls] == ["parse"] * 3
-    assert all("format" in kw["output_config"] and kw["timeout"].read == review.FIX_WAIT for _, kw in fake_llm.calls)
+    assert all(kw["output_format"] is review.Revision and kw["timeout"] == review.FIX_WAIT for _, kw in fake_llm.calls)
 
     a = analyses.get(aid)
     assert "статус «новый»" in a["requirements"] and "не редактирует" in a["requirements"]

@@ -29,10 +29,10 @@ def test_stop_cancels_the_request_to_the_model(fake_llm):
     s = _session()
     started = asyncio.Event()
 
-    async def slow(**kw):
+    async def slow(payload, **kw):
         started.set()
         await asyncio.sleep(30)
-    fake_llm.beta.messages.create = slow
+    fake_llm.complete = slow
 
     async def scenario():
         task = asyncio.create_task(s._think([{"type": "text", "text": "Начни"}]))

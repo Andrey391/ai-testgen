@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from fakes import Resp, dump, latest_page, ref_for, text, tool
+from fakes import Resp, conversation, dump, last_turn, latest_page, ref_for, text, tool
 from helpers import arun
 from stand import PASSWORD, USERNAME
 from testgen import agent, auth, knowledge, projects, runs, scenarios, skills, storage, suite, validation
@@ -393,10 +393,10 @@ def test_autopilot_batches_form_actions_and_records_api_checks(stand, project, f
     t = arun(_run(s, s.to_test))
     assert s.status == "done", s.chat
     assert len(turns) == 3                                       # 4 steps + finish in three requests
-    assert turns[0]["tool_choice"]["disable_parallel_tool_use"] is False      # Auto-Pilot may batch
-    second = json.dumps(turns[1]["messages"][-1], ensure_ascii=False)
-    assert second.count('"tool_result"') == 4 and "Not executed: the page may have changed" in second
-    assert "Response of the API request (HTTP 200)" in json.dumps(turns[2]["messages"][-1], ensure_ascii=False)
+    assert "parallel_tool_calls" not in turns[0]                 # Auto-Pilot may batch
+    second = json.dumps(last_turn(turns[1]), ensure_ascii=False)
+    assert second.count('"role": "tool"') == 4 and "Not executed: the page may have changed" in second
+    assert "Response of the API request (HTTP 200)" in json.dumps(last_turn(turns[2]), ensure_ascii=False)
     assert [x["action"] for x in t["steps"]] == ["navigate", "fill", "fill", "click", "api_request"]
     spec = json.loads(t["steps"][-1]["value"])
     assert spec == {"method": "POST", "url": "/api/items", "body": {"name": "Хлеб {{unique}}"}, "expect_status": 200}
@@ -431,13 +431,13 @@ def test_a_long_authoring_conversation_starts_over_on_a_clean_context(stand, pro
     s.starts_in_autopilot = True
     arun(_run(s, s.to_test))
     assert s.status == "done", s.chat
-    assert len(turns[1]["messages"]) == 3                       # the conversation grows...
+    assert len(conversation(turns[1]["messages"])) == 3          # the conversation grows...
     fresh = turns[2]["messages"]
-    assert len(fresh) == 1 and fresh[0]["role"] == "user"       # ...then starts over with one request
+    assert conversation(fresh) == ["user"]                       # ...then starts over with one request
     body = json.dumps(fresh, ensure_ascii=False)
     assert agent.FRESH_TASK in body and "Ввести логин" in body and "Ввести пароль" in body
-    assert "Result of your last call" in body and '"tool_result"' not in body
-    assert len(turns[3]["messages"]) == 3                       # and grows again from there
+    assert "Result of your last call" in body and '"role": "tool"' not in body
+    assert len(conversation(turns[3]["messages"])) == 3          # and grows again from there
     assert PASSWORD not in body
     assert any("чистого контекста" in m["text"] for m in s.chat)
 

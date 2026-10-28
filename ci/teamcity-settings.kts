@@ -3,7 +3,7 @@
 // Expects the studio's database reachable from the agent and parameters (Parameters → add as
 // passwords): env.TESTGEN_DATABASE_URL and env.TESTGEN_SECRET_KEY (the studio's: tests and settings
 // come from there, the runs are recorded there), env.TESTGEN_USERNAME, env.TESTGEN_PASSWORD and, optionally,
-// env.ANTHROPIC_API_KEY (or the key of your model provider) for self-healing and failure analysis.
+// env.TESTGEN_LLM_API_KEY (the key of your model provider) for self-healing and failure analysis.
 // The build fails when a test outside quarantine fails (exit code 1); flaky tests do not fail it.
 import jetbrains.buildServer.configs.kotlin.*
 import jetbrains.buildServer.configs.kotlin.buildFeatures.xmlReport
@@ -29,7 +29,7 @@ object UiRegression : BuildType({
         param("testgen.browser", "chromium")
         password("env.TESTGEN_USERNAME", "")
         password("env.TESTGEN_PASSWORD", "")
-        password("env.ANTHROPIC_API_KEY", "")
+        password("env.TESTGEN_LLM_API_KEY", "")
     }
 
     steps {

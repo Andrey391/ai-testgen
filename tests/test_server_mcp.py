@@ -189,7 +189,8 @@ def test_model_connection_is_a_project_setting(client, open_studio, project, fak
 
     # A gateway may list models without the key: the check fails when the model does not answer.
     def no_key(kind, kw):
-        raise TypeError("Could not resolve authentication method")
+        from testgen.providers.openai_compat import ApiError
+        raise ApiError(401, "Incorrect API key provided", {"error": {"code": "invalid_api_key"}})
     script, fake_llm.script = fake_llm.script, no_key
     r = client.post(f"/api/projects/{pid}/llm/test")
     assert r.status_code == 400 and "API-ключ" in r.json()["detail"]

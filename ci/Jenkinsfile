@@ -5,7 +5,7 @@
 //     "testgen-database-url" and "testgen-secret-key": TESTGEN_DATABASE_URL and TESTGEN_SECRET_KEY of the
 //     studio (tests and settings come from there, the runs are recorded there);
 //   - credentials in Jenkins: "testgen-app-login" (username/password of the application under test) and,
-//     optionally, "testgen-llm-key" (secret text: ANTHROPIC_API_KEY or the key of your model provider) for
+//     optionally, "testgen-llm-key" (secret text: TESTGEN_LLM_API_KEY, the key of your model provider) for
 //     self-healing and failure analysis;
 //   - an agent with Python 3.12 and the Playwright system dependencies (or the playwright/python image).
 // The build fails when a test outside quarantine fails; flaky tests do not fail it.
@@ -33,7 +33,7 @@ pipeline {
         }
         stage('Run tests') {
             steps {
-                withCredentials([string(credentialsId: 'testgen-llm-key', variable: 'ANTHROPIC_API_KEY')]) {
+                withCredentials([string(credentialsId: 'testgen-llm-key', variable: 'TESTGEN_LLM_API_KEY')]) {
                     dir('.testgen') {
                         sh '''python -m testgen.run --project "$PROJECT" ${TAG:+--tag "$TAG"} --browser "$BROWSER" \
                               --junit "$WORKSPACE/reports/junit.xml" --allure "$WORKSPACE/reports/allure"'''

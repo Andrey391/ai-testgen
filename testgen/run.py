@@ -10,7 +10,7 @@ Tests, settings and history come from the studio's database (TESTGEN_DATABASE_UR
 TESTGEN_SECRET_KEY, as the studio has them); the run is recorded there too. The application
 login comes from the project / test settings or TESTGEN_USERNAME / TESTGEN_PASSWORD.
 Self-healing and failure analysis use the project's model (Project -> Model in the studio) and
-its API key, or ANTHROPIC_API_KEY; without a model a broken locator simply fails the step.
+its API key and address, or TESTGEN_LLM_API_KEY / TESTGEN_LLM_BASE_URL; without a model a broken locator simply fails the step.
 
 Exit code: 0 - all tests passed (flaky ones and failures in quarantine do not
 count), 1 - failures, 2 - bad arguments or setup.

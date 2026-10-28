@@ -3,19 +3,16 @@ conversation, optionally with tools) or `parse()` (an answer in a pydantic struc
 
 Model connection. The studio is not tied to any model: each project chooses its own
 in "Проект → Модель" (project.json "llm": model, effort, API address, prices; the API
-key in secrets/projects/<id>/llm.json, or ANTHROPIC_API_KEY on the server when the
-project has none). Pipeline stages may override the model and effort. `model(project_id,
-stage)` resolves them for a request; without a model the project's LLM features fail
-with `NotConfigured`. `check()` asks the connection which models it offers.
+key in secrets/projects/<id>/llm.json, or TESTGEN_LLM_API_KEY / TESTGEN_LLM_BASE_URL on
+the server when the project has none). Requests go to an OpenAI-compatible Chat Completions
+API (providers/openai_compat.py). Pipeline stages may override the model and effort.
+`model(project_id, stage)` resolves them for a request; without a model or an API address
+the project's LLM features fail with `NotConfigured`. `check()` asks the connection which
+models it offers.
 
-Prompt caching (providers/anthropic.py). Requests render as tools -> system ->
-messages. The system prompt carries a cache breakpoint, so the tools, the rules and the
-skills (the static prefix of every request of a stage) are read from the cache after the
-first request. The authoring agent adds automatic caching of its growing conversation
-(cache_all). Context editing (clear_tool_uses) rewrites old tool results, which
-invalidates the conversation cache from the first cleared block on, but never the
-tools + system breakpoint - that is why it is explicit. TESTGEN_PROMPT_CACHE=off
-switches caching off, to measure the difference.
+Prompt caching. The static prefix of every request of a stage (the system prompt with
+the rules and the skills) comes first and stays the same, so servers with prefix caching
+(vLLM) read it from their cache; cached prompt tokens are counted as cache reads.
 
 Token accounting. Every answer is added to a `Usage`: the one given, those opened
 with `usage_scope()` around a piece of work (a test run, a pipeline job) and, with a
@@ -37,24 +34,21 @@ import os
 import re
 from typing import Callable
 
-import anthropic
 import pydantic
 
-from .paths import OFFLINE
 from .repo import usage as usage_repo
-from .providers.anthropic import (CLEAR_TOOL_USES, CONTEXT_BETA, FALLBACK_BETA, FEATURES, FeatureRefused,  # noqa: F401
-                                  AnthropicProvider, error_text, is_error)
+from .providers.openai_compat import (FEATURES, NO_ADDRESS, ApiError, ChatClient, ChatProvider,  # noqa: F401
+                                      FeatureRefused, error_text, is_error)
 from .providers.base import ProviderError, Reply, Request, schema_instruction, validate
 
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
+EFFORTS = ("low", "medium", "high")
 PROMPT_CACHE = os.environ.get("TESTGEN_PROMPT_CACHE", "on").lower() not in ("off", "0", "false", "no")
 WARN_AT = 0.8
 FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 
-# Capabilities the studio relies on: structured output (scenarios, healing, analysis),
-# screenshots, context editing (the authoring agent).
-NEEDED = {"structured_outputs": "структурированный ответ", "image_input": "изображения",
-          "context_management": "context editing"}
+# Capabilities the studio relies on: structured output (scenarios, healing, analysis), screenshots - when a
+# gateway reports them for its models.
+NEEDED = {"structured_outputs": "структурированный ответ", "image_input": "изображения"}
 
 
 class NotConfigured(ProviderError):
@@ -78,19 +72,19 @@ def usd_rub() -> float:
 
 # ---------- the model connection (tests replace make_client) ----------
 
-def make_client(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
-    """Empty values fall back to the SDK's environment (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL).
-    A gateway of the project's own (base_url) gets the key both as x-api-key and as
-    "Authorization: Bearer": many gateways with the Messages API accept only the latter. Both go as headers of
-    the client: the SDK takes only one of api_key and auth_token (2.x refuses both) and sends each its own way."""
-    both = {"X-Api-Key": api_key, "Authorization": f"Bearer {api_key}"} if api_key and base_url else None
-    return anthropic.AsyncAnthropic(api_key=api_key or None, base_url=base_url or None, default_headers=both)
+def make_client(api_key: str, base_url: str) -> ChatClient:
+    """Empty values fall back to the server's environment (TESTGEN_LLM_API_KEY, TESTGEN_LLM_BASE_URL). There is
+    no address by default: the model is wherever the project says (a cloud of its choice or its own server)."""
+    base_url = base_url or os.environ.get("TESTGEN_LLM_BASE_URL", "")
+    if not base_url:
+        raise NotConfigured(NO_ADDRESS)
+    return ChatClient(api_key or os.environ.get("TESTGEN_LLM_API_KEY", ""), base_url)
 
 
-_clients: dict[tuple, anthropic.AsyncAnthropic] = {}
+_clients: dict[tuple, ChatClient] = {}
 
 
-def client_for(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
+def client_for(api_key: str, base_url: str) -> ChatClient:
     """A client per key and address; the factory is a part of the key: a request in work in another thread while
     tests replace make_client does not leave a client of the other factory in the cache."""
     make = make_client
@@ -101,9 +95,9 @@ def client_for(api_key: str, base_url: str) -> anthropic.AsyncAnthropic:
 
 
 def model_info(m) -> dict:
-    """A Models API entry -> {id, name, efforts, missing}. `efforts`: supported effort
-    levels, None if the API did not say; `missing`: capabilities from NEEDED it lacks."""
-    d = m.to_dict() if hasattr(m, "to_dict") else dict(m)
+    """A /models entry -> {id, name, efforts, missing}. `efforts`: supported effort levels, None if the API did
+    not say; `missing`: capabilities from NEEDED it lacks (a gateway that reports "capabilities")."""
+    d = dict(m)
     caps = d.get("capabilities") or {}
     eff = caps.get("effort")
     efforts = None
@@ -123,6 +117,8 @@ class Model:
         if not self.name:
             raise NotConfigured("Модель не настроена: выберите её в «Проект → Модель».")
         self.effort = stage.get("effort") if stage.get("effort") in EFFORTS else conf.get("effort", "")
+        if self.effort not in EFFORTS:
+            self.effort = ""          # a level of an earlier version: the model's default
         known = next((m for m in conf.get("models") or [] if m["id"] == self.name), None)
         if known and known.get("efforts") is not None and self.effort not in known["efforts"]:
             self.effort = ""          # the model does not take this effort level: its default
@@ -132,36 +128,19 @@ class Model:
         self.prices = conf.get("prices") or {}
 
     @property
-    def client(self) -> anthropic.AsyncAnthropic:
+    def client(self) -> ChatClient:
         return client_for(self.api_key, self.base_url)
 
     @property
     def features(self) -> set[str]:
         """What the requests may use: everything the last check did not find missing."""
         f = set(FEATURES)
-        if "context_management" in self.missing:
-            f.discard("context_editing")      # old screenshots are cut out by the studio instead
         if "structured_outputs" in self.missing:
             f.discard("structured")           # the JSON schema goes into the prompt instead
         return f
 
-    @property
-    def params(self) -> dict:
-        """Parameters shared by every request.
-
-        fallbacks="default": if the safety classifiers decline a request, the
-        API re-runs it on the provider's fallback model instead of failing.
-        """
-        p = {"model": self.name, "fallbacks": "default"}
-        if self.effort:
-            p["output_config"] = {"effort": self.effort}
-        return p
-
-    def provider(self) -> AnthropicProvider:
-        if OFFLINE and not self.base_url:
-            raise NotConfigured("Режим без интернета (TESTGEN_OFFLINE): укажите в «Проект → Модель» адрес API "
-                                "во внутренней сети")
-        return AnthropicProvider(self.client, self.features)
+    def provider(self) -> ChatProvider:
+        return ChatProvider(self.client, self.features)
 
 
 def model(project_id: str, stage: dict | None = None) -> Model:
@@ -177,14 +156,13 @@ async def check(conf: dict) -> list[dict]:
     only a request to the model shows the key and the model really work."""
     c = client_for(conf.get("api_key", ""), conf.get("base_url", ""))
     try:
-        models = [model_info(m) async for m in c.models.list(limit=100)]
-    except anthropic.NotFoundError:      # a gateway without the Models API
-        if not conf.get("model"):
+        models = [model_info(m) for m in await c.models()]
+    except ApiError as e:                # a gateway without the list of models
+        if e.status_code not in (404, 405) or not conf.get("model"):
             raise
         models = [{"id": conf["model"], "name": conf["model"], "efforts": None, "missing": []}]
     if conf.get("model"):
-        await c.messages.create(model=conf["model"], max_tokens=16,
-                                messages=[{"role": "user", "content": "ping"}])
+        await c.complete({"model": conf["model"], "max_tokens": 16, "messages": [{"role": "user", "content": "ping"}]})
     return models
 
 
@@ -295,7 +273,7 @@ def usage_scope(limit: float = 0, currency: str = "USD", name: str = "", on_warn
 
 def track(resp, usage: Usage | None = None, prices: dict | None = None, project_id: str = "",
           stage: str = "") -> None:
-    """Add an answer (a Reply, or an SDK response) to the usages and the project's ledger."""
+    """Add an answer (a Reply) to the usages and the project's ledger."""
     model = getattr(resp, "model", "") or ""
     u_raw = getattr(resp, "usage", None)
     for u in {id(x): x for x in (usage, *_scopes.get()) if x is not None}.values():
@@ -399,7 +377,7 @@ async def chat(stage: dict | None, *, system: str, messages: list[dict], tools: 
                stage_name: str = "", stream: bool = False, timeout: float = 0, think_limit: int = 0,
                progress=None) -> Reply:
     """One answer of the project's model (the stage may override it). stream - a long answer comes as a stream;
-    timeout - seconds of the wait (of a pause in a stream), 0 - the SDK's; think_limit - characters of thinking
+    timeout - seconds of the wait (of a pause in a stream), 0 - the client's; think_limit - characters of thinking
     with no answer begun after which a stream is given up as cut off; progress(thinking, answer) - how far a
     stream is (characters), every few seconds."""
     m = model(project_id, stage)

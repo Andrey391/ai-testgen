@@ -231,89 +231,82 @@ def test_salvage_keeps_complete_scenarios_of_a_cut_answer():
     assert scenarios._salvage('{"feature":"Вх', PlannedScenario) == []
 
 
+def _client(handler):
+    import httpx
+    from testgen.providers.openai_compat import ChatClient
+    return ChatClient("x", "http://model.local/" + uuid.uuid4().hex + "/v1", transport=httpx.MockTransport(handler))
+
+
+def _sse(*chunks) -> bytes:
+    return b"".join(f"data: {json.dumps(c)}\n\n".encode() for c in chunks)
+
+
 def test_a_cut_off_structured_answer_reports_max_tokens():
-    """The SDK raises on a structured answer cut off by max_tokens; the provider reports the stop reason."""
-    import anthropic
-    import httpx2
+    """A structured answer cut off by max_tokens keeps its stop reason and its text: salvage() takes what came."""
+    import httpx
     from helpers import arun
-    from testgen.providers.anthropic import AnthropicProvider
+    from testgen.providers.openai_compat import ChatProvider
     from testgen.providers.base import Request
 
     def handler(request):
-        return httpx2.Response(200, json={
-            "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model",
-            "content": [{"type": "text", "text": '{"feature":"table-tennis","assumptions":["\u043e\u0446'}],
-            "stop_reason": "max_tokens", "stop_sequence": None,
-            "usage": {"input_tokens": 10, "output_tokens": 16000}})
-    client = anthropic.AsyncAnthropic(api_key="x",
-                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
-    reply = arun(AnthropicProvider(client, {"structured"}).parse(
+        return httpx.Response(200, json={
+            "id": "c1", "object": "chat.completion", "model": "test-model",
+            "choices": [{"index": 0, "finish_reason": "length", "message": {
+                "role": "assistant", "content": '{"feature":"table-tennis","assumptions":["оц'}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 16000}})
+    reply = arun(ChatProvider(_client(handler), {"structured"}).parse(
         Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}]), ScenarioPlan))
     assert reply.stop == "max_tokens" and reply.parsed is None and reply.usage["output_tokens"] == 16000
     assert reply.text.startswith('{"feature"')
 
 
-def test_a_thinking_block_without_signature_does_not_break_structured_output():
-    """A gateway answers with a thinking block whose signature is null: the strict BetaMessage
-    used to reject the whole answer ("validation errors for BetaMessage")."""
-    import json
-    import anthropic
-    import httpx2
+def test_structured_output_goes_as_json_schema_and_reasoning_is_kept_apart():
+    """The output schema goes as response_format json_schema; the reasoning of a thinking model is not the answer."""
+    import httpx
     from helpers import arun
-    from testgen.providers.anthropic import AnthropicProvider
-    from testgen.providers.base import Request
+    from testgen import llm
+    from testgen.providers.openai_compat import ChatProvider
+    from testgen.providers.base import Request, validate
 
     plan = {"feature": "Вход", "assumptions": [], "scenarios": [], "more": False}
+    sent = []
 
     def handler(request):
-        return httpx2.Response(200, json={
-            "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model",
-            "content": [{"type": "thinking", "thinking": "План.", "signature": None},
-                        {"type": "text", "text": json.dumps(plan, ensure_ascii=False)}],
-            "stop_reason": "end_turn", "stop_sequence": None,
-            "usage": {"input_tokens": 10, "output_tokens": 20}})
-    client = anthropic.AsyncAnthropic(api_key="x",
-                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
-    reply = arun(AnthropicProvider(client, {"structured"}).parse(
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"model": "test-model", "choices": [{"finish_reason": "stop", "message": {
+            "role": "assistant", "reasoning_content": "План.", "content": json.dumps(plan, ensure_ascii=False)}}]})
+    reply = arun(ChatProvider(_client(handler), {"structured"}).parse(
         Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}]), ScenarioPlan))
-    assert reply.stop == "end" and reply.parsed.feature == "Вход"
+    fmt = sent[0]["response_format"]
+    assert fmt["type"] == "json_schema" and fmt["json_schema"]["name"] == "ScenarioPlan"
+    assert sent[0]["messages"][0] == {"role": "system", "content": "s"}
+    assert reply.stop == "end" and validate(ScenarioPlan, reply.text)[0].feature == "Вход"
+    assert llm.is_api_error(llm.ProviderError("x"))
 
 
 def test_a_stream_that_goes_quiet_while_thinking_turns_structured_output_off(monkeypatch):
-    """GLM behind a gateway thinks under output_config.format and the stream goes quiet: what came is a thinking-only
-    answer cut off - the connection gets the schema in the prompt from now on, not a raw ReadTimeout."""
-    import json
-    import anthropic
-    import httpx2
+    """GLM behind a gateway thinks under a json_schema response format and the stream goes quiet: what came is a
+    thinking-only answer cut off - the connection gets the schema in the prompt from now on, not a raw ReadTimeout."""
+    import httpx
     from helpers import arun
-    from testgen.providers import anthropic as provider
+    from testgen.providers import openai_compat as provider
     from testgen.providers.base import ProviderError, Request
     monkeypatch.setattr(provider, "NO_STRUCTURED", set())
 
-    def sse(kind, data):
-        return f"event: {kind}\ndata: {json.dumps(data | {'type': kind})}\n\n".encode()
-
-    class Quiet(httpx2.AsyncByteStream):
+    class Quiet(httpx.AsyncByteStream):
         def __init__(self, request, thinking=True):
             self.request, self.thinking = request, thinking
 
         async def __aiter__(self):
-            yield sse("message_start", {"message": {
-                "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model", "content": [],
-                "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 0}}})
-            block = {"type": "thinking", "thinking": "", "signature": ""} if self.thinking else {"type": "text", "text": ""}
-            yield sse("content_block_start", {"index": 0, "content_block": block})
-            delta = {"type": "thinking_delta", "thinking": "Думаю…"} if self.thinking else {"type": "text_delta", "text": '{"fe'}
-            yield sse("content_block_delta", {"index": 0, "delta": delta})
-            raise httpx2.ReadTimeout("quiet", request=self.request)
+            delta = {"reasoning_content": "Думаю…"} if self.thinking else {"content": '{"fe'}
+            yield _sse({"model": "test-model", "choices": [{"index": 0, "delta": {"role": "assistant", **delta}}]})
+            raise httpx.ReadTimeout("quiet", request=self.request)
 
     thinking = True
 
     def handler(request):
-        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=Quiet(request, thinking))
-    client = anthropic.AsyncAnthropic(api_key="x", max_retries=0,
-                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
-    prov = provider.AnthropicProvider(client, {"structured"})
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Quiet(request, thinking))
+    prov = provider.ChatProvider(_client(handler), {"structured"})
     req = Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}], stream=True, timeout=5)
     reply = arun(prov.parse(req, ScenarioPlan))
     assert reply.stop == "max_tokens" and not reply.text and provider.thought_out(reply)
@@ -334,40 +327,48 @@ def test_a_stream_that_only_thinks_past_its_limit_is_given_up_and_tells_how_far_
     """GLM behind a gateway thinks for minutes and spends the whole output limit before an answer: a request with
     think_limit is given up as soon as that much thinking came with no answer begun (not read to its end), and
     progress hears how far the model got."""
-    import json
-    import anthropic
-    import httpx2
+    import httpx
     from helpers import arun
-    from testgen.providers import anthropic as provider
+    from testgen.providers import openai_compat as provider
     from testgen.providers.base import Request
     monkeypatch.setattr(provider, "NO_STRUCTURED", set())
     monkeypatch.setattr(provider, "PROGRESS_EVERY", 0)
     sent = []
 
-    def sse(kind, data):
-        return f"event: {kind}\ndata: {json.dumps(data | {'type': kind})}\n\n".encode()
-
-    class Thinking(httpx2.AsyncByteStream):
+    class Thinking(httpx.AsyncByteStream):
         async def __aiter__(self):
-            yield sse("message_start", {"message": {
-                "id": "msg_1", "type": "message", "role": "assistant", "model": "test-model", "content": [],
-                "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 0}}})
-            yield sse("content_block_start", {"index": 0, "content_block": {"type": "text", "text": ""}})
-            yield sse("content_block_stop", {"index": 0})       # GLM: an empty text block before its thinking
-            yield sse("content_block_start", {"index": 1, "content_block": {"type": "thinking", "thinking": "",
-                                                                             "signature": ""}})
+            yield _sse({"model": "test-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]})
             for _ in range(100):
                 sent.append(1)
-                yield sse("content_block_delta", {"index": 1, "delta": {"type": "thinking_delta", "thinking": "x" * 1000}})
+                yield _sse({"choices": [{"index": 0, "delta": {"reasoning_content": "x" * 1000}}]})
             raise AssertionError("the stream was read to its end")
 
-    client = anthropic.AsyncAnthropic(api_key="x", max_retries=0, http_client=httpx2.AsyncClient(
-        transport=httpx2.MockTransport(lambda r: httpx2.Response(200, headers={"content-type": "text/event-stream"},
-                                                                  stream=Thinking()))))
-    prov = provider.AnthropicProvider(client, {"structured"})
+    prov = provider.ChatProvider(_client(lambda r: httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                                                  stream=Thinking())), {"structured"})
     seen = []
     req = Request(model="test-model", system="s", messages=[{"role": "user", "content": "x"}], stream=True, timeout=5,
                   think_limit=5000, progress=lambda thought, said: seen.append((thought, said)))
     reply = arun(prov.parse(req, ScenarioPlan))
     assert reply.stop == "max_tokens" and not reply.text and provider.thought_out(reply)
     assert len(sent) < 10 and seen and seen[-1][0] >= 1000 and seen[-1][1] == 0
+
+
+def test_a_streamed_answer_with_tool_calls_is_put_together():
+    """Tool call arguments come in pieces across the chunks of a stream."""
+    import httpx
+    from helpers import arun
+    from testgen.providers.openai_compat import ChatProvider
+    from testgen.providers.base import Request
+
+    body = _sse({"model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [
+                    {"index": 0, "id": "c1", "type": "function", "function": {"name": "click", "arguments": '{"re'}}]}}]},
+                {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'f": "e3"}'}}]}}]},
+                {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+                {"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 3}}) + b"data: [DONE]\n\n"
+    client = _client(lambda r: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body))
+    reply = arun(ChatProvider(client, set()).chat(Request(
+        model="m", system="s", messages=[{"role": "user", "content": "x"}], stream=True,
+        tools=[{"name": "click", "input_schema": {"type": "object"}}])))
+    assert reply.stop == "tool" and reply.tool_calls == [{"type": "tool_use", "id": "c1", "name": "click",
+                                                          "input": {"ref": "e3"}}]
+    assert reply.usage["input_tokens"] == 7 and reply.usage["output_tokens"] == 3

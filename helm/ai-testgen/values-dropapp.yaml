@@ -1,0 +1,31 @@
+# Platform V DropApp (and other corporate Kubernetes with Pod Security "restricted"): on top of values.yaml.
+#   helm install testgen ./helm/ai-testgen -f ./helm/ai-testgen/values-dropapp.yaml -f my-values.yaml
+# What is yours to give (my-values.yaml): the image in the internal registry, existingSecret, s3.*,
+# ingress.host and the ingress class of the cluster. See docs/deploy.md, "Platform V DropApp".
+
+image:
+  repository: registry.company.ru/qa/ai-testgen   # the image built outside and pushed to the internal registry
+  pullPolicy: IfNotPresent
+imagePullSecrets: []                               # - name: registry-pull
+
+existingSecret: testgen-secrets                    # made by the cluster's secret store (Vault, Secret Management)
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+  readOnlyRootFilesystem: true
+
+ingress:
+  enabled: true
+  className: nginx                                 # ask the cluster admins; behind an Istio gateway - enabled: false
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 30m
+    # Requirements review, the pipeline and Studio send long NDJSON streams: no buffering, long reads.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+# Without internet access: the browsers, axe-core and the MCP servers are in the image; the model only by
+# the API address of the project (Проект → Модель).
+extraEnv:
+  TESTGEN_OFFLINE: "on"

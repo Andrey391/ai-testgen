@@ -142,8 +142,6 @@ def test_heal_review_mode_proposes_without_changing_the_test(stand, project, fak
     assert len(rep["proposals"]) >= 1
     p = next(p for p in rep["proposals"] if p["action"] == "click")
     assert p["reason"] and p["new"] != p["old"] and (tmp_path / p["screenshot"]).exists()
-    # The prompt of the healer is cached.
-    assert fake_llm.calls[0][1]["system"][0]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_heal_auto_mode_rewrites_and_rejected_locator_is_not_reused(stand, project, fake_llm):

@@ -11,6 +11,9 @@ data:
   FORWARDED_ALLOW_IPS: "*"               # behind the ingress: https in cookies and OIDC links
   TESTGEN_ADMINS: {{ .Values.admins | quote }}
   TESTGEN_WORKER_CONCURRENCY: {{ .Values.worker.concurrency | quote }}
+  {{- with .Values.llmBaseUrl }}
+  TESTGEN_LLM_BASE_URL: {{ . | quote }}
+  {{- end }}
   TESTGEN_S3_BUCKET: {{ .Values.s3.bucket | quote }}
   TESTGEN_S3_REGION: {{ .Values.s3.region | quote }}
   {{- with .Values.s3.endpoint }}

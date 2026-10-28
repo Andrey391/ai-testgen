@@ -5,7 +5,7 @@
 ## Что это
 
 AI Test Generator — студия генерации автотестов с помощью ИИ. Пользователь описывает сценарий
-обычным языком, агент на Claude проходит его в настоящем браузере (Playwright) и записывает
+обычным языком, ИИ-агент проходит его в настоящем браузере (Playwright) и записывает
 исполняемый тест-кейс. Веб-студия: FastAPI + одностраничный фронтенд `static/index.html`.
 
 Карта возможностей (держи её в голове, когда добавляешь фичи):
@@ -67,9 +67,15 @@ python -m venv $env:LOCALAPPDATA\aitestgen\venv
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pip install -r requirements.txt
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m playwright install chromium
 $env:TESTGEN_DATABASE_URL = "postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen"   # обязательно
-$env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ можно задать в «Проект → Модель»
+$env:TESTGEN_LLM_BASE_URL = "http://127.0.0.1:8000/v1"   # необязательно: адрес и ключ модели — в «Проект → Модель»
 & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python server.py   # http://127.0.0.1:8765
 ```
+
+Всё это делает `.\studio.cmd` (обёртка над `scripts\studio.ps1` с `-ExecutionPolicy Bypass`: политика по
+умолчанию `Restricted` не даёт запустить `.ps1` напрямую): venv и зависимости (заново при изменении
+`requirements.txt`, `-Setup` — принудительно), проверка PostgreSQL, база по умолчанию — локальная, браузер
+открывается сам; `-NoAuth`, `-Port`, `-NoBrowser`. Если студия уже отвечает на порту — только открывает её.
+Скрипт сохранён в UTF-8 с BOM: иначе Windows PowerShell 5.1 искажает русские строки.
 
 Данные студии хранятся только в PostgreSQL (`docs/deploy.md`): без `TESTGEN_DATABASE_URL` студия, воркер
 и `testgen.run` не запускаются. Локально — служба PostgreSQL 17 на `127.0.0.1:5432`, роль и база
@@ -80,8 +86,8 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # необязательно: ключ �
 поэтому все worktree и копии кода видят одни и те же данные.
 
 Модель студия не выбирает сама: каждый проект задаёт модель, effort, API-ключ, адрес API и цены в
-«Проект → Модель» (запросы идут по Anthropic Messages API — в облако или на свой сервер/прокси с
-этим API). Контур без интернета — `docker-compose.yml` и `docs/offline.md`.
+«Проект → Модель» (запросы идут по OpenAI-совместимому API — Chat Completions: vLLM, Ollama, LiteLLM,
+YandexGPT, GigaChat через совместимый шлюз; адреса по умолчанию нет). Контур без интернета — `docker-compose.yml` и `docs/offline.md`.
 
 Команды запуска MCP-серверов Zephyr Scale и Playwright MCP задаются в `TESTGEN_ZEPHYR_MCP` и
 `TESTGEN_PLAYWRIGHT_MCP` (или администратором в настройках подключения): студия не скачивает пакеты
@@ -160,7 +166,8 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   (шаг 2 мастера нового проекта); этап процесса может переопределить модель и effort.
 - `TESTGEN_DATABASE_URL` — обязательный адрес PostgreSQL (`postgresql+psycopg://…`): единственное
   хранилище данных; `TESTGEN_DB_MIGRATE`, `TESTGEN_DB_POOL`.
-- `ANTHROPIC_API_KEY` — ключ для проектов без своего ключа (удобно для CI).
+- `TESTGEN_LLM_API_KEY`, `TESTGEN_LLM_BASE_URL` — ключ и адрес API модели для проектов без своих (удобно для CI
+  и контура без интернета).
 - `TESTGEN_SESSIONS_PER_USER` — сколько сессий Studio может быть открыто у одного человека (по умолчанию 3; сессии
   конвейера не считаются).
 - `TESTGEN_PUBLIC_URL` — адрес студии для людей: ссылки на экраны (`#/p/<проект>/runs/<id>`, `notify.screen`) в
@@ -191,8 +198,6 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   задана в подключении — подключение сообщает, что команды нет; студия ничего не скачивает сама.
 - `TESTGEN_USERNAME` / `TESTGEN_PASSWORD` — учётные данные по умолчанию для прогонов.
 - `TESTGEN_CACHE_DIR` — папка локального кэша файлов браузера (по умолчанию `%LOCALAPPDATA%\aitestgen\cache`).
-- `TESTGEN_PROMPT_CACHE=off` — без кэширования промптов (сравнить стоимость; расход виден в Studio,
-  прогонах и конвейере).
 - `TESTGEN_AXE_JS` — путь к `axe.min.js` или `TESTGEN_AXE_URL` — адрес, откуда его скачать (кэш в
   `<TESTGEN_CACHE_DIR>/data/cache/`). Без них `assert_accessible` падает с подсказкой; адресов CDN в коде нет.
 - `TESTGEN_FAKER_LOCALE` — локаль тестовых данных `{{faker.*}}` (по умолчанию `en_US`).
@@ -412,8 +417,7 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   не могут отменить.
 - `testgen/agent.py` — `StudioSession`, цикл агента: модель получает скриншот и список элементов и
   вызывает по одному инструменту за ход (`click`, `fill`, `assert_*`, …, `finish`); каждый вызов
-  становится шагом. Старые скриншоты вычищаются (`keep_images`: context editing
-  `clear_tool_uses_20250919`, а если модель его не поддерживает — `providers.base.trim_history`). Для
+  становится шагом. Старые скриншоты вычищаются (`keep_images` → `providers.base.trim_history`). Для
   моделей слабее — настройки этапа: компактный промпт и примеры ходов (`authoring.prompt`, скилл
   `authoring-examples`), текстовый режим (`authoring.screenshots`: скриншот по инструменту `look` или
   никогда). Неверный ответ возвращается модели на исправление (`check_call`, не больше `MAX_REPAIRS` на шаг).
@@ -539,28 +543,32 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   `READ_ONLY_MODE`).
 - `testgen/llm.py` — единственная дверь к модели. Привязки к конкретным моделям в коде нет: настройки
   проекта `project.json` → `llm` (`model`, `effort`, `base_url`, `prices` в $, результат проверки `check` и
-  список моделей `models` из Models API с поддерживаемыми effort и недостающими возможностями),
+  список моделей `models` из `GET /models`; effort — `low`/`medium`/`high`),
   ключ — `secrets/projects/<id>/llm.json` (`projects.llm_settings`/`update_llm`), без него —
-  `ANTHROPIC_API_KEY`. Все запросы идут через `llm.chat(stage, system=..., messages=..., tools=...,
+  `TESTGEN_LLM_API_KEY`; без адреса — `TESTGEN_LLM_BASE_URL`, иначе `NotConfigured`. Все запросы идут через `llm.chat(stage, system=..., messages=..., tools=...,
   project_id=...)` или `llm.parse(stage, ..., schema=...)` (ответ в pydantic-модели); долгий ответ — `stream=True` с `timeout` (пауза в потоке; шлюз без стриминга получает обычный запрос — `NO_STREAM`); `stage` — настройки
   этапа проекта, переопределяют модель и effort (`llm.model(project_id, stage)`). Они проверяют бюджеты
   (`Usage.limit`, месячный лимит проекта `pipeline.budget`, `BudgetExceeded`, предупреждение на 80%) и
   учитывают расход (`track`: `Usage`, `usage_scope()`, журнал проекта — таблица `usage`, строка на запрос, `repo/usage.py`,
   стоимость — по ценам проекта). Без модели — `llm.NotConfigured`; сервер не запускает генерацию без
-  модели (`_require_model`). `llm.check()` — проверка подключения. Не обращайся к SDK мимо `llm.py` и не
+  модели (`_require_model`). `llm.check()` — проверка подключения. Не обращайся к API модели мимо `llm.py` и не
   добавляй в код идентификаторы моделей, их цены и умолчания.
-- `testgen/providers/` — формат запроса (`base.Request`, сообщения в формате Anthropic Messages) и ответа
-  (`base.Reply`) и их отправка в Messages API (`anthropic.py`: точка кэша на tools + system, context
-  editing, effort, `fallbacks`, structured output). Чего модели не хватает по последней проверке
+- `testgen/providers/` — нейтральный формат запроса (`base.Request`: сообщения с блоками `text`/`image`/`tool_use`/
+  `tool_result`, инструменты с `input_schema`) и ответа (`base.Reply`) и их отправка в OpenAI-совместимый API
+  (`openai_compat.py`: свой клиент `ChatClient` на httpx — `POST /chat/completions`, `GET /models`, ключ в
+  `Authorization: Bearer`, SSE-поток; перевод разговора: `tool_result` → сообщения `tool`, их скриншоты — следом
+  сообщением `user`; `reasoning_effort`, `parallel_tool_calls`, structured output — `response_format` json_schema).
+  SDK поставщиков моделей не используются. Чего модели не хватает по последней проверке
   (`Model.features`), заменяется в `base.py`: обрезка старых скриншотов, structured output — JSON-схема в
   промпте, проверка pydantic и один повтор. Подключение, у которого ответ со structured output ушёл целиком в
   рассуждения (`max_tokens` без текста или поток замолчал в рассуждениях — GLM за шлюзом), дальше получает схему в промпте (`NO_STRUCTURED`, тот же
   запрос повторяется так сразу). **Шлюз, отказавший в части запроса** (400/422 «… is not supported», «not
   permitted», `unsupported_feature`), получает тот же запрос без неё — любой необязательной части (`OPTIONAL`:
-  `tool_choice`, structured output, context editing, effort, `fallbacks`, кэш): названной в ошибке, иначе по
+  `tool_choice`, `parallel_tool_calls`, structured output, effort): названной в ошибке, иначе по
   очереди `DROP_ORDER`; запоминается для подключения (`REFUSED`), только если запрос без неё прошёл; отказ от
   structured output — `FeatureRefused`, `llm.parse` повторяет со схемой в промпте. Новую необязательную часть
-  запроса добавляй в `OPTIONAL`/`DROP_ORDER` и `_sent`. Таймаут запроса — `anthropic.Timeout` (SDK на `httpx2`, не `httpx`).
+  запроса добавляй в `OPTIONAL`/`DROP_ORDER` и `_sent`. Таймаут запроса — `httpx.Timeout` (в потоке — пауза между
+  частями). Заглушка тестов `tests/fakes.py` (`FakeClient`) заменяет `ChatClient`.
 - `testgen/auth.py` — вход в студию и API-токены (`secrets/tokens.json`, хранится только SHA-256), группы
   каталога и настройки «группа → роль» (`data/sso.json`); `testgen/vault.py` — хранилище секретов; `testgen/storage.py` — тесты в
   таблице `tests` (`repo/tests.py`; теги, карантин, `heal_proposals`, `verify`; статус `STATUSES`: `draft` — записал агент, `review` — ждёт
@@ -620,7 +628,6 @@ $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python
   ответы запросов в браузере теста; MCP-сервер студии не даёт удалять данные.
 - В режиме Playwright MCP пароль подставляется прямо перед вызовом инструмента и маскируется во всём,
   что вернул сервер (`McpBrowser._mask`).
-- Запросы идут через `llm.chat`/`llm.parse` с `fallbacks: "default"`: если классификатор безопасности
-  отклонит запрос, API повторит его на резервной модели. Инструменты с удалением и правила системного
+- Запросы идут только через `llm.chat`/`llm.parse`. Инструменты с удалением и правила системного
   промпта одинаковы для любой модели проекта.
 - Интерфейс и сообщения пользователю — на русском.

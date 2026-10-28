@@ -8,7 +8,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from fakes import latest_page, ref_for, tool
+from fakes import last_turn, latest_page, ref_for, tool
 from helpers import arun
 from stand import PASSWORD, USERNAME
 from testgen import agent, auth, blocks, projects, storage
@@ -140,7 +140,7 @@ def test_agent_reuses_the_actions_of_a_stable_test_as_a_module(stand, project, f
     module = storage.load(mid)
     assert module["role"] == "module" and [x["action"] for x in module["steps"]] == ["navigate", "fill", "fill", "click"]
     assert [x["action"] for x in storage.load(src["id"])["steps"]] == ["use_module", "assert_text_present"]
-    assert "Reused" in json.dumps(turns[1]["messages"][-1], ensure_ascii=False)
+    assert "Reused" in json.dumps(last_turn(turns[1]), ensure_ascii=False)
     assert PASSWORD not in json.dumps(t, ensure_ascii=False)
 
 
@@ -172,8 +172,8 @@ def test_test_data_goes_along_with_actions_and_a_reload_of_the_same_page_is_refu
                       credentials={"username": USERNAME, "password": PASSWORD})
     s.starts_in_autopilot = True
     t = arun(_run(s, s.to_test))
-    assert "already on this page" in json.dumps(turns[1]["messages"][-1], ensure_ascii=False)
-    third = json.dumps(turns[2]["messages"][-1], ensure_ascii=False)
-    assert third.count('"tool_result"') == 2 and "Not executed" not in third    # the record and the action
+    assert "already on this page" in json.dumps(last_turn(turns[1]), ensure_ascii=False)
+    third = json.dumps(last_turn(turns[2]), ensure_ascii=False)
+    assert third.count('"role": "tool"') == 2 and "Not executed" not in third    # the record and the action
     assert [x["action"] for x in t["steps"]] == ["navigate", "fill"]
     assert all(x.get("page") for x in t["steps"][1:])                  # where each step starts

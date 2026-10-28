@@ -1,5 +1,5 @@
-"""Requests and replies in one neutral format: the Anthropic Messages format with plain dicts,
-so the agent's conversation goes to the API as is:
+"""Requests and replies in one neutral format of plain dicts - the agent's conversation, its tool calls and
+screenshots; the provider renders it for the API (openai_compat.py):
 
     {"role": "user" | "assistant", "content": str | [block, ...]}
     block: {"type": "text", "text"}
@@ -8,8 +8,8 @@ so the agent's conversation goes to the API as is:
            {"type": "tool_result", "tool_use_id", "content": str | [text/image blocks], "is_error"?}
 
 What a model may lack is replaced here: old screenshots are cut out of the history
-(	rim_history) instead of server-side context editing; structured output is a JSON
-schema in the prompt, checked with pydantic and asked again once on error.
+(trim_history); structured output is a JSON schema in the prompt, checked with pydantic
+and asked again once on error.
 """
 from __future__ import annotations
 
@@ -45,13 +45,13 @@ class Request:
     max_tokens: int = 16000
     effort: str = ""
     one_tool: bool = True            # at most one tool call per answer
-    cache: bool = True               # cache the static prefix: tools + system (Anthropic)
-    cache_all: bool = False          # also cache the growing conversation (the authoring agent)
-    context: str = ""                # static text after the system prompt, cached separately
+    cache: bool = True               # the static prefix may be cached by the server
+    cache_all: bool = False          # the growing conversation too (the authoring agent)
+    context: str = ""                # static text after the system prompt (the same in every request of a job)
     keep_images: int = 0             # >0: keep only the last N screenshots / page states
     stage: dict = field(default_factory=dict)
     stream: bool = False             # the answer comes as a stream: a long one is not cut by a quiet connection
-    timeout: float = 0               # seconds: the wait for an answer (streamed - a pause in it); 0 - the SDK's
+    timeout: float = 0               # seconds: the wait for an answer (streamed - a pause in it); 0 - the client's
     think_limit: int = 0             # streamed: characters of thinking with no answer begun - given up as cut off
     progress: Any = None             # streamed: progress(thinking chars, answer chars) every PROGRESS_EVERY seconds
 
@@ -87,8 +87,7 @@ def _is_state(text: str) -> bool:
 
 def trim_history(messages: list[dict], keep: int) -> list[dict]:
     """A copy of the conversation where only the last `keep` user turns keep their screenshots
-    and page snapshots: the rest become short placeholders (what context editing does on the
-    Anthropic side). The latest turn is always kept whole."""
+    and page snapshots: the rest become short placeholders. The latest turn is always kept whole."""
     if keep <= 0:
         return messages
     out = copy.deepcopy(messages)
@@ -100,8 +99,7 @@ def trim_history(messages: list[dict], keep: int) -> list[dict]:
 
 def fill_empty(messages: list[dict]) -> list[dict]:
     """Assistant turns with nothing in them (a model that answered with no text and no tool call)
-    get a placeholder: the API and gateways (LiteLLM) reject an assistant message without content,
-    and so does Anthropic an empty text block."""
+    get a placeholder: APIs and gateways (LiteLLM) reject an assistant message without content."""
     out = messages
     for i, m in enumerate(messages):
         if m["role"] != "assistant":

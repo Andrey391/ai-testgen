@@ -1,6 +1,6 @@
 # Студия как MCP-сервер: работа из IDE
 
-Агенты в IDE (Claude Code, GitHub Copilot, Cursor) могут генерировать и запускать тесты студии, читать
+Агенты в IDE (GitHub Copilot, Cursor и другие клиенты MCP) могут генерировать и запускать тесты студии, читать
 падения и забирать код тестов и trace, не открывая студию.
 
 ## Инструменты
@@ -26,7 +26,7 @@
 из консоли:
 
 ```powershell
-& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth token ivan "Claude Code"
+& $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m testgen.auth token ivan "VS Code"
 ```
 
 Токен действует с правами своего пользователя; отозвать его можно там же. При `TESTGEN_AUTH=off`
@@ -37,12 +37,6 @@
 ## Подключение к запущенной студии (HTTP)
 
 Адрес: `http://127.0.0.1:8765/mcp` (порт — `PORT`). Генерации, запущенные так, видны в Studio вживую.
-
-Claude Code:
-
-```bash
-claude mcp add --transport http testgen http://127.0.0.1:8765/mcp --header "Authorization: Bearer tg_…"
-```
 
 GitHub Copilot (VS Code), `.vscode/mcp.json`:
 
@@ -76,14 +70,14 @@ Cursor, `.cursor/mcp.json`:
       "command": "C:\\Users\\me\\AppData\\Local\\aitestgen\\venv\\Scripts\\python.exe",
       "args": ["-m", "testgen.mcp_server"],
       "cwd": "C:\\path\\to\\ai-testgen",
-      "env": {"TESTGEN_TOKEN": "tg_…", "ANTHROPIC_API_KEY": "sk-ant-…"}
+      "env": {"TESTGEN_TOKEN": "tg_…", "TESTGEN_LLM_API_KEY": "…"}
     }
   }
 }
 ```
 
 `TESTGEN_STUDIO_URL` (необязательно) — адрес студии для ссылок на trace в ответах.
-Модель берётся из настроек проекта («Проект → Модель»); `ANTHROPIC_API_KEY` нужен, только если
+Модель берётся из настроек проекта («Проект → Модель»); `TESTGEN_LLM_API_KEY` нужен, только если
 у проекта не сохранён свой ключ.
 
 ## Пример
