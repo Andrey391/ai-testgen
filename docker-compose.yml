@@ -7,9 +7,9 @@
 #        POSTGRES_PASSWORD=...
 #   3. docker compose up -d       (the data lives in PostgreSQL, volume pgdata)
 #   4. The first start prints the password of the studio user "admin": docker compose logs studio
-#   5. In "Проект → Модель" set the API address http://vllm:8000 and the model Qwen2.5-VL-7B-Instruct:
-#      the studio speaks the Anthropic Messages API, which vLLM serves on /v1/messages (or put an
-#      Anthropic-compatible proxy such as LiteLLM in front of the model).
+#   5. The studio speaks an OpenAI-compatible Chat Completions API, which vLLM serves on /v1: the API address
+#      http://vllm:8000/v1 is set below for every project (or set it and the model Qwen2.5-VL-7B-Instruct in
+#      "Проект → Модель"; any compatible server or a proxy such as LiteLLM will do).
 #
 # GPU and model size (docs/offline.md): 7B - one 24 GB GPU (L4, A10, RTX 4090); 32B - one 80 GB GPU
 # (A100/H100) or two 48 GB; 72B - four 80 GB GPUs. The agent needs a model with tool calling;
@@ -25,6 +25,7 @@ services:
       TESTGEN_SIGNUP: "off"
       TESTGEN_DATABASE_URL: "postgresql+psycopg://testgen:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/testgen"
       TESTGEN_SECRET_KEY: "${TESTGEN_SECRET_KEY:?set TESTGEN_SECRET_KEY in .env}"
+      TESTGEN_LLM_BASE_URL: "http://vllm:8000/v1"  # the model of projects without an address of their own
     shm_size: 1gb                                 # Chromium
     depends_on:
       postgres: {condition: service_healthy}

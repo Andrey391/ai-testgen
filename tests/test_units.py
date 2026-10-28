@@ -111,14 +111,15 @@ def test_usage_scopes_nest():
     assert other.as_dict()["cost_usd"] is None          # no price entered for the model
 
 
-def test_own_gateway_gets_the_key_as_bearer_too():
+def test_client_sends_the_key_as_bearer():
     from testgen import llm
-    headers = llm.make_client("sk-test", "https://gw.example").default_headers     # what every request carries
-    assert headers["X-Api-Key"] == "sk-test" and headers["Authorization"] == "Bearer sk-test"
+    client = llm.make_client("sk-test", "https://gw.example/v1/")
+    assert client._http.headers["Authorization"] == "Bearer sk-test" and client.base_url == "https://gw.example/v1"
+    with pytest.raises(llm.NotConfigured):          # no address by default: the project names its model's server
+        llm.make_client("sk-test", "")
+
 
 def test_model_comes_from_the_project_settings():
-    from types import SimpleNamespace
-
     from testgen import llm, projects
     p = projects.create(f"Модель {uuid.uuid4().hex[:6]}")
     with pytest.raises(llm.NotConfigured):
@@ -128,19 +129,22 @@ def test_model_comes_from_the_project_settings():
     assert projects.llm_key(p["id"]) == "sk-test"
     assert "sk-test" not in json.dumps(projects.get(p["id"]))      # the key stays in secrets/
     m = llm.model(p["id"])
-    assert m.params == {"model": "model-a", "fallbacks": "default", "output_config": {"effort": "high"}}
+    assert (m.name, m.effort) == ("model-a", "high")
     assert (m.api_key, m.base_url) == ("sk-test", "https://gw.example")
     # A stage overrides the model and effort.
-    assert llm.model(p["id"], {"model": "model-b", "effort": "low"}).params["model"] == "model-b"
+    assert llm.model(p["id"], {"model": "model-b", "effort": "low"}).name == "model-b"
     # Effort the model does not take (from the last connection check) is left to the model.
-    info = llm.model_info(SimpleNamespace(to_dict=lambda: {"id": "model-a", "display_name": "A", "capabilities": {
-        "effort": {"supported": False}, "structured_outputs": {"supported": True},
-        "image_input": {"supported": True}, "context_management": {"supported": False}}}))
-    assert info["efforts"] == [] and info["missing"] == ["context_management"]
+    info = llm.model_info({"id": "model-a", "display_name": "A", "capabilities": {
+        "effort": {"supported": False}, "structured_outputs": {"supported": False},
+        "image_input": {"supported": True}}})
+    assert info["efforts"] == [] and info["missing"] == ["structured_outputs"]
+    assert llm.model_info({"id": "qwen", "object": "model"}) == {"id": "qwen", "name": "qwen", "efforts": None,
+                                                                  "missing": []}
     pr = projects.get(p["id"])
     pr["llm"]["models"] = [info]
     projects.save(pr)
-    assert "output_config" not in llm.model(p["id"]).params
+    m = llm.model(p["id"])
+    assert m.effort == "" and "structured" not in m.features
     # A new key or address makes the check stale.
     projects.update_llm(p["id"], {"base_url": ""})
     assert projects.get(p["id"])["llm"]["models"] == []
@@ -167,147 +171,126 @@ def test_har_roundtrip():
 
 
 def test_api_error_text_no_credits():
-    import anthropic
-    import httpx
+    from testgen.providers.openai_compat import NO_CREDITS, NO_KEY, ApiError, error_text
 
-    from testgen.providers.anthropic import NO_CREDITS, error_text
+    def err(status, code, message):
+        return ApiError(status, message, {"error": {"code": code, "message": message}})
 
-    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-
-    def err(status, kind, message):
-        body = {"type": "error", "error": {"type": kind, "message": message}}
-        return anthropic.APIStatusError(message, response=httpx.Response(status, request=req), body=body)
-
-    low = err(400, "invalid_request_error", "Your credit balance is too low to access the Anthropic API.")
-    assert error_text(low) == NO_CREDITS
-    assert error_text(err(402, "billing_error", "Payment required")) == NO_CREDITS
-    assert error_text(err(400, "invalid_request_error", "messages: field required")).startswith("Ошибка API ИИ 400")
+    assert error_text(err(429, "insufficient_quota", "You exceeded your current quota.")) == NO_CREDITS
+    assert error_text(err(402, "payment_required", "Payment required")) == NO_CREDITS
+    assert error_text(err(401, "invalid_api_key", "Incorrect API key")) == NO_KEY
+    assert error_text(err(429, "rate_limit", "Slow down")).startswith("API ИИ: превышен лимит")
+    assert error_text(err(400, "invalid_request", "messages: field required")).startswith("Ошибка API ИИ 400")
 
 
-def test_context_editing_failure_falls_back_to_trimming():
-    """A gateway (LiteLLM) whose context_management polyfill fails on images: the request is
-    repeated with the old screenshots cut by the studio, and later ones skip context editing."""
+def test_conversation_goes_as_chat_completions():
+    """The studio's neutral conversation - tool calls, tool results with screenshots - becomes Chat Completions,
+    and an answer with tool calls comes back as tool_use blocks."""
+    from testgen.providers.openai_compat import messages_of, reply_of, tools_of
+
+    shot = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+    out = messages_of("rules", [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Click."},
+                                          {"type": "tool_use", "id": "c1", "name": "click", "input": {"ref": "e1"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": [
+            {"type": "text", "text": "OK"}, shot]}, {"type": "text", "text": "URL: /cart"}]},
+    ])
+    assert [m["role"] for m in out] == ["system", "user", "assistant", "tool", "user"]
+    assert out[2]["tool_calls"][0]["function"] == {"name": "click", "arguments": '{"ref": "e1"}'}
+    assert out[3] == {"role": "tool", "tool_call_id": "c1", "content": "OK"}
+    assert out[4]["content"][1]["image_url"]["url"] == "data:image/png;base64,AAAA"
+    assert out[4]["content"][-1] == {"type": "text", "text": "URL: /cart"}
+    assert tools_of([{"name": "click", "input_schema": {"type": "object"}}])[0]["function"]["parameters"] \
+        == {"type": "object"}
+
+    reply = reply_of({"model": "m", "choices": [{"finish_reason": "tool_calls", "message": {
+        "content": None, "reasoning_content": "hm", "tool_calls": [
+            {"id": "c2", "type": "function", "function": {"name": "fill", "arguments": '{"ref": "e2"}'}},
+            {"id": "c3", "type": "function", "function": {"name": "click", "arguments": "{broken"}}]}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 60}}})
+    assert reply.stop == "tool" and [c["input"] for c in reply.tool_calls] == [{"ref": "e2"}, {"__raw__": "{broken"}]
+    assert reply.content[0] == {"type": "thinking", "thinking": "hm"}
+    assert reply.usage["input_tokens"] == 40 and reply.usage["cache_read_input_tokens"] == 60
+
+
+class _Gateway:
+    """A fake gateway: `refuse(payload)` - the error message for a request it refuses, or None."""
+
+    def __init__(self, refuse, answer="{}"):
+        self.base_url = "http://gateway.local/" + uuid.uuid4().hex
+        self.refuse, self.answer, self.calls = refuse, answer, []
+
+    async def complete(self, payload, *, stream=False, timeout=0, on_delta=None):
+        from testgen.providers.openai_compat import ApiError
+        self.calls.append(payload)
+        message = self.refuse(payload)
+        if message:
+            raise ApiError(400, message, {"error": {"message": message, "code": "400"}})
+        return {"model": payload["model"], "choices": [{"message": {"content": self.answer}, "finish_reason": "stop"}]}
+
+
+def test_old_screenshots_are_cut_by_the_studio():
     import asyncio
-    import types
 
-    import anthropic
-    import httpx
-
-    from testgen.providers import anthropic as prov
+    from testgen.providers import openai_compat as prov
     from testgen.providers.base import Request
 
-    req = httpx.Request("POST", "http://gateway.local/v1/messages")
-    body = {"type": "error", "error": {"type": "api_error", "message":
-            "context_management polyfill failed: Invalid content item type: image."}}
-    calls = []
-
-    async def create(**kw):
-        calls.append(kw)
-        if "context_management" in kw:
-            raise anthropic.APIStatusError(body["error"]["message"],
-                                           response=httpx.Response(500, request=req), body=body)
-        return types.SimpleNamespace(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn",
-                                     model=kw["model"], usage=None)
-
-    client = types.SimpleNamespace(base_url="http://gateway.local/" + uuid.uuid4().hex,
-                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create)))
-    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    gw = _Gateway(lambda p: None, "ok")
+    p = prov.ChatProvider(gw, set(prov.FEATURES))
     shot = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
-    messages = [{"role": "user", "content": [{"type": "text", "text": "step"}, shot]} for _ in range(4)]
-    r = Request(model="deepseek-coder", system="s", messages=messages, keep_images=1)
-
+    messages = []
+    for _ in range(4):
+        messages += [{"role": "user", "content": [{"type": "text", "text": "step"}, shot]},
+                     {"role": "assistant", "content": "next"}]
+    r = Request(model="m", system="s", messages=messages[:-1], keep_images=1)
     assert asyncio.run(p.chat(r)).text == "ok"
-    assert len(calls) == 2 and "context_management" not in calls[1]
-    assert json.dumps(calls[1]["messages"]).count('"image"') == 1     # old screenshots cut out
-    asyncio.run(p.chat(r))
-    assert len(calls) == 3 and "context_management" not in calls[2]   # no failing first try any more
+    assert json.dumps(gw.calls[0]["messages"]).count('"type": "image_url"') == 1
 
 
 def test_tool_choice_refused_by_gateway_is_dropped():
     """LiteLLM over a Responses API: "tool_choice type 'auto' is not supported by this gateway phase" -
     the request is repeated with the tools but without tool_choice, and later ones skip it."""
     import asyncio
-    import types
 
-    import anthropic
-    import httpx
-
-    from testgen.providers import anthropic as prov
+    from testgen.providers import openai_compat as prov
     from testgen.providers.base import Request
 
-    req = httpx.Request("POST", "http://gateway.local/v1/messages")
-    message = ("litellm.BadRequestError: OpenAIException - {\"error\":{\"code\":\"responses_feature_not_supported\","
-               "\"message\":\"tool_choice type 'auto' is not supported by this gateway phase.\"}}")
-    body = {"error": {"message": message, "type": None, "param": None, "code": "400"}}
-    calls = []
-
-    async def create(**kw):
-        calls.append(kw)
-        if "tool_choice" in kw:
-            raise anthropic.BadRequestError(message, response=httpx.Response(400, request=req), body=body)
-        return types.SimpleNamespace(content=[{"type": "text", "text": "ok"}], stop_reason="end_turn",
-                                     model=kw["model"], usage=None)
-
-    client = types.SimpleNamespace(base_url="http://gateway.local/" + uuid.uuid4().hex,
-                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create)))
-    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    gw = _Gateway(lambda p: "tool_choice type 'auto' is not supported by this gateway phase." if "tool_choice" in p
+                  else None, "ok")
+    p = prov.ChatProvider(gw, set(prov.FEATURES))
     tool = {"name": "click", "description": "c", "input_schema": {"type": "object", "properties": {}}}
     r = Request(model="deepseek-coder", system="s", messages=[{"role": "user", "content": "go"}], tools=[tool])
 
     assert asyncio.run(p.chat(r)).text == "ok"
-    assert len(calls) == 2 and "tool_choice" not in calls[1] and calls[1]["tools"] == [tool]
+    assert len(gw.calls) == 2 and "tool_choice" not in gw.calls[1]
+    assert gw.calls[1]["tools"] == prov.tools_of([tool])
     asyncio.run(p.chat(r))
-    assert len(calls) == 3 and "tool_choice" not in calls[2]          # no failing first try any more
-
-
-def _gateway(refuse):
-    """A fake gateway: `refuse(kw)` - the error message for a request it refuses, or None."""
-    import types
-
-    import anthropic
-    import httpx
-
-    calls = []
-
-    async def create(**kw):
-        calls.append(kw)
-        message = refuse(kw)
-        if message:
-            body = {"error": {"message": message, "type": None, "param": None, "code": "400"}}
-            raise anthropic.BadRequestError(message, response=httpx.Response(
-                400, request=httpx.Request("POST", "http://gateway.local/v1/messages")), body=body)
-        return types.SimpleNamespace(content=[{"type": "text", "text": "{}"}], stop_reason="end_turn",
-                                     model=kw["model"], usage=None)
-
-    client = types.SimpleNamespace(base_url="http://gateway.local/" + uuid.uuid4().hex,
-                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create,
-                                                                                            parse=create)))
-    return client, calls
+    assert len(gw.calls) == 3 and "tool_choice" not in gw.calls[2]     # no failing first try any more
 
 
 def test_json_schema_refused_by_gateway_goes_to_prompt():
-    """"text.format type 'json_schema' is not supported" - structured output is off for the connection and the
+    """"response_format json_schema is not supported" - structured output is off for the connection and the
     caller is told to put the schema in the prompt (FeatureRefused), not shown the gateway's error."""
     import asyncio
 
     import pydantic
 
-    from testgen.providers import anthropic as prov
+    from testgen.providers import openai_compat as prov
     from testgen.providers.base import Request
 
-    client, calls = _gateway(lambda kw: "litellm.BadRequestError: {\"error\":{\"code\":\"responses_feature_not_supported\","
-                                        "\"message\":\"text.format type 'json_schema' is not supported, only 'text' and "
-                                        "'json_object' are allowed.\"}}" if "output_format" in kw else None)
+    gw = _Gateway(lambda p: "response_format type 'json_schema' is not supported, only 'text' and 'json_object' "
+                            "are allowed." if "response_format" in p else None)
 
     class Answer(pydantic.BaseModel):
         ok: bool = True
 
-    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    p = prov.ChatProvider(gw, set(prov.FEATURES))
     r = Request(model="deepseek-coder", system="s", messages=[{"role": "user", "content": "go"}])
     assert p.structured("deepseek-coder")
     with pytest.raises(prov.FeatureRefused):
         asyncio.run(p.parse(r, Answer))
-    assert len(calls) == 1 and not p.structured("deepseek-coder")
+    assert len(gw.calls) == 1 and not p.structured("deepseek-coder")
     assert asyncio.run(p.chat(r)).text == "{}"                         # the schema-in-prompt request goes through
 
 
@@ -316,18 +299,19 @@ def test_unnamed_refusal_drops_least_needed_part_first():
     first, and remembers only what had to go for the request to go through."""
     import asyncio
 
-    from testgen.providers import anthropic as prov
+    from testgen.providers import openai_compat as prov
     from testgen.providers.base import Request
 
-    client, calls = _gateway(lambda kw: "Unsupported parameter in request" if "output_config" in kw else None)
-    p = prov.AnthropicProvider(client, set(prov.FEATURES))
-    r = Request(model="m", effort="high", system="s", messages=[{"role": "user", "content": "go"}])
+    gw = _Gateway(lambda p: "Unsupported parameter in request" if "tool_choice" in p else None)
+    p = prov.ChatProvider(gw, set(prov.FEATURES))
+    tool = {"name": "click", "input_schema": {"type": "object"}}
+    r = Request(model="m", effort="high", system="s", messages=[{"role": "user", "content": "go"}], tools=[tool])
     assert asyncio.run(p.chat(r)).text == "{}"
-    assert "fallbacks" in calls[0] and "fallbacks" not in calls[1] and "output_config" not in calls[2]
-    key = p._key("m")
-    assert prov.REFUSED[key] == {"fallbacks", "effort"}             # dropping fallbacks alone was not enough
+    assert "reasoning_effort" in gw.calls[0] and "reasoning_effort" not in gw.calls[1]
+    assert "parallel_tool_calls" not in gw.calls[2] and "tool_choice" not in gw.calls[3]
+    assert prov.REFUSED[p._key("m")] == {"effort", "parallel", "tool_choice"}
     asyncio.run(p.chat(r))
-    assert len(calls) == 4                                           # no failing tries any more
+    assert len(gw.calls) == 5                                          # no failing tries any more
 
 
 def test_other_errors_drop_nothing():
@@ -335,21 +319,21 @@ def test_other_errors_drop_nothing():
     turns nothing off for the connection."""
     import asyncio
 
-    from testgen.providers import anthropic as prov
+    from testgen.providers import openai_compat as prov
     from testgen.providers.base import ProviderError, Request
 
-    client, calls = _gateway(lambda kw: "messages: field required")
-    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    gw = _Gateway(lambda p: "messages: field required")
+    p = prov.ChatProvider(gw, set(prov.FEATURES))
     r = Request(model="m", effort="high", system="s", messages=[{"role": "user", "content": "go"}])
     with pytest.raises(ProviderError):
         asyncio.run(p.chat(r))
-    assert len(calls) == 1
+    assert len(gw.calls) == 1
 
-    client, calls = _gateway(lambda kw: "images are not supported by this model")
-    p = prov.AnthropicProvider(client, set(prov.FEATURES))
+    gw = _Gateway(lambda p: "images are not supported by this model")
+    p = prov.ChatProvider(gw, set(prov.FEATURES))
     with pytest.raises(ProviderError):
         asyncio.run(p.chat(r))
-    assert len(calls) > 1 and not prov.REFUSED.get(p._key("m"))
+    assert len(gw.calls) > 1 and not prov.REFUSED.get(p._key("m"))
 
 
 def test_empty_assistant_turn_gets_placeholder():

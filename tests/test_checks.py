@@ -37,7 +37,7 @@ def test_visual_baseline_compare_and_verdict(stand, project, fake_llm, tmp_path)
     assert v["ratio"] * 100 > v["threshold"] and (tmp_path / "r3" / v["diff"]).exists()
     assert v["verdict"]["verdict"] == "expected_change"
     sent = fake_llm.calls[-1][1]["messages"][0]["content"]
-    assert sum(1 for b in sent if b["type"] == "image") == 3           # baseline, actual, diff
+    assert sum(1 for b in sent if b["type"] == "image_url") == 3           # baseline, actual, diff
 
 
 @pytest.fixture

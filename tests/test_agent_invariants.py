@@ -1,4 +1,4 @@
-"""The authoring agent with a scripted LLM, and the invariants of CLAUDE.md:
+"""The authoring agent with a scripted LLM, and the invariants of the developer guide:
 the password never reaches the LLM or artifacts; destructive MCP tools are never offered."""
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from fakes import dump, last_user_text, latest_page, ref_for, text, tool
 from helpers import arun, record
 from stand import PASSWORD, USERNAME
-from testgen import exporters, llm, mcp_hub, projects, storage, traffic
+from testgen import exporters, mcp_hub, projects, storage, traffic
 from testgen.agent import StudioSession
 from testgen.mcp_browser import McpBrowser
 from testgen.steps import new_step
@@ -61,7 +61,7 @@ def _session_dump(s: StudioSession) -> str:
     return out.getvalue()
 
 
-def test_password_never_reaches_claude_or_artifacts(stand, project, fake_llm):
+def test_password_never_reaches_the_model_or_artifacts(stand, project, fake_llm):
     fake_llm.script = _agent([
         ("fill", {"text": "{{username}}", "press_enter": False, "description": "Ввести логин"}, "Логин"),
         ("fill", {"text": "{{password}}", "press_enter": False, "description": "Ввести пароль"}, "Пароль"),
@@ -118,11 +118,7 @@ def test_password_never_reaches_claude_or_artifacts(stand, project, fake_llm):
     assert "{{password}}" in everywhere["traffic"]         # the login request was recorded, masked
     assert USERNAME in sent                                 # the login itself may be shown to the LLM
 
-    # Caching: tools + system behind an explicit breakpoint, plus automatic caching of the conversation.
-    kw = fake_llm.calls[0][1]
-    assert kw["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert kw["cache_control"] == {"type": "ephemeral"}
-    assert kw["context_management"]["edits"][0]["type"] == llm.CLEAR_TOOL_USES
+    # Usage: every request counted, prompt tokens the server read from its cache too.
     assert test["authoring_usage"]["requests"] == len(fake_llm.calls)
     assert test["authoring_usage"]["cache_read_input_tokens"] > 0 and test["authoring_usage"]["cost_usd"] > 0
 
@@ -134,16 +130,6 @@ async def _run(s: StudioSession, then=None):
         return then() if then else None
     finally:
         await s.close()
-
-
-def test_prompt_cache_can_be_switched_off(monkeypatch, fake_llm):
-    for on in (False, True):
-        monkeypatch.setattr(llm, "PROMPT_CACHE", on)
-        arun(llm.chat({"model": "test-model"}, system="rules", messages=[{"role": "user", "content": "hi"}],
-                      cache_all=True))
-    off, on = fake_llm.calls[0][1], fake_llm.calls[1][1]
-    assert off["system"] == "rules" and "cache_control" not in off
-    assert on["system"][0]["cache_control"] == {"type": "ephemeral"} and on["cache_control"] == {"type": "ephemeral"}
 
 
 def test_strengthen_session_replays_the_test_then_adds_checks(stand, project, fake_llm):

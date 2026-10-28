@@ -6759,7 +6759,7 @@ $('#pDelete').onclick = async () => {
 };
 
 // model connection (the same card in the settings and in the wizard; the studio has no built-in model)
-const CAPS = {structured_outputs: 'структурированный ответ', image_input: 'изображения', context_management: 'context editing'};
+const CAPS = {structured_outputs: 'структурированный ответ', image_input: 'изображения'};
 function llmState(model, check) {
   if (!model) return ['модель не выбрана', 'warn'];
   if (check?.ok) return ['работает', 'ok'];
@@ -6806,15 +6806,16 @@ function renderModel() {
   const L = PROJ.llm, [state, cls] = llmState(L.model, L.check);
   $('#llmModels').innerHTML = L.models.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
   const keyPh = L.key_set ? 'сохранён — введите новый, чтобы заменить'
-    : L.env_key ? 'не задан — используется ANTHROPIC_API_KEY сервера' : 'sk-ant-…';
+    : L.env_key ? 'не задан — используется ключ сервера (TESTGEN_LLM_API_KEY)' : 'ключ поставщика модели';
+  const urlPh = L.env_base ? 'не задан — используется адрес сервера (TESTGEN_LLM_BASE_URL)' : 'например, http://vllm:8000/v1';
   const html = `<div class="card" data-llm>
     <div class="row"><h3 class="grow" style="margin:0">Модель ИИ</h3>
       <span class="badge ${cls}" title="${esc(L.check?.error || (L.check?.at ? 'проверено ' + fmtTime(L.check.at) : ''))}">${esc(state)}</span></div>
-    <div class="muted">Студия не привязана к конкретной модели: проект выбирает свою. Её используют все этапы — сценарии, агент, самолечение, анализ падений, публикация; в «Процессе генерации» этап может взять другую модель. Запросы идут в Claude API (Anthropic Messages API) или совместимый шлюз. Ключ хранится на сервере и не показывается в интерфейсе.</div>
+    <div class="muted">Студия не привязана к конкретной модели: проект выбирает свою. Её используют все этапы — сценарии, агент, самолечение, анализ падений, публикация; в «Процессе генерации» этап может взять другую модель. Запросы идут в OpenAI-совместимый API (Chat Completions): vLLM, Ollama, LiteLLM, YandexGPT, GigaChat через совместимый шлюз или облако на ваш выбор. Ключ хранится на сервере и не показывается в интерфейсе.</div>
     <div class="grid2">
       <div><label>API-ключ${L.key_set ? ` · <a href="#" onclick="clearLlmKey();return false">очистить</a>` : ''}</label>
         <input data-l="api_key" type="password" autocomplete="new-password" placeholder="${esc(keyPh)}"></div>
-      <div><label>Адрес API</label><input data-l="base_url" value="${esc(L.base_url)}" placeholder="по умолчанию — api.anthropic.com" ${ME.is_admin ? '' : 'disabled'}>
+      <div><label>Адрес API</label><input data-l="base_url" value="${esc(L.base_url)}" placeholder="${esc(urlPh)}" ${ME.is_admin ? '' : 'disabled'}>
         ${ME.is_admin ? '' : '<div class="hint" style="margin:0">Меняет только администратор: туда уходит ключ.</div>'}</div>
     </div>
     <div class="grid2">
@@ -6823,7 +6824,7 @@ function renderModel() {
     </div>
     <div class="hint" data-l-hint></div>
     <details class="opt"><summary>Цены для оценки стоимости, $ за 1M токенов</summary>
-      <div class="hint" style="margin-top:0">Без цены расход показывается в токенах. Запись в кэш считается как 1,25 входа, чтение — 0,1.</div>
+      <div class="hint" style="margin-top:0">Без цены расход показывается в токенах. Входные токены, прочитанные сервером из кэша, считаются как 0,1 входа.</div>
       <div data-prices></div></details>
     <div class="row" style="margin-top:10px"><span class="muted grow" data-msg></span>
       <button class="btn primary" onclick="saveModel(this)">Сохранить и проверить</button></div>
@@ -6876,7 +6877,7 @@ async function saveModel(btn) {
     : `<span class="ok">Сохранено, подключение работает</span> · моделей доступно: ${L.models.length}`;
 }
 async function clearLlmKey() {
-  if (!await sure('Удалить сохранённый API-ключ?', 'Удалить ключ', 'Без ключа проекта запросы к модели пойдут с ключом студии ANTHROPIC_API_KEY, если он задан.')) return;
+  if (!await sure('Удалить сохранённый API-ключ?', 'Удалить ключ', 'Без ключа проекта запросы к модели пойдут с ключом студии TESTGEN_LLM_API_KEY, если он задан.')) return;
   try { await api('DELETE', `/api/projects/${PID}/llm/key`); } catch (e) { toast(e.message, 'bad'); return; }
   await refreshProject(); renderModel();
 }
@@ -8265,7 +8266,6 @@ function ideSnippets(token) {
   const block = (title, hint, code) => `<b>${title}</b><div class="hint" style="margin-top:0">${hint}</div><pre>${esc(code)}</pre>`;
   $('#ideSnippets').innerHTML = `<h3>Подключение</h3>
     <div class="hint">Студия должна быть запущена; адрес MCP: <code>${esc(url)}</code>. Без запущенной студии используйте stdio: <code>python -m testgen.mcp_server</code> с токеном в <code>TESTGEN_TOKEN</code> (подробно — docs/mcp.md).</div>` +
-    block('Claude Code', 'В терминале проекта:', `claude mcp add --transport http testgen ${url}` + (ME.auth_enabled ? ` --header "Authorization: Bearer ${tok}"` : '')) +
     block('GitHub Copilot (VS Code)', 'Файл .vscode/mcp.json:', `{\n  "servers": {\n    "testgen": {"type": "http", "url": "${url}"${auth}}\n  }\n}`) +
     block('Cursor', 'Файл .cursor/mcp.json:', `{\n  "mcpServers": {\n    "testgen": {"url": "${url}"${auth}}\n  }\n}`) +
     '<div class="hint">Пример запроса агенту: «Сгенерируй в проекте Shop тест: войти и добавить товар в корзину, потом запусти его и покажи код».</div>';

@@ -90,6 +90,48 @@ helm install testgen ./helm/ai-testgen --namespace qa --create-namespace \
 `/api/health` — живость, `/api/ready` — база, S3 и очередь. Воркер при остановке не берёт новых
 заданий и доделывает взятые (grace period 10 минут).
 
+Поды работают не от root (uid 10001, `podSecurityContext`/`securityContext` в `values.yaml`): без
+привилегий и capabilities, seccomp `RuntimeDefault` — это проходит Pod Security `restricted`. Chromium
+запускается без своей песочницы (как Playwright по умолчанию) и дополнительных прав не требует. Пишут поды
+только в свои `emptyDir` (`/cache`, `/tmp`, домашняя папка, `/dev/shm`), поэтому корневая файловая
+система может быть только для чтения (`securityContext.readOnlyRootFilesystem: true`).
+
+### Platform V DropApp
+
+DropApp — дистрибутив Kubernetes, чарт ставится в него как есть, с файлом `values-dropapp.yaml`
+(корневая ФС только для чтения, режим без интернета, таймауты ingress для долгих потоков):
+
+```bash
+helm install testgen ./helm/ai-testgen --namespace qa \
+  -f ./helm/ai-testgen/values-dropapp.yaml -f my-values.yaml
+```
+
+В `my-values.yaml` — ваше:
+
+- **Образ** собирается снаружи (`docker build` скачивает браузеры и пакеты) и кладётся во внутренний
+  реестр: `image.repository`, `image.tag`, `imagePullSecrets`.
+- **Секреты** — готовый Secret `existingSecret` с ключами `TESTGEN_DATABASE_URL`, `TESTGEN_SECRET_KEY`,
+  `TESTGEN_S3_ACCESS_KEY`, `TESTGEN_S3_SECRET_KEY` (и ключами входа через каталог, если он есть).
+- **PostgreSQL** 14+ или Platform V Pangolin. Расширение `pg_trgm` ускоряет поиск по модели приложения:
+  если роли `testgen` нельзя его создать, создайте его заранее (`CREATE EXTENSION pg_trgm`) — без него
+  студия работает, только без индекса.
+- **S3** — любое S3-совместимое хранилище: `s3.endpoint`, `s3.bucket`.
+- **Ingress** — класс контроллера кластера (`ingress.className`) и адрес (`ingress.host`). Аннотации в
+  `values-dropapp.yaml` написаны для nginx: у другого контроллера задайте то же самое его средствами —
+  тело запроса до 30 МБ, ожидание ответа 10 минут, без буферизации ответа (ревью требований, конвейер и
+  Studio присылают ход работы потоком). За шлюзом Istio (Platform V Synapse) — `ingress.enabled: false` и
+  свой VirtualService на Service `testgen-ai-testgen`, порт 80, с тем же таймаутом.
+- **Квоты namespace**: веб-экземпляр — до 2 CPU и 4 ГБ, воркер с браузерами — до 3 CPU и 6 ГБ памяти плюс
+  `/dev/shm` в памяти (`shmSize`, 1 ГБ).
+
+Подключения Playwright MCP и Zephyr Scale запускаются через `npx` из кэша пакетов в образе, а `npx`
+пишет в этот кэш. При корневой ФС только для чтения проверьте их кнопкой «Проверить» в «Проект →
+Подключения»; если проверка не проходит, оставьте `readOnlyRootFilesystem: false` — встроенный браузер
+студии от этого не зависит.
+
+Если политика кластера требует свой uid (диапазон uid namespace, как в OpenShift), задайте
+`podSecurityContext.runAsUser` из этого диапазона: образ не зависит от uid, нужна только запись в тома.
+
 ## Docker Compose
 
 `docker-compose.yml` — один экземпляр студии, PostgreSQL и локальная модель (контур без интернета).

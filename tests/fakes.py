@@ -1,9 +1,12 @@
-"""A scripted stand-in for the LLM API: tests run without API calls or costs.
+"""A scripted stand-in for the model API: tests run without API calls or costs.
 
-`FakeClient(script)`: every `beta.messages.create/parse` call is recorded in
-`calls` and answered by `script(kind, kwargs)` with a `Resp`; `models.list()` returns
-`model_list` (Models API entries as dicts). Helpers build the
-usual answers: a tool call, a parsed structured output.
+`FakeClient(script)` takes the place of providers.openai_compat.ChatClient: every request is recorded in `calls`
+as (kind, kw) and answered by `script(kind, kw)` with a `Resp`. kind is "parse" for a request with an output
+schema, else "create"; kw is the request as sent with handy views: "system" (the system prompt), "messages"
+(the rest), "tools" (name, description, input_schema), "output_format" (the schema class), "timeout",
+"stream".
+`models()` returns `model_list` (entries of GET /models as dicts). Helpers build the usual answers: a tool call,
+a text, a parsed structured output.
 """
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ import re
 from types import SimpleNamespace
 
 _ids = itertools.count(1)
+STOP = {"tool_use": "tool_calls", "end_turn": "stop", "max_tokens": "length", "refusal": "stop"}
 
 
 class Resp:
@@ -21,8 +25,32 @@ class Resp:
         self.parsed_output = parsed
         self.stop_reason = stop_reason
         self.model = model
-        self.usage = SimpleNamespace(input_tokens=100, output_tokens=20, cache_creation_input_tokens=300,
-                                     cache_read_input_tokens=1200)
+        self.usage = {"prompt_tokens": 1300, "completion_tokens": 20, "prompt_tokens_details": {"cached_tokens": 1200}}
+
+    def response(self) -> dict:
+        """The answer as a Chat Completions response."""
+        texts, calls, thinking = [], [], []
+        for b in self.content:
+            get = b.get if isinstance(b, dict) else (lambda k, b=b: getattr(b, k, None))
+            if get("type") == "thinking":
+                thinking.append(get("thinking") or "")
+            elif get("type") == "text":
+                texts.append(get("text") or "")
+            elif get("type") == "tool_use":
+                calls.append({"id": get("id"), "type": "function",
+                              "function": {"name": get("name"), "arguments": json.dumps(get("input") or {},
+                                                                                          ensure_ascii=False)}})
+        if self.parsed_output is not None:
+            texts.append(self.parsed_output.model_dump_json())
+        msg = {"role": "assistant", "content": "\n".join(texts) or None}
+        if calls:
+            msg["tool_calls"] = calls
+        if thinking:
+            msg["reasoning_content"] = "".join(thinking)
+        if self.stop_reason == "refusal":
+            msg["refusal"] = "declined"
+        return {"model": self.model, "usage": self.usage,
+                "choices": [{"message": msg, "finish_reason": STOP.get(self.stop_reason, "stop")}]}
 
 
 def tool(name: str, **inp) -> Resp:
@@ -35,7 +63,7 @@ def text(t: str) -> Resp:
 
 
 def _model_named(title: str):
-    """The pydantic model a streamed request's JSON schema was made of (its title is the class name)."""
+    """The pydantic model a request's JSON schema was made of (its name is the class name)."""
     import pydantic
 
     todo = list(pydantic.BaseModel.__subclasses__())
@@ -47,61 +75,35 @@ def _model_named(title: str):
     return None
 
 
-class FakeMessages:
-    def __init__(self, owner):
-        self.owner = owner
-
-    # The session keeps appending to its message list: record the request as it was sent.
-    async def create(self, **kw):
-        kw = kw | {"messages": list(kw["messages"])}
-        self.owner.calls.append(("create", kw))
-        return self.owner.script("create", kw)
-
-    async def parse(self, **kw):
-        kw = kw | {"messages": list(kw["messages"])}
-        self.owner.calls.append(("parse", kw))
-        return self.owner.script("parse", kw)
-
-    # A streamed request: the script answers it whole; with a JSON schema in output_config it is a "parse".
-    def stream(self, **kw):
-        kw = kw | {"messages": list(kw["messages"])}
-        kind = "parse" if "format" in (kw.get("output_config") or {}) else "create"
-        if kind == "parse" and "output_format" not in kw:
-            # scripts tell a structured request by its schema class, as a plain parse sends it: found by the title
-            kw["output_format"] = _model_named(kw["output_config"]["format"].get("schema", {}).get("title", ""))
-        self.owner.calls.append((kind, kw))
-        owner = self.owner
-
-        class Stream:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *exc):
-                return False
-
-            def __aiter__(self):        # read event by event (Request.think_limit, progress): no events, the answer whole
-                return self
-
-            async def __anext__(self):
-                raise StopAsyncIteration
-
-            async def get_final_message(self):
-                return owner.script(kind, kw)
-        return Stream()
+def view(payload: dict, timeout: float = 0, stream: bool = False) -> dict:
+    """The request as the scripts read it."""
+    messages = list(payload["messages"])
+    system = messages.pop(0)["content"] if messages and messages[0]["role"] == "system" else ""
+    fmt = payload.get("response_format") or {}
+    tools = [{"name": t["function"]["name"], "description": t["function"].get("description", ""),
+              "input_schema": t["function"].get("parameters")} for t in payload.get("tools") or []]
+    return payload | {"system": system, "messages": messages, "tools": tools, "timeout": timeout, "stream": stream,
+                      "output_format": _model_named((fmt.get("json_schema") or {}).get("name", "")) if fmt else None}
 
 
 class FakeClient:
+    base_url = "http://fake-model"
+
     def __init__(self, script=None):
         self.calls: list[tuple[str, dict]] = []
         self.script = script or (lambda kind, kw: text("ok"))
-        self.beta = SimpleNamespace(messages=FakeMessages(self))
-        self.messages = self.beta.messages
         self.model_list: list[dict] = []
-        self.models = SimpleNamespace(list=self._models)
 
-    async def _models(self, **kw):
-        for m in self.model_list:
-            yield SimpleNamespace(to_dict=lambda m=m: m)
+    async def complete(self, payload: dict, *, stream: bool = False, timeout: float = 0, on_delta=None) -> dict:
+        # The session keeps appending to its message list: the request is recorded as it was sent.
+        kw = view(payload, timeout, stream)
+        kind = "parse" if payload.get("response_format") else "create"
+        self.calls.append((kind, kw))
+        resp = self.script(kind, kw)
+        return resp.response() if isinstance(resp, Resp) else resp
+
+    async def models(self) -> list[dict]:
+        return list(self.model_list)
 
 
 def _texts(content) -> list[str]:
@@ -120,17 +122,19 @@ def _texts(content) -> list[str]:
 
 
 def last_user_text(kw: dict) -> str:
-    """Text of the latest user turn (page state with element refs)."""
+    """Text of the latest turn after the model's answer: the tool results and the page state with element refs."""
+    out = []
     for m in reversed(kw["messages"]):
-        if m["role"] == "user":
-            return "\n".join(_texts(m["content"]))
-    return ""
+        if m["role"] == "assistant":
+            break
+        out[:0] = _texts(m["content"])
+    return "\n".join(out)
 
 
 def latest_page(kw: dict) -> str:
     """The latest page state sent to the agent (a turn may carry only an error message)."""
     for m in reversed(kw["messages"]):
-        if m["role"] == "user":
+        if m["role"] in ("user", "tool"):
             t = "\n".join(_texts(m["content"]))
             if "Elements (" in t:
                 return t
@@ -148,3 +152,23 @@ def ref_for(page_text: str, name: str) -> str:
 def dump(obj) -> str:
     """Everything that was sent to the fake API, as text (to look for secrets)."""
     return json.dumps(obj, ensure_ascii=False, default=lambda o: getattr(o, "__dict__", str(o)))
+
+
+def last_turn(kw: dict) -> list[dict]:
+    """The messages after the model's latest answer: its tool results ("tool") and what follows them ("user")."""
+    out = []
+    for m in reversed(kw["messages"]):
+        if m["role"] == "assistant":
+            break
+        out.insert(0, m)
+    return out
+
+
+def conversation(messages: list[dict]) -> list[str]:
+    """The roles of the conversation's turns: tool results and the user message after them are one turn."""
+    out: list[str] = []
+    for m in messages:
+        role = "assistant" if m["role"] == "assistant" else "user"
+        if not out or out[-1] != role:
+            out.append(role)
+    return out

@@ -6,11 +6,11 @@
 
 *English summary: an AI test-authoring studio. You describe a scenario in plain language, an agent walks
 through it in a real Playwright browser and records an executable test. Self-hosted, works with any model
-behind the Anthropic Messages API (including a local one in an air-gapped network). The UI is in Russian.*
+behind an OpenAI-compatible API (including a local one in an air-gapped network). The UI is in Russian.*
 
 ## Чем отличается от Playwright Test Agents
 
-Генерировать тесты уже бесплатно умеют Playwright Test Agents и связка Claude Code + Playwright MCP.
+Генерировать тесты уже бесплатно умеют Playwright Test Agents и связка ИИ-ассистента в IDE и Playwright MCP.
 Студия делает упор на тесты, которым можно доверять, и на работу без кода:
 
 - **Проверка проверок.** Мутационное тестирование показывает, ловит ли тест поломку; слабые проверки
@@ -44,7 +44,7 @@ behind the Anthropic Messages API (including a local one in an air-gapped networ
 
 ## Быстрый старт
 
-Нужны Python 3.12, PostgreSQL 17 и ключ модели (или свой сервер с Anthropic Messages API).
+Нужны Python 3.12, PostgreSQL 17 и модель с OpenAI-совместимым API: облако на ваш выбор или свой сервер (vLLM, Ollama).
 
 ```bash
 python -m venv ~/.venvs/aitestgen
@@ -56,13 +56,20 @@ psql -h 127.0.0.1 -U postgres -c "CREATE ROLE testgen LOGIN CREATEDB PASSWORD 't
      -c "CREATE DATABASE testgen OWNER testgen"
 
 export TESTGEN_DATABASE_URL="postgresql+psycopg://testgen:testgen@127.0.0.1:5432/testgen"
-export ANTHROPIC_API_KEY="sk-ant-..."     # необязательно: ключ можно задать в «Проект → Модель»
+export TESTGEN_LLM_BASE_URL="http://127.0.0.1:8000/v1"   # необязательно: адрес и ключ модели задаются в «Проект → Модель»
 ~/.venvs/aitestgen/bin/python server.py   # http://127.0.0.1:8765
 ```
 
 На Windows держите venv по короткому пути (`$env:LOCALAPPDATA\aitestgen\venv`) и не внутри проекта:
 драйвер Playwright не запускается при пути длиннее 260 символов. Команды PowerShell — в
 [CLAUDE.md](CLAUDE.md#команды-windows-powershell).
+
+Проще — `.\studio.cmd` (или двойной щелчок по нему): создаст venv, поставит зависимости и
+Chromium (заново — когда меняется `requirements.txt`), проверит PostgreSQL и откроет студию в браузере.
+`.\scripts\studio.ps1` напрямую работает, только если политика PowerShell разрешает скрипты (по умолчанию —
+`Restricted`); `studio.cmd` запускает его с `-ExecutionPolicy Bypass`.
+Параметры: `-NoAuth` (без входа), `-Port 8800`, `-NoBrowser`, `-Setup` (переустановить зависимости).
+База — `TESTGEN_DATABASE_URL`, без неё — локальная `testgen:testgen@127.0.0.1:5432/testgen`.
 
 При первом запуске создаётся пользователь `admin`, пароль печатается в консоль. Мастер нового проекта
 спросит адрес приложения, модель ИИ и подключения. Модель в коде не задана: каждый проект выбирает
@@ -90,7 +97,7 @@ docker compose logs studio      # пароль admin
 | [docs/offline.md](docs/offline.md) | Закрытый контур: локальная модель (vLLM, Qwen2.5-VL), требования к GPU |
 | [docs/security.md](docs/security.md) | Для службы безопасности: какие данные уходят в модель, где хранятся секреты |
 | [docs/test-stand.md](docs/test-stand.md) | CAPTCHA на тестовом стенде: как настроить стенд для автотестов |
-| [docs/mcp.md](docs/mcp.md) | Студия как MCP-сервер для Claude Code, Copilot, Cursor |
+| [docs/mcp.md](docs/mcp.md) | Студия как MCP-сервер для Copilot, Cursor и других клиентов MCP |
 | [docs/economics.md](docs/economics.md) | Юнит-экономика: сколько стоит тест |
 | [docs/glossary.md](docs/glossary.md) | Термины студии |
 | [docs/licenses.md](docs/licenses.md) | Лицензии зависимостей |

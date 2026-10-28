@@ -8,7 +8,7 @@
 
 | Лицензия | Пакеты | Как используется |
 |---|---|---|
-| MIT, BSD-2/3, ISC, Apache-2.0, PSF-2.0, Unlicense, MIT-0 | почти все: anthropic, playwright, fastapi, uvicorn, starlette, pydantic, mcp, httpx, SQLAlchemy, alembic, boto3, cryptography, PyJWT, Faker, pypdf, prometheus-client и их зависимости | импорт; разрешительные лицензии |
+| MIT, BSD-2/3, ISC, Apache-2.0, PSF-2.0, Unlicense, MIT-0 | почти все: playwright, fastapi, uvicorn, starlette, pydantic, mcp, httpx, SQLAlchemy, alembic, boto3, cryptography, PyJWT, Faker, pypdf, prometheus-client и их зависимости | импорт; разрешительные лицензии |
 | LGPL-3.0 | `psycopg`, `psycopg-binary`, `ldap3` | импорт без изменений; LGPL это допускает при любой лицензии студии, пакеты ставятся из PyPI и заменяемы |
 | MPL-2.0 | `certifi`, `pathspec`, часть `orjson` | без изменений; MPL действует пофайлово |
 | MIT | `mcp-atlassian` (в метаданных пакета лицензия не указана, файл `LICENSE` в пакете — MIT) | отдельный процесс (stdio MCP-сервер, `testgen/sources.py`) |

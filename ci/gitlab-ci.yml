@@ -2,7 +2,7 @@
 #
 # Include or copy into .gitlab-ci.yml. Expects the studio's database reachable from the runner and
 # CI/CD variables (masked) TESTGEN_DATABASE_URL and TESTGEN_SECRET_KEY (the same as the studio's),
-# TESTGEN_USERNAME, TESTGEN_PASSWORD and, optionally, ANTHROPIC_API_KEY for self-healing and
+# TESTGEN_USERNAME, TESTGEN_PASSWORD and, optionally, TESTGEN_LLM_API_KEY for self-healing and
 # failure analysis (the model is the one chosen in the project settings, Project -> Model).
 # The runs are recorded in the studio. The job fails when a test outside quarantine fails; the
 # JUnit report is shown in merge requests.

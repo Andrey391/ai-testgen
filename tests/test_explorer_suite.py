@@ -192,7 +192,7 @@ def test_pipeline_job_explores_when_there_is_no_spec(stand, project, fake_llm):
     seen = {}
 
     def script(kind, kw):
-        seen["context"] = kw["system"][1]["text"]
+        seen["context"] = kw["system"]
         return Resp(parsed=ScenarioPlan(feature="Стенд", assumptions=[], scenarios=[]))
     fake_llm.script = script
     job = pipeline.Job(project, [], "", stand.url, {}, explore=True)

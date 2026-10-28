@@ -513,7 +513,7 @@ def llm_key(pid: str) -> str:
 
 
 def llm_settings(pid: str) -> dict:
-    """Settings for llm.Model: project.json "llm" plus the API key (empty = ANTHROPIC_API_KEY)."""
+    """Settings for llm.Model: project.json "llm" plus the API key (empty = TESTGEN_LLM_API_KEY)."""
     p = get(pid) if pid else None
     if not p:
         return normalize_llm(None) | {"api_key": ""}

@@ -29,14 +29,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     name: {{ include "testgen.secretName" . }}
 {{- end -}}
 
-{{/* Local folders are only a cache of the database and S3; /dev/shm for Chromium. */}}
+{{/* Local folders are only a cache of the database and S3; /dev/shm for Chromium; /tmp and the home
+folder are all the browsers, npx and Python write besides - so the root filesystem may be read-only. */}}
 {{- define "testgen.volumes" -}}
 - name: cache
   emptyDir: {}
 - name: dshm
   emptyDir:
     medium: Memory
-    sizeLimit: 1Gi
+    sizeLimit: {{ .Values.shmSize }}
+- name: tmp
+  emptyDir: {}
+- name: home
+  emptyDir: {}
 {{- end -}}
 
 {{- define "testgen.mounts" -}}
@@ -44,9 +49,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   mountPath: /cache
 - name: dshm
   mountPath: /dev/shm
+- name: tmp
+  mountPath: /tmp
+- name: home
+  mountPath: /home/testgen
 {{- end -}}
 
 {{- define "testgen.scheduling" -}}
+{{- with .Values.podSecurityContext }}
+securityContext:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- with .Values.nodeSelector }}
 nodeSelector:
   {{- toYaml . | nindent 2 }}

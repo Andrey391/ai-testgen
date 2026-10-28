@@ -574,7 +574,8 @@ def _project_view(p: dict) -> dict:
                 "app_has_totp": bool(c.get("totp_secret")), "mailbox_has_password": bool(mailbox.password(p["id"])),
                 "files": agent_mod.project_files(p["id"]), "notify": notify.public_view(p),
                 "llm": p["llm"] | {"key_set": bool(projects.llm_key(p["id"])),
-                                   "env_key": bool(os.environ.get("ANTHROPIC_API_KEY"))},
+                                   "env_key": bool(os.environ.get("TESTGEN_LLM_API_KEY")),
+                                   "env_base": bool(os.environ.get("TESTGEN_LLM_BASE_URL"))},
                 "api": projects.api_settings(p) | {"token_set": bool(projects.api_token(p["id"])),
                                                    "effective_url": projects.api_base(p)},
                 "catalog": CATALOG}

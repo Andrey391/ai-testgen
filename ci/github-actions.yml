@@ -8,7 +8,7 @@
 #   - repository secrets: TESTGEN_DATABASE_URL and TESTGEN_SECRET_KEY (the same as the studio's;
 #     a PostgreSQL role for CI is enough), TESTGEN_USERNAME / TESTGEN_PASSWORD (login of the
 #     application under test, unless the project keeps one) and, for self-healing and failure
-#     analysis, ANTHROPIC_API_KEY (optional: the project's own key is used first; without any a
+#     analysis, TESTGEN_LLM_API_KEY (optional: the project's own key is used first; without any a
 #     broken locator just fails the step).
 #
 # Result: a JUnit report (shown by the "Test report" step and kept as an artifact); the run
@@ -36,7 +36,7 @@ jobs:
       TESTGEN_SECRET_KEY: ${{ secrets.TESTGEN_SECRET_KEY }}
       TESTGEN_USERNAME: ${{ secrets.TESTGEN_USERNAME }}
       TESTGEN_PASSWORD: ${{ secrets.TESTGEN_PASSWORD }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TESTGEN_LLM_API_KEY: ${{ secrets.TESTGEN_LLM_API_KEY }}
       PROJECT: "My project"       # studio project name or id
       TAG: ${{ github.event_name == 'schedule' && '' || 'smoke' }}   # smoke on pushes, everything nightly
     steps:
