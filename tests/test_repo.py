@@ -158,7 +158,7 @@ def test_updates_from_threads_are_not_lost(database):
 def test_run_history_is_rows(database):
     pid = projects.create("Прогоны")["id"]
     a = storage.save({"project_id": pid, "name": "А", "steps": []})
-    b = storage.save({"project_id": pid, "name": "Б", "steps": []})
+    b = storage.save({"project_id": pid, "name": "Б", "steps": [{"id": "s1"}, {"id": "s2"}], "after": [{"id": "d1"}]})
     made = []
     elsewhere = runs.new(a, "suite", live=False)        # going on in another worker: not in LIVE here
     fs.write_bytes(runs.files_dir(elsewhere) / "step-1.jpg", b"\xff\xd8")
@@ -188,6 +188,12 @@ def test_run_history_is_rows(database):
     assert runs.flip_rate(hist) == 1.0
     listed = {t["id"]: t for t in storage.list_tests(pid)}
     assert len(listed[a["id"]]["recent"]) == 3 and listed[b["id"]]["recent"][0]["trigger"] == "suite"
+    assert listed[b["id"]]["steps"] == 2 and listed[b["id"]]["data_steps"] == 1 and listed[a["id"]]["steps"] == 0
+    assert "counts" not in listed[a["id"]]
+    # the histories are kept between reads (the list and the dashboard on every open) until a run finishes
+    rc = runs.new(b, "manual")
+    runs.finish(rc | {"status": "failed", "passed": False})
+    assert [h["id"] for h in {t["id"]: t for t in storage.list_tests(pid)}[b["id"]]["recent"]] == [rb["id"], rc["id"]]
     with db.engine().connect() as c:
         row = c.execute(db.runs.select().where(db.runs.c.id == rb["id"])).first()
     assert row.suite_id == "s1" and row.duration >= 0 and row.report["test_name"] == "Б"

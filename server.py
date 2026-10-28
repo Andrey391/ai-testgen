@@ -147,7 +147,7 @@ async def require_login(request: Request, call_next):
     route = getattr(request.scope.get("route"), "path", "")
     if route.startswith("/api/"):
         monitoring.observe(request.method, route, response.status_code, started)
-    _audit(request, response.status_code)
+    await asyncio.to_thread(_audit, request, response.status_code)
     return response
 
 
@@ -356,7 +356,8 @@ def route_role(method: str, path: str) -> str:
     return ROLE_RULES.get((method, path)) or ("viewer" if method in ("GET", "HEAD") else "editor")
 
 
-async def guard(request: Request) -> None:
+def guard(request: Request) -> None:
+    # sync: FastAPI runs it in the thread pool, the project lookup does not hold up the event loop
     path = getattr(request.scope.get("route"), "path", "")
     for prefix, (param, owner_of, missing) in RESOURCES.items():
         if path == prefix or path.startswith(prefix + "/"):
@@ -523,7 +524,7 @@ async def logout():
 
 
 @app.get("/api/auth/me")
-async def me(request: Request):
+def me(request: Request):
     admin = bool(request.state.user) and auth.is_admin(request.state.user)
     return {"user": request.state.user, "auth_enabled": auth.ENABLED, "signup": auth.SIGNUP,
             "local_login": auth.LOCAL_LOGIN, "sso": {"oidc": sso.oidc_title(), "ldap": sso.ldap_enabled()},
@@ -539,7 +540,7 @@ class TokenBody(BaseModel):
 
 
 @app.get("/api/auth/tokens")
-async def list_tokens(request: Request):
+def list_tokens(request: Request):
     return auth.list_api_tokens(request.state.user)
 
 
@@ -623,7 +624,7 @@ class ProjectBody(BaseModel):
 
 
 @app.get("/api/projects")
-async def list_projects(request: Request):
+def list_projects(request: Request):
     """Projects the user may see, with a connection summary for the projects page."""
     out = []
     for item in projects.list_projects():
@@ -654,7 +655,7 @@ async def create_project(body: ProjectBody, request: Request):
 
 
 @app.get("/api/projects/{pid}")
-async def get_project(pid: str):
+def get_project(pid: str):
     return _project_view(project(pid))
 
 
@@ -686,7 +687,7 @@ class ApiBody(BaseModel):
 
 
 @app.get("/api/projects/{pid}/api")
-async def get_api(pid: str):
+def get_api(pid: str):
     """The API settings (the token only as "set") and the endpoints the project has seen."""
     p = project(pid)
     return {"settings": _project_view(p)["api"], "endpoints": traffic.catalog(pid)}
@@ -798,7 +799,7 @@ async def test_llm(pid: str):
 # ---------- Members of a project; directory groups -> roles (admins) ----------
 
 @app.get("/api/projects/{pid}/access")
-async def get_access(pid: str, request: Request):
+def get_access(pid: str, request: Request):
     p = project(pid)
     return {"visibility": p.get("visibility", "open"), "role": access.role(request.state.user, p),
             "members": [{"user": u, "role": r} for u, r in sorted((p.get("members") or {}).items())],
@@ -826,31 +827,31 @@ async def set_access(pid: str, body: AccessBody, request: Request):
     request.state.audit = {"visibility": body.visibility, "members": {
         u: [before.get(u), members.get(u)] for u in set(before) | set(members) if before.get(u) != members.get(u)}}
     projects.set_access(pid, body.visibility, members)
-    return await get_access(pid, request)
+    return get_access(pid, request)
 
 
 @app.get("/api/projects/{pid}/audit")
-async def project_audit(pid: str, user: str = "", action: str = "", month: str = "", limit: int = 200):
+def project_audit(pid: str, user: str = "", action: str = "", month: str = "", limit: int = 200):
     """The project's part of the audit log, for its owners."""
     return audit.read(month, project_id=pid, user=user, action=action, limit=max(1, min(limit, 2000)))
 
 
 @app.get("/api/audit")
-async def studio_audit(request: Request, project_id: str = "", user: str = "", action: str = "", month: str = "",
+def studio_audit(request: Request, project_id: str = "", user: str = "", action: str = "", month: str = "",
                        limit: int = 200):
     require_admin(request)
     return audit.read(month, project_id=project_id, user=user, action=action, limit=max(1, min(limit, 5000)))
 
 
 @app.get("/api/audit/verify")
-async def audit_verify(request: Request):
+def audit_verify(request: Request):
     """Is the hash chain of the log intact (nothing edited, inserted or removed)?"""
     require_admin(request)
     return audit.verify()
 
 
 @app.get("/api/audit/export")
-async def audit_export(month: str, request: Request):
+def audit_export(month: str, request: Request):
     """A month of the log as JSON lines, for a SIEM or an auditor."""
     require_admin(request)
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", month):
@@ -860,13 +861,13 @@ async def audit_export(month: str, request: Request):
 
 
 @app.get("/api/users")
-async def list_users():
+def list_users():
     """Studio users (to pick members and assignees)."""
     return auth.list_users()
 
 
 @app.get("/api/sso")
-async def get_sso(request: Request):
+def get_sso(request: Request):
     require_admin(request)
     return auth.sso_settings()
 
@@ -987,7 +988,7 @@ def _files_dir(pid: str) -> Path:
 
 
 @app.get("/api/projects/{pid}/files")
-async def list_files(pid: str):
+def list_files(pid: str):
     project(pid)
     return [{"name": f.name, "size": fs.size(f)} for f in sorted(fs.glob(_files_dir(pid), "*")) if fs.is_file(f)]
 
@@ -1023,7 +1024,7 @@ def _file_bytes(pid: str):
 
 
 @app.get("/api/projects/{pid}/usage")
-async def project_usage(pid: str, month: str = ""):
+def project_usage(pid: str, month: str = ""):
     """Language model spending of the project in a month, by stage and model."""
     project(pid)
     if month and not re.fullmatch(r"\d{4}-\d{2}", month):
@@ -1032,14 +1033,14 @@ async def project_usage(pid: str, month: str = ""):
 
 
 @app.get("/api/projects/{pid}/metrics")
-async def project_metrics(pid: str, days: int = 30):
+def project_metrics(pid: str, days: int = 30):
     """The QA lead's dashboard: automation, stability, quality of checks, regression time, saved hours."""
     project(pid)
-    return metrics.project_metrics(pid, max(1, min(days, 365)))
+    return JSONResponse(metrics.project_metrics(pid, max(1, min(days, 365))))
 
 
 @app.get("/api/projects/{pid}/tags")
-async def project_tags(pid: str):
+def project_tags(pid: str):
     project(pid)
     return sorted({tag for t in storage.all_tests(pid) for tag in t.get("tags") or []})
 
@@ -1068,7 +1069,7 @@ async def test_notify(pid: str):
 
 
 @app.get("/api/projects/{pid}/export")
-async def export_project(pid: str, tag: str = "", testit: bool = False):
+def export_project(pid: str, tag: str = "", testit: bool = False):
     """All (or tagged) tests as a pytest project in a zip: conftest.py, tests/, features/."""
     p = project(pid)
     tests = storage.select(pid, tags=[tag] if tag else None, include_drafts=True)
@@ -1087,7 +1088,7 @@ async def export_project(pid: str, tag: str = "", testit: bool = False):
 # ---------- Project MCP connections ----------
 
 @app.get("/api/mcp/presets")
-async def mcp_presets(request: Request):
+def mcp_presets(request: Request):
     # Launch commands come from the server's environment: only admins see them.
     return mcp_hub.presets_public(with_commands=bool(request.state.user) and auth.is_admin(request.state.user))
 
@@ -1218,13 +1219,13 @@ def _remember_check(pid: str, cid: str, result: dict) -> None:
 # ---------- Project skills ----------
 
 @app.get("/api/projects/{pid}/skills")
-async def list_skills(pid: str):
+def list_skills(pid: str):
     project(pid)
     return skills.list_skills(pid)
 
 
 @app.get("/api/projects/{pid}/skills/{name}")
-async def get_skill(pid: str, name: str, raw: bool = False, version: str = ""):
+def get_skill(pid: str, name: str, raw: bool = False, version: str = ""):
     """The version the project uses; `version` builtin / local - that one."""
     project(pid)
     s = skills.get(pid, name, version if version in ("builtin", "local") else "")
@@ -1666,7 +1667,7 @@ def _checkpoint_or_404(pid: str, sid: str) -> dict:
 
 
 @app.get("/api/projects/{pid}/sessions")
-async def interrupted_sessions(pid: str):
+def interrupted_sessions(pid: str):
     """Sessions of the project that were interrupted (the studio restarted): continue or save them."""
     project(pid)
     return [cp for cp in agent_mod.list_checkpoints(pid) if not _alive(cp)]
@@ -1752,7 +1753,7 @@ def test_or_404(tid: str) -> dict:
 
 
 @app.get("/api/tests")
-async def tests(project_id: str, tag: str = "", q: str = "", status: str = "", health: str = "", layer: str = "",
+def tests(project_id: str, tag: str = "", q: str = "", status: str = "", health: str = "", layer: str = "",
                 task: str = ""):
     """The tests of a project; filters of the «Тесты» list (and the dashboard tiles): q, status, health, layer, task."""
     project(project_id)
@@ -1762,11 +1763,13 @@ async def tests(project_id: str, tag: str = "", q: str = "", status: str = "", h
         raise HTTPException(400, "Состояние: " + ", ".join(storage.HEALTH))
     if layer and layer not in storage.LAYERS:
         raise HTTPException(400, "Слой: ui или api")
-    return storage.list_tests(project_id, tag, q=q[:200], status=status, health=health, layer=layer, task=task)
+    # JSONResponse: plain JSON from the database, without jsonable_encoder walking thousands of tests
+    return JSONResponse(storage.list_tests(project_id, tag, q=q[:200], status=status, health=health, layer=layer,
+                                           task=task))
 
 
 @app.get("/api/tests/{tid}")
-async def get_test(tid: str):
+def get_test(tid: str):
     return test_or_404(tid)
 
 
@@ -1898,12 +1901,12 @@ async def delete_comment(tid: str, cid: str, request: Request):
 
 
 @app.get("/api/tests/{tid}/versions")
-async def test_versions(tid: str):
+def test_versions(tid: str):
     return storage.versions(test_or_404(tid))
 
 
 @app.get("/api/tests/{tid}/versions/{n}")
-async def test_version(tid: str, n: int):
+def test_version(tid: str, n: int):
     """A version and how the current test differs from it."""
     t = test_or_404(tid)
     v = storage.version(t, n)
@@ -1986,7 +1989,7 @@ async def delete_test(tid: str):
 
 
 @app.get("/api/tests/{tid}/credentials")
-async def get_credentials(tid: str):
+def get_credentials(tid: str):
     t = test_or_404(tid)
     c = storage.own_credentials(t)
     return {"username": c.get("username", ""), "has_password": bool(c.get("password")),
@@ -2017,7 +2020,7 @@ async def set_credentials(tid: str, body: Credentials):
 
 
 @app.get("/api/tests/{tid}/export")
-async def export(tid: str, format: str = "playwright", testit: bool = False):
+def export(tid: str, format: str = "playwright", testit: bool = False):
     t = test_or_404(tid)
     p = projects.get(t["project_id"]) or {"pipeline": projects.normalize_pipeline(None)}
     name = "".join(c if c.isalnum() else "_" for c in t["name"]).lower()
@@ -2039,7 +2042,7 @@ async def export(tid: str, format: str = "playwright", testit: bool = False):
 
 
 @app.get("/api/tests/{tid}/traffic")
-async def test_traffic(tid: str):
+def test_traffic(tid: str):
     t = test_or_404(tid)
     return [{"index": i, "method": e["method"], "url": e["url"], "status": e["status"], "mime": e["mime"],
              "step": e.get("step", -1), "third_party": e.get("third_party", False), "size": len(e["body"] or "")}
@@ -2098,7 +2101,7 @@ async def run(tid: str, body: RunBody, request: Request):
 
 
 @app.get("/api/tests/{tid}/runs")
-async def test_runs(tid: str):
+def test_runs(tid: str):
     t = test_or_404(tid)
     return runs.list_for_test(t["project_id"], tid)
 
@@ -2111,7 +2114,7 @@ def run_or_404(rid: str) -> dict:
 
 
 @app.get("/api/runs/{rid}")
-async def get_run(rid: str):
+def get_run(rid: str):
     # Screenshots stay on the server as files: the UI polls this every second.
     return runs.public(runs.shown(run_or_404(rid)))
 
@@ -2161,7 +2164,7 @@ async def fix_run(rid: str, body: FixBody, request: Request):
 
 
 @app.get("/api/runs/{rid}/files/{name}")
-async def run_file(rid: str, name: str):
+def run_file(rid: str, name: str):
     f = runs.file(run_or_404(rid), name)
     if not f:
         raise HTTPException(404, "Файл не найден")
@@ -2171,7 +2174,7 @@ async def run_file(rid: str, name: str):
 
 
 @app.get("/api/runs/{rid}/defect")
-async def defect_draft(rid: str):
+def defect_draft(rid: str):
     """A defect draft from a failed run, and the trackers it can go to."""
     r = run_or_404(rid)
     t = test_or_404(r["test_id"])
@@ -2221,7 +2224,7 @@ async def accept_baseline(rid: str, step_id: str):
 
 
 @app.get("/api/tests/{tid}/baselines/{step_id}")
-async def baseline_image(tid: str, step_id: str):
+def baseline_image(tid: str, step_id: str):
     t = test_or_404(tid)
     f = checks.baseline_file(t["project_id"], tid, step_id)
     if not fs.is_file(f):
@@ -2323,7 +2326,7 @@ async def run_suite(pid: str, body: SuiteBody, request: Request):
 
 
 @app.get("/api/projects/{pid}/suites")
-async def list_suites(pid: str):
+def list_suites(pid: str):
     project(pid)
     return suite.list_suites(pid)
 
@@ -2336,7 +2339,7 @@ def suite_or_404(sid: str) -> dict:
 
 
 @app.get("/api/suites/{sid}")
-async def get_suite(sid: str):
+def get_suite(sid: str):
     return suite_or_404(sid)
 
 
@@ -2359,7 +2362,7 @@ async def retry_suite(sid: str, request: Request):
 
 
 @app.get("/api/suites/{sid}/junit")
-async def suite_junit(sid: str):
+def suite_junit(sid: str):
     s = suite_or_404(sid)
     return Response(reports.junit(s), media_type="application/xml", headers=_attachment(f"junit-{sid}.xml", "xml"))
 
@@ -2379,7 +2382,7 @@ async def explore(pid: str, body: ExploreBody):
 
 
 @app.get("/api/projects/{pid}/explore/{eid}")
-async def get_explore(pid: str, eid: str):
+def get_explore(pid: str, eid: str):
     project(pid)
     r = explorer.get(pid, eid)
     if not r:
@@ -2391,7 +2394,7 @@ async def get_explore(pid: str, eid: str):
 
 
 @app.get("/api/projects/{pid}/coverage")
-async def coverage(pid: str):
+def coverage(pid: str):
     project(pid)
     return explorer.coverage(pid) or {"pages": [], "total": 0, "covered": 0, "at": None}
 
@@ -2416,7 +2419,7 @@ def task_or_404(tid: str) -> dict:
 
 
 @app.get("/api/projects/{pid}/tasks")
-async def list_tasks(pid: str, status: str = "", assignee: str = ""):
+def list_tasks(pid: str, status: str = "", assignee: str = ""):
     """status: todo | in_progress | review | done | open (all but done); empty = all."""
     project(pid)
     return {"tasks": tasks.list_tasks(pid, status, assignee), "counts": tasks.counts(pid)}
@@ -2432,7 +2435,7 @@ async def create_task(pid: str, body: TaskBody, request: Request):
 
 
 @app.get("/api/tasks/{tid}")
-async def get_task(tid: str):
+def get_task(tid: str):
     return task_or_404(tid)
 
 
@@ -2821,7 +2824,7 @@ def _ndjson(queue: asyncio.Queue) -> StreamingResponse:
 # ---------- The application model: entities, dependencies, lifecycles, test data, memory ----------
 
 @app.get("/api/projects/{pid}/knowledge")
-async def get_knowledge(pid: str):
+def get_knowledge(pid: str):
     p = project(pid)
     # the latest crawl stopped at the login form and the project still has no login test
     wall = bool((explorer.latest(pid) or {}).get("login_wall")) and not explorer.login_test(p)
@@ -2980,7 +2983,7 @@ async def dismiss_block(pid: str, key: str):
 
 
 @app.get("/api/projects/{pid}/knowledge/duplicates")
-async def knowledge_duplicates(pid: str):
+def knowledge_duplicates(pid: str):
     """Groups of entities, roles and stand data that name the same thing."""
     project(pid)
     return knowledge.duplicates(knowledge.get(pid))
@@ -3052,14 +3055,14 @@ def _wake_jobs(pid: str) -> None:
 
 
 @app.get("/api/projects/{pid}/analyses")
-async def list_analyses(pid: str):
+def list_analyses(pid: str):
     """The history of requirement analyses, newest first."""
     project(pid)
     return analyses.list_analyses(pid)
 
 
 @app.get("/api/projects/{pid}/scenarios")
-async def list_project_scenarios(pid: str):
+def list_project_scenarios(pid: str):
     """Every scenario of the analyses history: the pipeline is started on a choice of them."""
     project(pid)
     return analyses.all_scenarios(pid)
@@ -3073,7 +3076,7 @@ def _analysis(aid: str) -> dict:
 
 
 @app.get("/api/analyses/{aid}")
-async def get_analysis(aid: str):
+def get_analysis(aid: str):
     return analyses.view(_analysis(aid))
 
 
@@ -3566,7 +3569,7 @@ async def start_job(pid: str, body: JobBody, request: Request):
 
 
 @app.get("/api/projects/{pid}/jobs")
-async def list_jobs(pid: str):
+def list_jobs(pid: str):
     project(pid)
     return pipeline.list_jobs(pid)
 
@@ -3657,7 +3660,7 @@ async def fetch_cases(pid: str, body: CaseFetchBody, request: Request):
 
 
 @app.get("/api/projects/{pid}/cases/imports/{iid}")
-async def get_case_import(pid: str, iid: str):
+def get_case_import(pid: str, iid: str):
     project(pid)
     imp = cases_mod.get_import(pid, iid)
     if not imp:
@@ -3712,7 +3715,7 @@ async def decide_reuse(jid: str, body: ReuseBody):
 
 
 @app.get("/api/jobs/{jid}")
-async def get_job(jid: str):
+def get_job(jid: str):
     j = pipeline.get_job(jid)
     if not j:
         raise HTTPException(404, "Запуск не найден")
@@ -3734,7 +3737,7 @@ def _job_review(j: dict) -> dict:
 
 
 @app.get("/api/jobs/{jid}/model")
-async def job_model(jid: str):
+def job_model(jid: str):
     """The parts of the application model the run waits for (its scenarios' groups of entities and the
     roles; `all` - the whole model) and what a person confirms in each: statuses and transitions, roles."""
     j = pipeline.get_job(jid)
@@ -3787,12 +3790,12 @@ async def cancel_job_item(jid: str, index: int, request: Request):
 
 
 @app.get("/")
-async def index():
+def index():
     return FileResponse(ROOT / "static" / "index.html")
 
 
 @app.get("/guide")
-async def user_guide():
+def user_guide():
     """«Справка»: the user guide (docs/user-guide.md and the glossary) as a page of the studio."""
     return HTMLResponse(guide.page())
 

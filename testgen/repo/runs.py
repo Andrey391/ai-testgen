@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from .. import db, fs, projects
 
 SUMMARY = ("id", "status", "started", "finished", "healed", "proposals", "trigger", "suite_id", "quarantined")
+_HISTORIES: dict[tuple, tuple[tuple, dict[str, list[dict]]]] = {}    # Sql.histories: (signature, summaries)
 
 
 def safe(s: str) -> str:
@@ -77,20 +78,36 @@ class Sql:
 
     @classmethod
     def histories(cls, pid: str, tids: list[str], limit: int) -> dict[str, list[dict]]:
-        """The last `limit` summaries of every test of a project in one query (a window function)."""
+        """The last `limit` summaries of every test of a project in one query (a window function). The test list
+        and the dashboard read them on every open: the project's histories are kept until its finished runs change
+        (`_signature` - one cheap query, any instance or worker may have added a run)."""
         t = cls.t
-        n = func.row_number().over(partition_by=t.c.test_id, order_by=t.c.finished.desc()).label("n")
-        sub = select(*cls._cols(), t.c.test_id.label("tid"), n) \
-            .where(t.c.project_id == pid, t.c.finished.isnot(None)).subquery()
-        q = select(sub).order_by(sub.c.tid, sub.c.finished)
-        if limit:
-            q = q.where(sub.c.n <= limit)
-        out: dict[str, list[dict]] = {tid: [] for tid in tids}
+        key = (db.url(), pid, limit)
         with db.engine().connect() as c:
-            for r in c.execute(q):
-                if r.tid in out:
-                    out[r.tid].append(cls._summary(r))
-        return out
+            sig = tuple(c.execute(select(func.count(), func.max(t.c.finished), func.sum(t.c.finished))
+                                  .where(t.c.project_id == pid, t.c.finished.isnot(None))).one())
+            hit = _HISTORIES.get(key)
+            if not hit or hit[0] != sig:
+                n = func.row_number().over(partition_by=t.c.test_id, order_by=t.c.finished.desc()).label("n")
+                sub = select(*cls._cols(), t.c.test_id.label("tid"), n) \
+                    .where(t.c.project_id == pid, t.c.finished.isnot(None)).subquery()
+                q = select(sub).order_by(sub.c.tid, sub.c.finished)
+                if limit:
+                    q = q.where(sub.c.n <= limit)
+                every: dict[str, list[dict]] = {}
+                for r in c.execute(q):
+                    every.setdefault(r.tid, []).append(cls._summary(r))
+                hit = _HISTORIES[key] = (sig, every)
+        return {tid: list(hit[1].get(tid) or []) for tid in tids}
+
+    @classmethod
+    def since(cls, pid: str, since: float) -> list[tuple[str, float, str]]:
+        """(test id, started, status) of the project's finished runs started since `since` - no summaries."""
+        t = cls.t
+        q = select(t.c.test_id, t.c.started, t.c.status) \
+            .where(t.c.project_id == pid, t.c.finished.isnot(None), t.c.started >= since)
+        with db.engine().connect() as c:
+            return [tuple(r) for r in c.execute(q)]
 
     @classmethod
     def finished(cls, pid: str, tid: str, summary: dict, keep: int) -> list[str]:
