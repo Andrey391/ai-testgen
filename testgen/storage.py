@@ -375,13 +375,13 @@ def list_tests(project_id: str, tag: str = "", q: str = "", status: str = "", he
     recorded = traffic.recorded_tests(project_id)
     out = []
     for t in tests:
-        hist = histories.get(t["id"]) or []
+        hist, n = histories.get(t["id"]) or [], t["counts"]
         out.append({k: t.get(k) for k in ("id", "project_id", "name", "url", "scenario", "updated",
                                           "last_run", "external", "engine", "quarantine", "verify",
                                           "authoring_usage", "account", "layer", "outdated")}
-                   | {"steps": len(t.get("steps", [])), "tags": t.get("tags") or [], "role": t.get("role") or "",
-                      "status": repo.status(t), "comments": len(t.get("comments") or []),
-                      "data_steps": len(t.get("before") or []) + len(t.get("after") or []),
+                   | {"steps": n["steps"], "tags": t.get("tags") or [], "role": t.get("role") or "",
+                      "status": repo.status(t), "comments": n["comments"],
+                      "data_steps": n["before"] + n["after"],
                       "proposals": len(t.get("heal_proposals") or []),
                       "recent": hist[-10:], "flip_rate": runs.flip_rate(hist),
                       "has_traffic": _safe(t["id"]) in recorded})

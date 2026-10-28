@@ -14,6 +14,7 @@ from .. import db
 from . import held
 
 Change = Callable[[dict | None], dict | None]       # the stored test (None: none yet) -> the test to store
+LIST_COUNTS = ("steps", "before", "after", "comments")    # Sql.listing: lengths instead of the arrays
 
 
 def safe(test_id: str) -> str:
@@ -120,8 +121,19 @@ class Sql:
             w.append(cls._proposals() > 0)
         elif health == "outdated":
             w.append(cls._outdated() > 0)
+        # The list needs only how many steps, data steps and comments a test has: the arrays stay in the database
+        body = t.c.body
+        for k in LIST_COUNTS:
+            body = body.op("-", return_type=t.c.body.type)(k)
+        counts = [cls._length(k).label(k) for k in LIST_COUNTS]
         with db.engine().connect() as c:
-            return [dict(r.body) for r in c.execute(select(t.c.body).where(*w).order_by(t.c.updated.desc()))]
+            return [dict(r.body) | {"counts": {k: getattr(r, k) for k in LIST_COUNTS}}
+                    for r in c.execute(select(body.label("body"), *counts).where(*w).order_by(t.c.updated.desc()))]
+
+    @classmethod
+    def _length(cls, key: str):
+        v = cls.t.c.body[key]
+        return case((func.jsonb_typeof(v) == "array", func.jsonb_array_length(v)), else_=0)
 
     @classmethod
     def _proposals(cls):
