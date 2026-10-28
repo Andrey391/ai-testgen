@@ -64,6 +64,8 @@ class Scenario(BaseModel):
 
 class DesignedScenario(Scenario):
     match: dict | None = None    # an earlier test or scenario it repeats or extends (reuse.py); not asked of the model
+    covers: str = ""             # from the plan: what requirement or rule it checks
+    req_ids: list[str] = []      # from the plan: the ids of the requirements it checks (analyses.coverage)
 
 
 class ScenarioSet(BaseModel):
@@ -79,6 +81,7 @@ class PlannedScenario(BaseModel):
     priority: Priority
     role: str = ""
     covers: str              # which requirement / rule this checks, one line
+    req_ids: list[str] = []  # the ids of the requirements it checks, as the document numbers them
     existing: str = ""       # the ref of an earlier test (T…) or scenario (S…) it repeats or extends
     relation: Literal["", "same", "refine"] = ""
 
@@ -104,7 +107,10 @@ For each scenario, `instructions` is what a test automation agent will be told, 
 Roles and the lifecycle of the system decide the scenarios. `role` is the role the test acts as - a role of the application model by its exact name ("" only when the application has no login). A scenario acts as a role that may do what it checks (its capabilities); checks of rights ("roles", "security") act as a role that may not, and expect a refusal. An action available to several roles with different rules is a scenario per role that behaves differently. Objects are taken in the state of their lifecycle the scenario needs, and that state is reached by the transitions the lifecycle allows (a "shipped" order needs a paid one first). `test_data` lists every object the test needs before its first step: entity, a reusable name (an object of the model's test data when there is one - its exact name - otherwise a descriptive one such as "a customer with a delivery address"), the details that matter, the state of its lifecycle and the role whose object it is. Scenarios that need the same data name it the same way: the studio records it in the project's test data and the tests reuse one set of data. `gherkin` is the scenario in Given/When/Then form (just the Scenario block). List any assumption you had to make about unclear requirements. Write in the language of the requirements; write its letters as they are, never as \\u escapes."""
 
 PLAN_TASK = ("First step: plan the complete list of scenarios. For each give only the title, type, "
-             "priority, the role it acts as and a one-line note of what it covers. Order them by importance. "
+             "priority, the role it acts as and a one-line note of what it covers. When the requirements are numbered "
+             "(REQ-01, M1-REQ-03, ТР-12…), `req_ids` lists the ids of the requirements the scenario checks, exactly as "
+             "the document writes them; every numbered requirement is checked by at least one scenario. "
+             "Order them by importance. "
              "Give at most {page} scenarios in this answer; if the plan needs more, set `more` to true "
              "and you will be asked for the rest.")
 PLAN_GROUPS = ("\n\nThe application model is large and shown in part (its index names the rest by group). In `groups` "
@@ -241,7 +247,8 @@ def _resumed_plan(resume: dict) -> ScenarioPlan | None:
     """The plan of a design that was cut off (analyses.resume_plan); None - it does not fit any more."""
     keys = ("title", "type", "priority", "role", "covers")
     try:
-        planned = [PlannedScenario.model_validate({k: s.get(k) or "" for k in keys} | {"layer": s.get("layer") or "ui"})
+        planned = [PlannedScenario.model_validate({k: s.get(k) or "" for k in keys} | {
+                       "layer": s.get("layer") or "ui", "req_ids": s.get("req_ids") or []})
                    for s in resume["scenarios"]]
         return ScenarioPlan(feature=resume["feature"], assumptions=resume["assumptions"],
                             groups=resume.get("groups") or [], scenarios=planned)
@@ -338,7 +345,8 @@ async def generate(requirements: str, url: str = "", project: dict | None = None
         # The plan is authoritative for what the scenario is; the batch adds the details.
         out = [DesignedScenario(**full.model_dump() | {
                    "title": planned.title, "type": planned.type, "layer": planned.layer, "priority": planned.priority,
-                   "role": planned.role or full.role, "match": matches[start + k]})
+                   "role": planned.role or full.role, "match": matches[start + k],
+                   "covers": planned.covers, "req_ids": planned.req_ids})
                for k, (planned, full) in enumerate(zip(part, got))]
         if progress and out:
             progress({"type": "batch", "start": start, "scenarios": [s.model_dump() for s in out]})

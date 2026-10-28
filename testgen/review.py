@@ -606,16 +606,25 @@ class Edit(BaseModel):
     replace: str             # what it becomes
 
 
+class Defect(BaseModel):
+    item: str                # the id of the finding whose answer names it
+    problem: str             # what the application does now
+    expected: str            # how it must behave - what the document says after the edit
+
+
 class Revision(BaseModel):
     summary: str
     edits: list[Edit]
+    defects: list[Defect] = []
 
 
 REVISE = """You are the editor of a specification (ТЗ, SRS, user stories). A reviewer found defects in it and the authors answered how it should be. Apply each finding you are given to the document as edits.
 
 Every edit replaces an exact fragment of the document: `find` - the shortest fragment copied verbatim from the document that occurs in it once (a sentence, a list item, a requirement - never a whole section); `replace` - the new text of that fragment. To add text, find the fragment it goes after (the end of the previous item) and replace it with that fragment followed by the new text. `item` - the id of the finding the edit settles; a finding may need several edits.
 
-The answer of the authors is how it must be: follow it over the reviewer's suggestion; with no answer, apply the suggestion. Change only what the findings need; keep the numbering, the language and the style of the document; do not invent requirements beyond the answers. Every finding gets at least one edit; give the edits finding by finding, in the order the findings are listed. `summary` - one or two sentences on what changed."""
+The answer of the authors is how it must be: follow it over the reviewer's suggestion; with no answer, apply the suggestion. Change only what the findings need; keep the numbering, the language and the style of the document; do not invent requirements beyond the answers.
+
+An answer may report a defect of the application itself: the current behaviour that is wrong («Исправить: сейчас…», «сейчас X, а должно быть Y», "currently it does X, it must do Y"). The document says only how the application must behave (Y) - never the current wrong behaviour (X), not as a rule, an exception or a known limitation. Each such defect goes to `defects`: `item` - the finding, `problem` - what the application does now, `expected` - how it must behave. The finding still gets its edits of the document. Do not copy the ids or numbers of findings and themes (t3, Ж1, d4, «5 [t4]») into the document. Every finding gets at least one edit; give the edits finding by finding, in the order the findings are listed. `summary` - one or two sentences on what changed."""
 
 ATTEMPTS = 2        # a batch whose fragment was not found or whose answer was lost is asked once more
 FIX_BATCH = 1       # themes (or findings of their own) per request: a model that thinks long gets a short task
@@ -680,7 +689,7 @@ async def _revise_batch(project: dict, system: str, state: dict, units: dict[str
     """One batch of themes applied to the document: state["doc"] - the text now (the batches in work at the same
     time apply theirs to it as each is done). (the edits, the summary, {theme: why not}). An answer lost in
     thinking is not asked again at once: the batch's next attempt is the only repeat."""
-    edits, summaries, failed, pending = [], [], {}, list(units)
+    edits, summaries, failed, pending, defects = [], [], {}, list(units), []
     for attempt in range(ATTEMPTS):
         def progress(thought: int, said: int, names=list(pending), attempt=attempt) -> None:
             if status:
@@ -696,6 +705,8 @@ async def _revise_batch(project: dict, system: str, state: dict, units: dict[str
                                 stage_name="requirements", stream=True, timeout=FIX_WAIT, think_limit=FIX_THINK,
                                 progress=progress, again=False)
         got, summary, why = _edits(reply)
+        if reply.parsed is not None:
+            defects += [d.model_dump() for d in reply.parsed.defects if d.item in pending and d.problem.strip()]
         if summary:
             summaries.append(summary)
         asked, done, reasons = set(pending), set(), {}
@@ -716,7 +727,7 @@ async def _revise_batch(project: dict, system: str, state: dict, units: dict[str
         pending = [u for u in pending if u in failed]
         if not pending:
             break
-    return edits, " ".join(summaries), failed
+    return edits, " ".join(summaries), failed, defects
 
 
 def _unit_name(uid: str, ms: list[dict], titles: dict) -> str:
@@ -745,7 +756,7 @@ async def revise(project: dict, document: str, report: dict, log=None, keep=None
     order = list(units)
     batches = [order[i:i + FIX_BATCH] for i in range(0, len(order), FIX_BATCH)]
     state = {"doc": document}
-    fixed, failed, edits, summaries = [], {}, [], []
+    fixed, failed, edits, summaries, defects = [], {}, [], [], []
     gate = asyncio.Semaphore(FIX_PARALLEL)
 
     errors: list[Exception] = []
@@ -756,21 +767,23 @@ async def revise(project: dict, document: str, report: dict, log=None, keep=None
                 return
             say(f"Пакет {n} из {len(batches)}: " + ", ".join(_unit_name(u, units[u], titles) for u in batch))
             try:
-                got, summary, missed = await asyncio.wait_for(
+                got, summary, missed, found = await asyncio.wait_for(
                     _revise_batch(project, system, state, {u: units[u] for u in batch}, titles, status), FIX_TIME)
             except asyncio.TimeoutError:
-                got, summary, missed = [], "", {u: f"агент не исправил за {FIX_TIME // 60} мин" for u in batch}
+                got, summary, found = [], "", []
+                missed = {u: f"агент не исправил за {FIX_TIME // 60} мин" for u in batch}
             except Exception as e:      # the batches in work at the same time are kept as they finish
                 errors.append(e)
                 return
             part = {"requirements": state["doc"], "fixed": [m["id"] for u in batch if u not in missed for m in units[u]],
                     "failed": {m["id"]: why for u, why in missed.items() for m in units[u]}, "edits": got,
-                    "summary": summary}
+                    "summary": summary, "defects": _defects(found, units)}
             if keep:
                 keep(part)
             fixed.extend(part["fixed"])
             failed.update(part["failed"])
             edits.extend(got)
+            defects.extend(part["defects"])
             summaries.append(summary)
             done = len(batch) - len(missed)
             say(f"Пакет {n} из {len(batches)} готов: исправлено {done}"
@@ -785,4 +798,15 @@ async def revise(project: dict, document: str, report: dict, log=None, keep=None
     if errors:
         raise errors[0]
     return {"requirements": state["doc"], "fixed": fixed, "failed": failed, "edits": edits,
-            "summary": " ".join(s for s in summaries if s)}
+            "summary": " ".join(s for s in summaries if s), "defects": defects}
+
+
+def _defects(found: list[dict], units: dict[str, list[dict]]) -> list[dict]:
+    """The defects of the application the answers of a batch report: the editor names the theme (or the finding),
+    the analysis keeps them by the findings' ids."""
+    out = []
+    for d in found:
+        ms = units.get(d["item"]) or []
+        out.append({"items": [m["id"] for m in ms] or [d["item"]], "problem": d["problem"].strip()[:2000],
+                    "expected": d["expected"].strip()[:2000]})
+    return out
