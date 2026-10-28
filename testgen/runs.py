@@ -123,6 +123,11 @@ def histories(pid: str, tids: list[str], limit: int = FLAKY_WINDOW) -> dict[str,
     return repo.Sql.histories(pid, tids, limit)
 
 
+def since(pid: str, since: float) -> list[tuple[str, float, str]]:
+    """(test id, started, status) of the finished runs of a project started since `since` (the dashboard)."""
+    return repo.Sql.since(pid, since)
+
+
 def flip_rate(index: list[dict]) -> float | None:
     """How often the result changes between consecutive attempts (a flaky run counts
     as a change): 0 = stable, 1 = alternates every time. None with too little history."""

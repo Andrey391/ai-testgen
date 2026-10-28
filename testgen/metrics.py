@@ -32,7 +32,7 @@ def project_metrics(pid: str, days: int = 30) -> dict:
     p = projects.get(pid)
     cfg = p["pipeline"]["run"]
     since = time.time() - days * 86400
-    tests = [t for t in storage.all_tests(pid) if t.get("role") != "module"]
+    tests = [t for t in storage.repo.Sql.listing(pid) if t.get("role") != "module"]     # without their steps
     n = len(tests)
 
     linked = sum(1 for t in tests if any((e or {}).get("case_id") or (e or {}).get("work_item_id")
@@ -47,18 +47,20 @@ def project_metrics(pid: str, days: int = 30) -> dict:
 
     flaky, quarantined, run_count, passed_runs, per_day = 0, 0, 0, 0, {}
     threshold = cfg["flaky_threshold"] / 100
+    # One query for the flaky window of every test and one for the runs of the period, not a history per test
+    histories = runs.histories(pid, [t["id"] for t in tests])
     for t in tests:
-        hist = runs.history(pid, t["id"], limit=0)
-        if runs.is_flaky(t, hist, threshold):
+        if runs.is_flaky(t, histories[t["id"]], threshold):
             flaky += 1
         if (t.get("quarantine") or {}).get("on"):
             quarantined += 1
-        for h in hist:
-            if (h.get("started") or 0) >= since:
-                run_count += 1
-                passed_runs += h.get("status") in ("passed", "flaky")
-                day = time.strftime("%Y-%m-%d", time.localtime(h["started"]))
-                per_day[day] = per_day.get(day, 0) + 1
+    ids = {t["id"] for t in tests}
+    for tid, started, status in runs.since(pid, since):
+        if tid in ids:
+            run_count += 1
+            passed_runs += status in ("passed", "flaky")
+            day = time.strftime("%Y-%m-%d", time.localtime(started))
+            per_day[day] = per_day.get(day, 0) + 1
 
     scores = [t["verify"]["score"] for t in tests if (t.get("verify") or {}).get("score") is not None]
     suites = [s for s in suite.list_suites(pid, limit=20) if s.get("finished") and s.get("started")]

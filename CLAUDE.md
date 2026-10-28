@@ -148,6 +148,9 @@ CI — `.github/workflows/tests.yml`. Бинарные файлы в S3: `TESTGE
 $env:TESTGEN_TEST_S3 = "moto"; & $env:LOCALAPPDATA\aitestgen\venv\Scripts\python -m pytest -q -n 4
 ```
 
+Нагрузочный тест API студии — `loadtest/` (`seed.py` — синтетические данные в отдельной базе `testgen_load`,
+`load.py` — пользователи ступенями с порогами p95 и ошибок; запуск — `loadtest/README.md`).
+
 Ручная проверка — запуском студии (для локальной отладки удобно `TESTGEN_AUTH=off`); стенд для
 экспериментов поднимает конфигурация `stand` из `.claude/launch.json`.
 
