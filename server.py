@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import gzip
+import hashlib
 import io
 import json
 import logging
@@ -3789,9 +3791,30 @@ async def cancel_job_item(jid: str, index: int, request: Request):
     return {"ok": True}
 
 
+_PAGES: dict = {}
+
+
+def _static_page(request: Request, path: Path) -> Response:
+    """A page of the studio: gzip for the browser that takes it (the page is ~700 KB), ETag with no-cache —
+    a reload after an update of the studio gets the new page, otherwise 304."""
+    st = path.stat()
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _PAGES.get(path)
+    if not hit or hit[0] != key:
+        body = path.read_bytes()
+        hit = _PAGES[path] = (key, body, gzip.compress(body, 6), 'W/"%s"' % hashlib.sha256(body).hexdigest()[:20])
+    _, body, packed, tag = hit
+    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if tag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(packed, media_type="text/html; charset=utf-8", headers={**headers, "Content-Encoding": "gzip"})
+    return Response(body, media_type="text/html; charset=utf-8", headers=headers)
+
+
 @app.get("/")
-def index():
-    return FileResponse(ROOT / "static" / "index.html")
+def index(request: Request):
+    return _static_page(request, ROOT / "static" / "index.html")
 
 
 @app.get("/guide")
