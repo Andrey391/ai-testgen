@@ -1880,8 +1880,8 @@ const api = async (method, url, body, signal) => {
                           body: body ? JSON.stringify(body) : undefined});
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    throw new Error('Сервер студии не отвечает: он остановлен или перезапущен. Сессии Studio хранятся в памяти ' +
-                    'сервера — после перезапуска несохранённые шаги пропадают. Запустите студию и обновите страницу.');
+    throw new Error('Сервер студии не отвечает: он остановлен или перезапущен. Записанные шаги сессий Studio ' +
+                    'сохраняются — запустите студию, обновите страницу и продолжите сессию в Studio («Продолжить»).');
   }
   if (r.status === 401 && !url.startsWith('/api/auth/')) { showLogin(); throw new Error('Требуется вход'); }
   if (!r.ok) {
@@ -1895,6 +1895,16 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const store = {get: k => { try { return localStorage.getItem(k) } catch { return null } },
                set: (k, v) => { try { localStorage.setItem(k, v) } catch {} }};
 const fmtTime = t => t ? new Date(t * 1000).toLocaleString('ru-RU') : '';
+
+// ---- polls of the open screen (session, run, suite, job, work over an analysis): a poll due while the tab is
+// hidden waits and runs when the tab is shown again. later() instead of setTimeout, stopLater() instead of clearTimeout.
+const HIDDEN_WAIT = new Map();
+const later = (fn, ms) => { const id = setTimeout(() => document.hidden ? HIDDEN_WAIT.set(id, fn) : fn(), ms); return id; };
+const stopLater = id => { clearTimeout(id); HIDDEN_WAIT.delete(id); };
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const due = [...HIDDEN_WAIT.values()]; HIDDEN_WAIT.clear(); due.forEach(fn => fn());
+});
 
 // ---- messages instead of alert/confirm.
 // toast(text, kind) - success or information in the corner, disappears by itself (a click closes it earlier);
@@ -2105,7 +2115,7 @@ let ME = null, PID = null, PROJ = null, PROJECTS = [], PRESETS = [], SKILLS = []
 
 // ---- login
 function showLogin() {
-  clearTimeout(pollTimer); clearTimeout(jobTimer); clearTimeout(runTimer); clearTimeout(suiteTimer); clearTimeout(inboxTimer);
+  stopLater(pollTimer); stopLater(jobTimer); stopLater(runTimer); stopLater(suiteTimer); clearTimeout(inboxTimer);
   INBOX = null; $('#bellMenu').classList.add('hidden');
   $$('main > section').forEach(x => x.classList.add('hidden'));
   $('nav').classList.add('hidden'); $('#projBox').classList.add('hidden'); $('#bellBox').classList.add('hidden');
@@ -2226,11 +2236,11 @@ async function switchProject(pid) {
 const REQ_DRAFTS = {};      // new requirements typed and not reviewed yet: each project its own
 function leaveProject(prev, pid) {
   // Конвейер: the run open and its polling, the banner of a run going on, what was typed for the other application
-  clearTimeout(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null); foldPipeForm(false);
+  stopLater(jobTimer); JOB = null; $('#jobBox').classList.add('hidden'); pipeBusy(null); foldPipeForm(false);
   $('#pipeUrl').value = $('#pipeCaseIds').value = ''; $('#pipeErr').textContent = '';
   PIPE_REVIEWS = []; PIPE_ANS = []; PIPE_SCEN = []; $('#pipeReview').innerHTML = ''; $('#pipeLeft').innerHTML = '';
   // Тесты: the run or suite open stops refreshing
-  clearTimeout(runTimer); clearTimeout(suiteTimer);
+  stopLater(runTimer); stopLater(suiteTimer);
   // Требования: the analysis being loaded, the work followed on the live card, the draft of new requirements
   AN_LOADING = AN_WANT = ''; ANALYSES = []; $('#anActive').innerHTML = '';
   if (WATCH) { stopWatch(); clearInterval(LIVE_TIMER); $('#reqBtn').disabled = false; }
@@ -2384,7 +2394,7 @@ async function openRoute(r) {
   if (r.view === 'pipe' && id) return openJob(id);
   if (tab === 'tests') {
     ['#testBox', '#runBox', '#suiteBox'].forEach(s => $(s).classList.add('hidden'));
-    OPEN_TEST = null; clearTimeout(runTimer); clearTimeout(suiteTimer);
+    OPEN_TEST = null; stopLater(runTimer); stopLater(suiteTimer);
   }
   // «Назад» from a session to Studio does not close it: the address names the open session again
   if (r.view === 'studio' && SID && STATE?.project_id === PID) history.replaceState(null, '', '#' + projPath('studio', SID));
@@ -2573,7 +2583,7 @@ function openSession(sid, quiet) {
 
 // only the session shown in Studio is polled; the others are in «Открытые сессии» (loadMine)
 async function poll() {
-  clearTimeout(pollTimer);
+  stopLater(pollTimer);
   if (!SID) return;
   const sid = SID;
   try {
@@ -2584,7 +2594,7 @@ async function poll() {
     if (m && (m.status !== s.status || m.dirty !== s.dirty || m.name !== s.name)) { Object.assign(m, {status: s.status, dirty: s.dirty, name: s.name}); renderMine(); }
   }
   catch (e) { if (/not found/i.test(e.message)) { if (sid === SID) sessionLost(sid); return; } }
-  pollTimer = setTimeout(poll, 900);
+  pollTimer = later(poll, 900);
 }
 
 // ---- open sessions of the person: several at once, in different projects (TESTGEN_SESSIONS_PER_USER).
@@ -2626,7 +2636,7 @@ function studioForProject() {
 }
 // Studio shows the form of a new test; the session stays open on the server (in «Открытые сессии»).
 function leaveSession(newForm) {
-  SID = null; STATE = null; TEST_ID = null; clearTimeout(pollTimer);
+  SID = null; STATE = null; TEST_ID = null; stopLater(pollTimer);
   if (newForm) { delete CUR_SESS[PID]; store.set('tg_sessions', JSON.stringify(CUR_SESS)); }
   if (curTab() === 'studio') setRoute(projPath('studio'), !newForm);
   $('#workspace').classList.add('hidden'); $('#startForm').classList.remove('hidden');
@@ -3190,7 +3200,7 @@ function showTestsSec(sec, own) {
   $$('[data-tests-sec]').forEach(x => x.classList.toggle('hidden', x.dataset.testsSec !== TESTS_SEC));
   if (own) {        // the person chose the section: its list, nothing open over it
     ['#testBox', '#runBox', '#suiteBox'].forEach(b => $(b).classList.add('hidden'));
-    OPEN_TEST = null; clearTimeout(runTimer); clearTimeout(suiteTimer);
+    OPEN_TEST = null; stopLater(runTimer); stopLater(suiteTimer);
     setRoute(testsPath());
   }
   if (TESTS_SEC === 'suites') loadSuites();
@@ -3215,8 +3225,8 @@ new MutationObserver(syncSplit).observe($('.detail-pane'), {subtree: true, attri
 function closeDetail(box) {
   $(box).classList.add('hidden');
   if (box === '#testBox') OPEN_TEST = null;
-  if (box === '#runBox') clearTimeout(runTimer);
-  if (box === '#suiteBox') clearTimeout(suiteTimer);
+  if (box === '#runBox') stopLater(runTimer);
+  if (box === '#suiteBox') stopLater(suiteTimer);
   setRoute(OPEN_TEST && !$('#testBox').classList.contains('hidden') ? projPath('tests', OPEN_TEST) : testsPath());
 }
 const runBadge = st => { const [t, c] = RUN_STATUS[st] || [st, 'off']; return `<span class="badge ${c}">${esc(t)}</span>`; };
@@ -3485,14 +3495,14 @@ async function retrySuite(sid, btn) {
   catch (e) { notice(btn, e.message); btn.disabled = false; }
 }
 async function openRun(rid, quiet) {     // quiet: a refresh of the open run, not opening it
-  clearTimeout(runTimer);
+  stopLater(runTimer);
   if (!quiet) { setRoute(projPath('runs', rid)); if (curTab() !== 'tests') showTab('tests'); }
   let r;
   try { r = await api('GET', `/api/runs/${rid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
   const t = await api('GET', `/api/tests/${r.test_id}`).catch(() => null);
   if (r.project_id !== PID) return;      // a refresh late after another project was chosen
   renderRun(r, t);
-  if (r.status === 'running') runTimer = setTimeout(() => openRun(rid, true), 900);
+  if (r.status === 'running') runTimer = later(() => openRun(rid, true), 900);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
 }
 function detailsHtml(r, x, t) {
@@ -3638,7 +3648,7 @@ function renderRun(r, t) {
 }
 // a defect from a failed run: a draft a person edits and sends to the tracker
 async function defectDraft(rid) {
-  clearTimeout(runTimer);
+  stopLater(runTimer);
   let d;
   try { d = await api('GET', `/api/runs/${rid}/defect`); } catch (e) { toast(e.message, 'bad'); return; }
   $('#defectBox').innerHTML = `<div class="card" style="background:var(--bg)"><b>Дефект</b>
@@ -3972,7 +3982,7 @@ async function loadSuites() {
     || '<tr><td colspan="5" class="muted">Наборы ещё не запускались: нажмите «Запустить набор» (все тесты или тесты выбранного тега) — или запускайте из CI (<code>python -m testgen.run</code>).</td></tr>';
 }
 async function openSuite(sid, quiet) {
-  clearTimeout(suiteTimer);
+  stopLater(suiteTimer);
   if (!quiet) { setRoute(projPath('suites', sid)); if (curTab() !== 'tests') showTab('tests'); }
   let s;
   try { s = await api('GET', `/api/suites/${sid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
@@ -3991,7 +4001,7 @@ async function openSuite(sid, quiet) {
     <table><tbody>${s.items.map(i => `<tr ${i.run_id ? `class="click" onclick="openRun('${i.run_id}')"` : ''}><td><b>${esc(i.name)}</b>${i.quarantined ? ' <span class="badge off">карантин</span>' : ''}${i.shares ? ` <span class="badge" title="Тест работает с теми же данными стенда, что и другие тесты набора (записей: ${i.shares}): они идут по очереди, а не одновременно">общие данные</span>` : ''}
       ${i.error ? `<div class="err">${esc(i.failed_step ? i.failed_step + ': ' : '')}${esc(i.error)}</div>` : ''}</td>
       <td>${i.status === 'queued' ? `<span class="muted">${(i.after || []).some(j => ['queued', 'running'].includes(s.items[j]?.status)) ? 'ждёт тесты с общими данными' : 'в очереди'}</span>` : runBadge(i.status)}</td><td class="muted">${i.duration != null ? i.duration + ' с' : ''}</td></tr>`).join('')}</tbody></table>`;
-  if (s.status === 'running') suiteTimer = setTimeout(() => openSuite(sid, true), 1500);
+  if (s.status === 'running') suiteTimer = later(() => openSuite(sid, true), 1500);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
 }
 
@@ -5097,7 +5107,7 @@ function syncLive() {
   if (AN.status === 'running') { if (WATCH?.aid !== AN.id) watchWork(AN); }
   else if (WATCH && WATCH.aid !== AN.id) { stopWatch(); $('#reqLive').classList.add('hidden'); }
 }
-function stopWatch() { if (WATCH) clearTimeout(WATCH.timer); WATCH = null; }
+function stopWatch() { if (WATCH) stopLater(WATCH.timer); WATCH = null; }
 function watchWork(a) {
   liveStart(a.progress?.stage || WORK_NAME[a.work] || 'Работа с требованиями…', a.id, false, (a.started || a.beat || Date.now() / 1000) * 1000);
   $('#reqStop').classList.toggle('hidden', a.work === 'design');
@@ -5122,9 +5132,9 @@ function watchWork(a) {
       const sig = watchSig(fresh);
       if (sig !== WATCH.sig && AN?.id === fresh.id) { WATCH.sig = sig; openAnalysis(fresh); }
     }
-    WATCH.timer = setTimeout(poll, 2500);
+    WATCH.timer = later(poll, 2500);
   };
-  WATCH.timer = setTimeout(poll, 2500);
+  WATCH.timer = later(poll, 2500);
 }
 const watchSig = a => JSON.stringify([a.work, (a.revisions || []).length, a.review?.at, Object.keys(a.review?.resolutions || {}).length, a.learned]);
 function watchShow(a) {       // the lines of the log of the work not shown yet
@@ -5663,7 +5673,7 @@ async function startPicked() {
   finally { pipeStartLabel(); }
 }
 async function openJob(jid, quiet) {     // quiet: a refresh, or the running job shown by itself
-  clearTimeout(jobTimer);
+  stopLater(jobTimer);
   if (!quiet) { setRoute(projPath('pipe', jid)); if (curTab() !== 'pipe') showTab('pipe'); foldPipeForm(true); }
   let j;
   try { j = await api('GET', `/api/jobs/${jid}`); } catch (e) { if (ROUTING && !quiet) throw e; toast(e.message, 'bad'); return; }
@@ -5674,7 +5684,7 @@ async function openJob(jid, quiet) {     // quiet: a refresh, or the running job
   if (JOB.status === 'awaiting_model' || heldBy(JOB, 'model')) loadJobModel(jid);
   if (LIVE_JOB.includes(JOB.status)) pipeBusy(JOB);
   else if (PIPE_BUSY?.id === JOB.id) pipeBusy(null);
-  if (LIVE_JOB.includes(JOB.status)) jobTimer = setTimeout(() => openJob(jid, true), 1500);
+  if (LIVE_JOB.includes(JOB.status)) jobTimer = later(() => openJob(jid, true), 1500);
   else if (!$('#tab-pipe').classList.contains('hidden')) loadPipe();
 }
 // A pipeline run as a process: the stages with how many scenarios each holds, then the scenarios grouped
