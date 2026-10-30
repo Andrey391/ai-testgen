@@ -747,7 +747,7 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     if recheck:
         blocked.append("ТЗ исправлено агентом после проверки — проверьте его заново")
     for name, error in errors.items():
-        blocked.append(f"проверка «{name}» не выполнена: {error}")
+        blocked.append(f"проверка «{name}» не выполнена: {review.clean_error(error)}")
     # Counted by themes, as a person settles them: a theme of the lifecycle alone (its conflicts and questions,
     # l<i>/lq<i>) is settled with the lifecycle, the others with the document.
     left = [t for t in review.themes(rv) if t["blocking"] and t["status"] in (review.OPEN, review.TODO)]
@@ -786,8 +786,15 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     done["lifecycle"] = (bool(rv) and LIFECYCLE_CHECK not in errors and not lc_left and (not learn or learned)
                          and not updates and state == "confirmed")
     step = next((s for s in STEPS[:-1] if not done[s]), "scenarios")
-    return {"ready": not blocked, "blocked": blocked, "step": step, "done": done,
-            "settled": bool(rv) and not errors and not left and not recheck, "recheck": recheck,
+    settled = bool(rv) and not errors and not left and not recheck
+    # Without confirmations (projects.autonomous): reviewed requirements go to test design as they are - what
+    # would hold them is only told (`waived`); the model learns from them right after the review (_learn_waits,
+    # Job._await_requirements), a failed lesson does not hold them either.
+    waived = []
+    if projects.autonomous(project) and rv:
+        waived, blocked, settled, step = blocked, [], True, "scenarios"
+    return {"ready": not blocked, "blocked": blocked, "waived": waived, "step": step, "done": done,
+            "settled": settled, "recheck": recheck,
             "left": len(left) - len(lc_left), "lifecycle_left": len(lc_left),
             "learn": learn, "learned": learned, "updates": updates, "confirm": confirm, "units": units, "parts": parts,
             "state": state, "missing": knowledge.missing(doc) if doc else []}

@@ -51,6 +51,18 @@ WAIT = 300              # seconds of silence in a streamed answer of the reviewe
                         # that waits for a whole answer of a model thinking for minutes cuts it off: 504)
 KINDS = ("contradiction", "role", "gap", "new")
 SEVERITIES = ("critical", "major", "minor")
+TOO_LONG = validation.TOO_LONG
+
+
+def error_text(e: BaseException) -> str:
+    """A failed check for a person: the text of the model API or of the check, without the class of the exception
+    and the final full stop (the studio adds its own words after it)."""
+    return clean_error(llm.api_error_text(e) if isinstance(e, Exception) else str(e) or "ошибка проверки")
+
+
+def clean_error(text: str) -> str:
+    """Also for the errors saved before: "RuntimeError: Отчёт ...." -> "Отчёт ..."."""
+    return re.sub(r"^[A-Za-z_]\w*(Error|Exception): ", "", (text or "").strip()).rstrip(". ")
 
 
 class Conflict(BaseModel):
@@ -142,7 +154,7 @@ async def lifecycle(project: dict, document: str, log=None, notes: str = "") -> 
         calls = reply.tool_calls
         if not calls:
             if reply.stop == "max_tokens":
-                raise RuntimeError("Отчёт не поместился в лимит ответа: проверьте документ по частям.")
+                raise RuntimeError(TOO_LONG)
             messages.append({"role": "user", "content": "Finish with the report tool."})
             continue
         results = []
@@ -261,8 +273,7 @@ async def review(project: dict, document: str, standard: str = "", log=None, not
             raise e
     if isinstance(v, BaseException) and isinstance(lc, BaseException):
         raise v
-    errors = {name: llm.api_error_text(e) if isinstance(e, Exception) else str(e)
-              for name, e in (("документ", v), ("жизненный цикл", lc)) if isinstance(e, BaseException)}
+    errors = {name: error_text(e) for name, e in (("документ", v), ("жизненный цикл", lc)) if isinstance(e, BaseException)}
     out = {"validation": None if isinstance(v, BaseException) else v,
            "lifecycle": None if isinstance(lc, BaseException) else lc, "errors": errors, "at": time.time()}
     out["verdict"] = verdict(out)

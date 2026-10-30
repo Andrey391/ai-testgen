@@ -8,12 +8,12 @@
 :root{
   --bg:#f6f7f9;--panel:#fff;--ink:#1c2230;--muted:#6b7385;--line:#e3e6ec;
   --accent:#3b5bdb;--accent-ink:#fff;--ok:#2b8a3e;--bad:#c92a2a;--warn:#b7791f;--soft:#eef2ff;
-  --warn-bg:#fff8db;--bad-bg:#fff0f0;--ok-bg:#ebfbee;
+  --warn-bg:#fff8db;--bad-bg:#fff0f0;--ok-bg:#ebfbee;--field-line:#c9ced8;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#12151b;--panel:#1a1e27;--ink:#e6e9ef;--muted:#98a0b3;--line:#2b303c;
   --accent:#6c8cff;--accent-ink:#0d1020;--ok:#51cf66;--bad:#ff6b6b;--warn:#fcc419;--soft:#232a3d;
-  --warn-bg:#3a3214;--bad-bg:#3d1d1f;--ok-bg:#1b3222;
+  --warn-bg:#3a3214;--bad-bg:#3d1d1f;--ok-bg:#1b3222;--field-line:#3d4352;
 }}
 *{box-sizing:border-box}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
@@ -36,6 +36,11 @@ nav button .badge{margin-left:5px}
 #bellMenu a .w{font-size:12px;color:var(--muted);white-space:nowrap}
 #bellMenu a .w.late{color:var(--bad);font-weight:600}
 #bellMenu .empty{padding:10px 6px;color:var(--muted)}
+#bellMenu .bell-row{display:flex;align-items:center}
+#bellMenu .bell-row a{flex:1;min-width:0}
+#bellMenu .snooze{border:0;background:none;color:var(--muted);cursor:pointer;padding:4px 6px;border-radius:6px;font-size:12px}
+#bellMenu .snooze:hover,#bellMenu .snooze:focus{background:var(--soft);color:var(--ink)}
+#bellMenu details.later summary{cursor:pointer;margin:10px 6px 4px;font-size:12px;color:var(--muted)}
 #bellMenu .others{border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
 nav button{background:none;border:0;color:var(--muted);font:inherit;padding:6px 10px;border-radius:6px;cursor:pointer}
 nav button.on{color:var(--ink);background:var(--soft);font-weight:600}
@@ -53,7 +58,11 @@ h3{margin:0 0 6px;font-size:15px}
 label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
 label.inline{display:flex;align-items:center;gap:6px;margin:0;color:var(--ink);font-size:14px}
 label.inline input{width:auto}
-input,textarea,select{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px}
+input,textarea,select{width:100%;font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--field-line);border-radius:6px;padding:7px 9px}
+/* a filled field is not mistaken for an empty one or a disabled one */
+::placeholder{color:var(--muted);opacity:.75;font-style:italic}
+input:disabled,textarea:disabled,select:disabled,input[readonly]{background:var(--bg);color:var(--muted)}
+[aria-invalid=true]{border-color:var(--bad);box-shadow:0 0 0 2px var(--bad-bg)}
 textarea{resize:vertical}
 textarea.code{font:12px/1.5 ui-monospace,Consolas,monospace}
 button.btn,a.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:6px 12px;cursor:pointer;text-decoration:none;display:inline-block}
@@ -473,6 +482,8 @@ a.tile:hover,a.tile:focus-visible{border-color:var(--accent)}
 .strip i{display:inline-block;width:9px;height:16px;border-radius:2px;background:var(--line);cursor:pointer}
 .strip i.passed{background:var(--ok)}
 .strip i.failed,.strip i.error{background:var(--bad)}
+details.foldtext summary{cursor:pointer}
+details.foldtext[open] summary{display:none}
 .strip i.flaky{background:var(--warn)}
 .strip i.healed{box-shadow:inset 0 -5px 0 var(--warn)}
 .linkbtn{border:0;background:none;color:var(--accent);cursor:pointer;font:inherit;font-size:12px;padding:0 4px}
@@ -514,6 +525,14 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   .skills-layout > .card{position:static}#skList{max-height:50vh}#skEditor{max-height:none}
   .grid2,.grid3{grid-template-columns:1fr}
   .split.has-detail{display:block}.split.has-detail .list-pane{display:none}.split.has-detail .detail-pane{position:static;max-height:none}}
+/* a phone: the header takes two short lines (the menu scrolls sideways), a wide table scrolls inside its card */
+@media (max-width:640px){
+  header{gap:6px 8px;padding:8px 12px}
+  header h1,header > .grow,.nav-sep{display:none}
+  #projSel{max-width:150px}
+  nav{order:10;width:100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  nav button{white-space:nowrap;padding:6px 8px}
+  .card table{display:block;overflow-x:auto}}
 </style>
 </head>
 <body>
@@ -1059,9 +1078,9 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
       <button type="button" role="radio" aria-checked="false" tabindex="-1" data-src="explore">Обход сайта</button>
     </div>
     <div data-pipe-src="review">
-      <div id="pipeReviewBox"><label>Требования, разобранные во вкладке «Требования»</label>
+      <div id="pipeReviewBox" class="hidden"><label>Требования, разобранные во вкладке «Требования»</label>
         <select id="pipeReview"></select></div>
-      <div class="hint" id="pipeReviewNote"></div>
+      <div class="hint" id="pipeReviewNote">Загружаем требования…</div>
       <div id="pipeLeft"></div>
     </div>
     <div data-pipe-src="picks" class="hidden">
@@ -1081,10 +1100,12 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
     <div data-pipe-src="explore" class="hidden">
       <div class="hint">Planner обойдёт приложение по ссылкам (только GET, без форм) — от адреса ниже и его дочерних страниц; карта страниц и форм станет источником сценариев, когда ТЗ нет.</div>
     </div>
+    <div id="pipeRun" class="hidden">
     <label>URL приложения</label><input id="pipeUrl" placeholder="по умолчанию — из настроек проекта">
     <div class="design-choice" id="pipeChoice" data-pipe-design></div>
     <div class="row" style="margin-top:10px"><span class="err grow" id="pipeErr"></span>
-      <button class="btn primary" id="pipeStart">Запустить</button></div>
+      <button class="btn primary" id="pipeStart" disabled>Запустить</button></div>
+    </div>
     </div>
   </div>
 
@@ -1665,6 +1686,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <div class="card stage" data-proc="decisions">
           <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Решения команды</h3></div>
           <div class="hint">Что ждёт людей и кто это решает. Конвейер не держит весь запуск: кейсы и сценарии без открытых решений идут в работу сразу, ждут только спорные. Решения, принятые без человека, записываются в журнал действий и журнал запуска; их можно отменить.</div>
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="decisions.autonomous"> <b>Без подтверждений</b> — автотесты строятся, ничего не ожидая от людей</label>
+          </div>
+          <div class="hint">Требования идут в тест-дизайн сразу после проверки ревьюером, даже с неразобранными замечаниями; модель приложения учится на них и не ждёт подтверждения жизненного цикла; к ручным кейсам принимаются все предложения ревьюера; в работу берутся все сценарии; похожий прежний тест переиспользуется или дорабатывается, как предложила модель; проверка жизненного цикла перед тестом не останавливает; агент идёт в Auto-Pilot. Остаётся: учётная запись роли сценария, запрет необратимых действий и ревью готового теста по политике ниже. Всё, что решено без человека, — в журнале запуска.</div>
           <div class="grid3">
             <div><label>Тест конвейера попадает в набор</label>
               <select data-p="decisions.review_policy">
@@ -1845,6 +1870,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
   <div class="row"><h3 class="grow" id="resumeTitle">Прерванные сессии</h3>
     <button class="btn small" onclick="$('#resumeDlg').close()" title="Закрыть (Esc)" aria-label="Закрыть">✕</button></div>
   <div class="hint">Студия перезапускалась, пока шла генерация. Шаги сохраняются после каждого действия: сессию можно продолжить (шаги воспроизведутся в новом браузере, затем агент продолжит сценарий) или сразу сохранить записанные шаги как тест.</div>
+  <div class="row hidden" id="resumeBulk" style="margin-top:6px;gap:8px"></div>
   <div class="hist-body"><table><thead><tr><th>Тест</th><th>Шагов</th><th>Изменена</th><th></th></tr></thead>
     <tbody id="resumeBody"></tbody></table></div>
 </dialog>
@@ -2067,8 +2093,10 @@ function paginate(list) {
   const recs = [];
   for (const el of list.children) {
     if (el.classList.contains('pager')) continue;
-    // the expanded part of a row (a scenario being edited) goes with its row
-    if (recs.length && el.matches('tr.sc-edit')) recs[recs.length - 1].push(el); else recs.push([el]);
+    // the expanded part of a row (a scenario being edited) goes with its row, a heading of a group - with the row after it:
+    // neither is a record of the count
+    if (recs.length && (el.matches('tr.sc-edit') || recs[recs.length - 1].at(-1).matches('.pg-group'))) recs[recs.length - 1].push(el);
+    else recs.push([el]);
   }
   let pager = anchor.nextElementSibling?.classList.contains('pager') ? anchor.nextElementSibling : null;
   if (recs.length <= PAGE_MIN) {
@@ -2202,7 +2230,7 @@ async function switchProject(pid) {
   $$('.projName').forEach(x => x.textContent = PROJ.name);
   $('#whoami').textContent = ME.user + (ME.is_admin && ME.auth_enabled ? ' (админ)' : ` · ${roleTitle(PROJ.role)}`);
   if (!$('#fUrl').value || $('#fUrl').dataset.auto) { $('#fUrl').value = PROJ.base_url; $('#fUrl').dataset.auto = '1'; }
-  $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+  $('#fAuto').checked = PROJ.pipeline.authoring.autopilot || PROJ.pipeline.decisions.autonomous;
   $('#fLogin').placeholder = PROJ.app_username || '';
   fillAccountSelect($('#fAccount'), '');
   api('GET', `/api/tests?project_id=${pid}`).then(ts => $('#fFreshBox').classList.toggle('hidden',
@@ -2259,15 +2287,19 @@ $('#fUrl').oninput = () => delete $('#fUrl').dataset.auto;
 // The project chosen on the projects page is entered; on a tab of a project - the same tab of the other one.
 $('#projSel').onchange = async () => {
   const pid = $('#projSel').value;
+  if (!await leaveUnsaved()) { $('#projSel').value = PID; return; }
   if (curTab() === 'home' && !WIZ) return openProject(pid);
   await switchProject(pid); setRoute(tabPath(curTab()));
 };
-$('#newProjBtn').onclick = () => { showTab('home'); openWizard(null); };
-$('#allProj').onclick = e => { e.preventDefault(); showTab('home', true); };
+$('#newProjBtn').onclick = async () => { if (!await leaveUnsaved()) return; showTab('home'); openWizard(null); };
+$('#allProj').onclick = async e => { e.preventDefault(); if (await leaveUnsaved()) showTab('home', true); };
 async function refreshProject() { PROJ = await api('GET', `/api/projects/${PID}`); }
 
 // ---- tabs
-$$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab, true));
+$$('nav button').forEach(b => b.onclick = async () => {
+  if (b.dataset.tab !== 'proj' && !await leaveUnsaved()) return;
+  showTab(b.dataset.tab, true);
+});
 const TABS = ['home', 'req', 'pipe', 'studio', 'tests', 'tasks', 'dash', 'proj'];
 const curTab = () => $('nav button.on')?.dataset.tab || 'home';
 // A tab writes its address when the address shows another tab (an entity opened in it writes its own first);
@@ -2423,7 +2455,31 @@ window.addEventListener('hashchange', () => { if (ME && location.hash.length > 1
 // Studio steps not saved as a test: leaving the page asks first (the session itself lives on the server).
 window.addEventListener('beforeunload', e => {
   if (SID && STATE?.dirty && STATE.status !== 'closed') e.preventDefault();
+  if (unsavedCards().length) e.preventDefault();
 });
+// Settings typed and not saved: the tab fills its fields again when it is opened, so leaving it asks first.
+// A card is changed by typing in it and saved by its «Сохранить…» button (search fields of lists do not count).
+const UNSAVED = new Set();
+const saveBtnOf = card => [...card.querySelectorAll('button')].find(b => /^Сохранить/.test(b.textContent.trim()));
+const unsavedCards = () => { UNSAVED.forEach(c => c.isConnected || UNSAVED.delete(c)); return [...UNSAVED]; };
+$('#tab-proj').addEventListener('input', e => {
+  const card = e.target.closest('.card');
+  if (card && !/^Поиск/.test(e.target.placeholder || '') && saveBtnOf(card)) UNSAVED.add(card);
+});
+$('#tab-proj').addEventListener('click', e => {
+  const b = e.target.closest('button'), card = b?.closest('.card');
+  if (card && b === saveBtnOf(card)) UNSAVED.delete(card);
+}, true);
+async function leaveUnsaved() {
+  const cards = unsavedCards();
+  if (!cards.length) return true;
+  const names = cards.map(c => c.querySelector('h3')?.textContent.trim()).filter(Boolean);
+  const go = await ask({title: 'Изменения не сохранены', subject: names.join(', '),
+    text: 'Если уйти, введённое пропадёт. Чтобы сохранить, останьтесь и нажмите «Сохранить» в карточке.',
+    actions: [{label: 'Уйти без сохранения', value: true, kind: 'danger'}], cancel: 'Остаться'});
+  if (go) UNSAVED.clear();
+  return !!go;
+}
 
 // ---- «Ждёт вас»: what in the project waits for a person's decision (GET …/inbox) - the bell in the header.
 // Polled every 30 s and when the browser tab is back; other projects are counted on the timer and when it opens.
@@ -2457,8 +2513,20 @@ async function pollInbox(others = true) {
   } catch {}
   finally { if (others && pid === PID) inboxTimer = setTimeout(pollInbox, 30000); }
 }
+// «Отложить»: an item put off for a day in this browser - out of the counter, in «Отложенные» of the list; it comes back
+// by itself after the day or when it changes (a new count).
+const SNOOZE_DAY = 86400;
+const snoozeKey = e => `${e.kind}|${e.route}|${e.count}`;
+function snoozed() { try { return JSON.parse(store.get('tg_snooze') || '{}'); } catch { return {}; } }
+const isSnoozed = (e, all = snoozed()) => (all[snoozeKey(e)] || 0) > Date.now() / 1000;
+function snooze(key, until) {
+  const now = Date.now() / 1000, all = Object.fromEntries(Object.entries(snoozed()).filter(([, t]) => t > now));
+  if (until) all[key] = until; else delete all[key];
+  store.set('tg_snooze', JSON.stringify(all));
+  renderBell();
+}
 function renderBell() {
-  const n = INBOX?.total || 0, count = $('#bellCount');
+  const later = snoozed(), n = Math.max(0, (INBOX?.total || 0) - (INBOX?.items || []).filter(e => isSnoozed(e, later)).reduce((a, e) => a + (e.count || 1), 0)), count = $('#bellCount');
   count.textContent = n > 99 ? '99+' : n;
   $('#bellBtn').classList.toggle('has', !!n);
   if (BELL_PULSE && INBOX) {       // just entered the project: once, when the inbox of this project is known
@@ -2482,16 +2550,19 @@ function dueText(e) {
   return left < 0 ? `просрочено на ${waited(e.due).replace('только что', '1 мин')}` : `срок — через ${waited(Date.now() / 1000 - left).replace('только что', '1 мин')}`;
 }
 function renderBellMenu() {
-  const items = INBOX?.items || [];
+  const later = snoozed(), all = INBOX?.items || [], items = all.filter(e => !isSnoozed(e, later)), put = all.filter(e => isSnoozed(e, later));
   const me = ME?.user || '', mine = items.filter(e => me && e.owner === me).sort((a, b) => (a.due || Infinity) - (b.due || Infinity));
-  const row = (e, due) => `<a href="#${esc(e.route)}" role="menuitem"><span class="t">${esc(e.title)}${e.count > 1 ? ` · ${e.count}` : ''}</span>`
-    + `<span class="w${due && e.due && e.due < Date.now() / 1000 ? ' late' : ''}" title="${esc(fmtTime(e.since))}${e.due ? ` · срок ${esc(fmtTime(e.due))}` : ''}">${due ? dueText(e) : e.since ? 'ждёт ' + waited(e.since) : ''}${!due && e.owner ? ` · решает ${esc(e.owner)}` : ''}</span></a>`;
+  const row = (e, due, back) => `<div class="bell-row"><a href="#${esc(e.route)}" role="menuitem"><span class="t">${esc(e.title)}${e.count > 1 ? ` · ${e.count}` : ''}</span>`
+    + `<span class="w${due && e.due && e.due < Date.now() / 1000 ? ' late' : ''}" title="${esc(fmtTime(e.since))}${e.due ? ` · срок ${esc(fmtTime(e.due))}` : ''}">${due ? dueText(e) : e.since ? 'ждёт ' + waited(e.since) : ''}${!due && e.owner ? ` · решает ${esc(e.owner)}` : ''}</span></a>`
+    + (back ? `<button class="snooze" data-snooze="${esc(snoozeKey(e))}" data-until="0" title="Вернуть в список">Вернуть</button>`
+      : `<button class="snooze" data-snooze="${esc(snoozeKey(e))}" data-until="${Math.round(Date.now() / 1000 + SNOOZE_DAY)}" title="Убрать из счётчика на сутки — пункт вернётся сам или раньше, если изменится" aria-label="Отложить на сутки">Отложить</button>`) + '</div>';
   let html = mine.length ? `<h4>Мои решения (${mine.length})</h4>` + mine.map(e => row(e, true)).join('') : '', kind = '';
   for (const e of items.filter(e => !mine.includes(e))) {
     if (e.kind !== kind) { kind = e.kind; html += `<h4>${esc(INBOX_KINDS[kind] || kind)}</h4>`; }
     html += row(e, false);
   }
   if (!items.length) html = '<div class="empty">Вашего решения ничего не ждёт</div>';
+  if (put.length) html += `<details class="later"><summary>Отложенные (${put.length})</summary>${put.map(e => row(e, false, true)).join('')}</details>`;
   if (OTHERS.length) html += '<div class="others"><h4>Другие проекты</h4>' + OTHERS.map(o =>
     `<a href="#" role="menuitem" data-pid="${esc(o.project_id)}"><span class="t">${esc(o.name)}</span><span class="badge">${o.total}</span></a>`).join('') + '</div>';
   if (BELL_HTML !== html) { BELL_HTML = html; $('#bellMenu').innerHTML = html; }   // the same - the focus stays
@@ -2512,6 +2583,8 @@ $('#bellBtn').onclick = () => {
   if (open) $('#bellMenu a')?.focus();
 };
 $('#bellMenu').onclick = async e => {
+  const z = e.target.closest('[data-snooze]');
+  if (z) { e.stopPropagation(); snooze(z.dataset.snooze, +z.dataset.until); return; }
   const a = e.target.closest('a');
   if (!a) return;
   if (a.dataset.pid) {            // another project: its decisions, the menu stays open
@@ -2551,9 +2624,12 @@ function showPreflight(e) {
 }
 $('#startBtn').onclick = () => startGeneration(false);
 $('#fScenario').addEventListener('input', () => showPreflight(null));
+['#fUrl', '#fScenario'].forEach(s => $(s).addEventListener('input', () => { $(s).removeAttribute('aria-invalid'); notice($('#startBtn'), ''); }));
 async function startGeneration(anyway) {
   const url = $('#fUrl').value.trim(), scenario = $('#fScenario').value.trim();
-  if (!url || !scenario) return notice($('#startBtn'), 'Укажите URL и сценарий');
+  const miss = !url ? ['#fUrl', 'Укажите URL приложения, с которого агент начнёт сценарий']
+    : !scenario ? ['#fScenario', 'Опишите сценарий: что агент должен сделать и что проверить'] : null;
+  if (miss) { const f = $(miss[0]); f.setAttribute('aria-invalid', 'true'); f.focus(); return notice($('#startBtn'), miss[1]); }
   $('#startBtn').disabled = true; showPreflight(null);
   const body = {project_id: PID, url, scenario,
     name: $('#fName').value || scenario.slice(0, 60), autopilot: $('#fAuto').checked, headless: !$('#fHeaded').checked,
@@ -2694,7 +2770,22 @@ async function loadInterrupted() {
     <td>${c.steps}</td><td>${fmtTime(c.updated)}</td>
     <td style="white-space:nowrap"><button class="btn primary small" onclick="restoreSession('${c.id}')">Продолжить</button>
       <button class="btn small" onclick="saveInterrupted('${c.id}', this)" ${c.steps ? '' : 'disabled'}>Сохранить как тест</button>
-      <button class="btn small danger" onclick="discardInterrupted('${c.id}')">Удалить</button></td></tr>`).join('');
+      <button class="btn small" onclick="discardInterrupted('${c.id}')">Удалить</button></td></tr>`).join('');
+  const saved = cps.filter(c => c.test_id);
+  $('#resumeBulk').classList.toggle('hidden', !saved.length);
+  $('#resumeBulk').innerHTML = saved.length ? `<span class="hint grow" style="margin:0">По ${saved.length} из них тест уже сохранён — эти сессии можно убрать разом, тесты останутся.</span>
+    <button class="btn small" onclick="discardSaved(this)">Убрать с сохранённым тестом (${saved.length})</button>` : '';
+}
+async function discardSaved(btn) {
+  const cps = (await api('GET', `/api/projects/${PID}/sessions`).catch(() => [])).filter(c => c.test_id);
+  if (!cps.length || !await ask({title: `Убрать сессии с сохранённым тестом: ${cps.length}?`,
+    text: 'Сохранённые тесты останутся. Пропадут только шаги, записанные в сессии после сохранения теста.',
+    actions: [{label: 'Убрать сессии', value: true, kind: 'danger'}]})) return;
+  btn.disabled = true;
+  let failed = 0;
+  for (const c of cps) await api('DELETE', `/api/projects/${PID}/sessions/${c.id}`).catch(() => failed++);
+  toast(failed ? `Убрано ${cps.length - failed} из ${cps.length}, остальные — не удалось` : `Убрано сессий: ${cps.length}`, failed ? 'warn' : 'ok');
+  loadInterrupted();
 }
 async function restoreSession(sid) {
   if ($('#resumeDlg').open) $('#resumeDlg').close();
@@ -3965,6 +4056,11 @@ async function mockRequest(tid, index) {
 // suite runs
 $('#suiteBtn').onclick = async () => {
   const tag = $('#tagFilter').value;
+  const go = await ask({title: tag ? `Запустить тесты #${tag}?` : 'Запустить все тесты?',
+    subject: `Тесты ${$('#runDrafts').checked ? 'набора и черновики' : 'регрессионного набора'}${tag ? ` с тегом #${tag}` : ''}`,
+    text: 'Прогон займёт браузер и может занять несколько минут; ход — в «Запуски наборов».',
+    actions: [{label: 'Запустить', value: true, kind: 'primary'}]});
+  if (!go) return;
   $('#suiteBtn').disabled = true;
   try {
     const r = await api('POST', `/api/projects/${PID}/runs`, {tags: tag ? [tag] : [], headless: $('#runHeaded').checked ? false : null,
@@ -4113,12 +4209,15 @@ function tile(value, label, sub, path, hint) {
   return path ? `<a class="tile" href="#${esc(path)}" title="${esc(hint || '')}">${body}</a>` : `<div class="tile">${body}</div>`;
 }
 // How long the pipeline waited for a person: minutes, hours past an hour.
-const waitTime = min => min == null ? '—' : min < 60 ? `${Math.round(min)} мин` : `${(min / 60).toFixed(1).replace('.0', '')} ч`;
+const waitTime = min => min == null ? '—' : min < 60 ? `${Math.round(min)} мин` : `${num(min / 60)} ч`;
+// Numbers and dates of the dashboard as a person reads them here: 8,3 ч; 07.10.2026.
+const num = (n, digits = 1) => n == null ? '—' : Number(n).toLocaleString('ru-RU', {maximumFractionDigits: digits});
+const dayRu = d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split('-').reverse().join('.') : d;
 function bars(points, label, title) {
   if (!points.length) return '<div class="hint">Данных пока нет — появятся после первых прогонов тестов и наборов.</div>';
   const max = Math.max(...points.map(label)) || 1;
   return `<div class="bars">${points.map(p => `<div class="${p.passed === false ? 'fail' : ''}" style="height:${label(p) / max * 100}%" title="${esc(title(p))}"></div>`).join('')}</div>
-    <div class="axis"><span>${esc(title(points[0]).split(':')[0])}</span><span>макс. ${max}</span><span>${esc(title(points.at(-1)).split(':')[0])}</span></div>`;
+    <div class="axis"><span>${esc(title(points[0]).split(/: |, /)[0])}</span><span>макс. ${num(max)}</span><span>${esc(title(points.at(-1)).split(/: |, /)[0])}</span></div>`;
 }
 async function loadDash() {
   if (!PID) return;
@@ -4131,17 +4230,21 @@ async function loadDash() {
     tile(pct(st.flaky_share), 'Нестабильных тестов', `${st.flaky} шт. · в карантине: ${st.quarantined}`, projPath('tests') + '?health=flaky', 'Нестабильные тесты') +
     tile(pct(st.pass_rate), 'Успешных прогонов', `за ${m.days} дн.`, projPath('tests') + '?health=failing', 'Тесты, у которых упал последний прогон') +
     tile(pct(q.mutation_score), 'Доля убитых мутантов', `проверено тестов: ${q.verified}`, projPath('tests') + '?health=weak', 'Тесты со слабыми проверками: прошли на «испорченной» странице') +
-    tile(r.last_minutes == null ? '—' : r.last_minutes + ' мин', 'Время регрессии', 'последний запуск набора',
+    tile(r.last_minutes == null ? '—' : num(r.last_minutes) + ' мин', 'Время регрессии', 'последний запуск набора',
          r.last_id ? projPath('suites', r.last_id) : projPath('suites'), r.last_id ? 'Последний запуск набора' : 'Запуски наборов') +
-    tile(sv.hours + ' ч', 'Сэкономлено ручного труда', `${sv.runs} автопрогонов × ${sv.manual_minutes} мин (настройка «Ручной прогон кейса»)`) +
+    tile(num(sv.hours) + ' ч', 'Сэкономлено ручного труда', `${sv.runs} автопрогонов × ${sv.manual_minutes} мин (настройка «Ручной прогон кейса»)`) +
     tile(waitTime(w.median_minutes), 'Конвейер ждёт решения', (w.count ? `медиана, ожиданий за ${m.days} дн.: ${w.count}` : `за ${m.days} дн. не ждал`)
          + (w.model_count ? ` · подтверждение модели — ${waitTime(w.model_median_minutes)}` : '') + (w.now ? ` · ждут сейчас: ${w.now}` : ''),
          projPath('pipe'), 'Запуски конвейера') +
     tile(m.decisions.per_test == null ? m.decisions.people : m.decisions.per_test, m.decisions.per_test == null ? 'Решений людей' : 'Решений людей на тест',
          `${m.decisions.people} решений, новых тестов: ${m.decisions.new_tests}` + (m.decisions.automatic ? ` · без человека: ${m.decisions.automatic}` : '')) +
-    tile(`$${sp.usd.toFixed(2)}`, `Расход на модели за ${sp.month}`, `≈ ${sp.rub.toFixed(0)} ₽` + (sp.test_generation_usd != null ? ` · генерация теста ≈ $${sp.test_generation_usd}` : ''));
-  $('#dashSuites').innerHTML = bars(r.suites, p => p.minutes, p => `${fmtTime(p.at)}: ${p.minutes} мин, ${p.passed ? 'успешно' : 'есть падения'}`);
-  $('#dashRuns').innerHTML = bars(sv.per_day, p => p.runs, p => `${p.day}: ${p.runs} прогонов`);
+    tile(!sp.usd && sp.unpriced_tokens ? 'цены не заданы' : `$${num(sp.usd, 2)}`, `Расход на модели за ${sp.month.split('-').reverse().join('.')}`,
+         (sp.unpriced_tokens ? `не посчитано ${sp.unpriced_tokens >= 1e6 ? num(sp.unpriced_tokens / 1e6) + ' млн' : num(sp.unpriced_tokens, 0)} токенов — задайте цены в «Проект → Модель»` : `≈ ${num(sp.rub, 0)} ₽`)
+         + (sp.test_generation_usd != null ? ` · генерация теста ≈ $${num(sp.test_generation_usd, 2)}` : ''),
+         projPath('settings', 'model'), 'Модель и цены проекта');
+  $('#dashSuites').innerHTML = bars(r.suites, p => p.minutes, p => `${fmtTime(p.at)}: ${num(p.minutes)} мин, ${p.passed ? 'успешно' : 'есть падения'}`)
+    + (r.suites.some(p => p.passed === false) ? '<div class="hint">✘ над столбцом — в запуске были упавшие тесты</div>' : '');
+  $('#dashRuns').innerHTML = bars(sv.per_day, p => p.runs, p => `${dayRu(p.day)}: ${p.runs} прогонов`);
   const WAIT_KIND = {awaiting_review: 'замечания к требованиям', awaiting_cases: 'замечания к кейсам', awaiting_model: 'подтверждение модели',
     awaiting_selection: 'выбор сценариев', awaiting_reuse: 'похожие сценарии'};
   $('#dashWaits').innerHTML = w.by_kind?.length ? `<table><tbody>${w.by_kind.map(k => `<tr><td>${esc(WAIT_KIND[k.status] || k.status)}</td>
@@ -4394,6 +4497,8 @@ const AN_STEPS = [['review', 'Требования'], ['findings', 'Замеча
 const STEP_BADGE = {review: ['шаг 1: проверка требований', 'warn'], findings: ['шаг 2: разбор замечаний', 'warn'],
   lifecycle: ['шаг 3: жизненный цикл', 'warn'], scenarios: ['готово к тест-дизайну', 'ok']};
 const LC_CHECK = 'жизненный цикл';      // the check against the lifecycle in the errors of a report
+// A failed check for a person: without the class of the exception (reports saved before) and the final full stop.
+const plainErr = e => String(e || '').trim().replace(/^[A-Za-z_]\w*(Error|Exception): /, '').replace(/[.\s]+$/, '');
 let AN_TAB = '';         // the step shown in the analysis in work
 const lcTheme = t => t.ids.every(i => i.startsWith('l'));      // conflicts with the lifecycle and its questions
 // analyses.WORK: one work on an analysis at a time - the others wait for it (409); its progress is in the analysis
@@ -4465,7 +4570,7 @@ $('#anList').addEventListener('click', e => {
 function openAnalysis(a) {
   if (AN?.id !== a.id) {      // another analysis: what was typed for the previous one stays with it no more
     FIX_MSG = ''; AN_TAB = '';
-    for (const k in DRAFTS) delete DRAFTS[k];
+    loadDrafts(a.id);
     THEME_EDIT.clear(); ANS_DRAFT = ''; ANS_OPEN = false; VER_DRAFT = ''; VER_OPEN = false;
   }
   // the answers of an analyst kept by the studio until distributed (answers_draft): changed there - shown here
@@ -4638,7 +4743,7 @@ function lcTabHtml(r, busy) {
   let html = '';
   if (err) html += `<div class="box bad"><div class="row"><b class="grow">Сверка с жизненным циклом системы не выполнена</b>
       <button class="btn primary small" onclick="recheckLifecycle(this)" ${busy ? 'disabled' : ''}>Повторить сверку</button></div>
-      <div class="hint">${esc(err)}. Замечания к документу и решения по ним сохранятся.</div></div>`;
+      <div class="hint">${esc(plainErr(err))}. Замечания к документу и решения по ним сохранятся.</div></div>`;
   else if (rv.lifecycle) html += lifecycleHtml(rv.lifecycle, true);
   if (!err && left.length) html += `<div class="box next"><div class="row" style="gap:6px"><b class="grow">Расхождения с жизненным циклом: ${leftLine(ts)}</b>
       ${fixButton(rv, ts, busy)}</div>
@@ -4698,12 +4803,15 @@ function scenTabHtml(r, busy) {
   if (!r.ready) {
     const to = AN_STEPS.find(([k]) => k === r.step);
     return `<div class="box lock"><div class="row"><b class="grow">🔒 Тест-дизайн начнётся, когда требования разобраны и жизненный цикл подтверждён</b>
-        ${to && r.step !== 'scenarios' ? nextBtn(r.step, `Перейти: ${to[1].toLowerCase()}`) : ''}</div>
+        ${AN.review?.errors?.[LC_CHECK] ? `<button class="btn small" onclick="recheckLifecycle(this)" ${busy ? 'disabled' : ''}>Повторить сверку</button>` : ''}
+        ${to && r.step !== 'scenarios' ? nextBtn(r.step, `К шагу «${to[1]}»`) : ''}</div>
       <ul>${r.blocked.map(b => `<li class="hint" style="margin:0">${esc(b)}</li>`).join('')}</ul></div>` + scen;
   }
   return `<div class="box next"><div class="row"><b class="grow">Требования готовы к тест-дизайну</b>
       <button class="btn primary small" onclick="toPipeline()" ${busy ? 'disabled' : ''} title="Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты">Генерировать тест-кейсы в конвейере →</button></div>
-      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div></div>` + coverageHtml() + scen;
+      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div>
+      ${r.waived?.length ? `<div class="hint" style="color:var(--warn)">Режим без подтверждений: тест-дизайн не ждёт —</div>
+        <ul>${r.waived.map(b => `<li class="hint" style="margin:0">${esc(b)}</li>`).join('')}</ul>` : ''}</div>` + coverageHtml() + scen;
 }
 // Which numbered requirements of the text the scenarios check: the ones without a scenario are named.
 function coverageHtml() {
@@ -4809,6 +4917,12 @@ const reviewBusy = () => !!REQ_ABORT || AN?.status === 'running';
 // What a person types survives a render (another step, another tab, the progress of a work): answers by theme,
 // the answers of an analyst, a new version of the requirements; THEME_EDIT - answered themes opened to change.
 const DRAFTS = {}, THEME_EDIT = new Set();
+// The answers typed and not saved are kept in this browser by analysis: a reload (F5) does not lose them.
+function keepDrafts() { if (AN) store.set('tg_drafts_' + AN.id, JSON.stringify(DRAFTS)); }
+function loadDrafts(aid) {
+  for (const k in DRAFTS) delete DRAFTS[k];
+  try { Object.assign(DRAFTS, JSON.parse(store.get('tg_drafts_' + aid) || '{}')); } catch {}
+}
 let ANS_DRAFT = '', ANS_OPEN = false, VER_DRAFT = '', VER_OPEN = false;
 const ANSWER_MAX = 20000, ANSWERS_MAX = 200000;      // review.ANSWER_MAX, review.ANSWERS_MAX
 const themeNo = t => t.no ? `<span class="theme-no" title="Номер замечания: по нему отвечает аналитик">№ ${esc(t.no)}</span>` : '';
@@ -4845,9 +4959,9 @@ function themeCtl(t) {
   const value = DRAFTS[t.id] ?? t.answer ?? '';
   return `<div style="margin-top:6px">
     <div class="row" style="gap:6px">${badge}${t.error ? `<span class="err" style="margin:0">Агент не исправил: ${esc(t.error)} — уточните ответ</span>` : ''}</div>
-    <textarea id="fd-${t.id}" rows="3" maxlength="${ANSWER_MAX}" style="width:100%;margin-top:4px;resize:vertical" oninput="DRAFTS['${t.id}']=this.value" placeholder="${t.question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(value)}</textarea>
+    <textarea id="fd-${t.id}" rows="3" maxlength="${ANSWER_MAX}" style="width:100%;margin-top:4px;resize:vertical" oninput="DRAFTS['${t.id}']=this.value;keepDrafts()" aria-label="${t.question ? 'Ответ на вопрос' : 'Как должно быть'}${t.no ? ' № ' + esc(t.no) : ''}" placeholder="${t.question ? 'Ответ — агент внесёт его в ТЗ' : 'Как должно быть — агент исправит ТЗ так (пусто — по предложению ревьюера)'}">${esc(value)}</textarea>
     <div class="row" style="gap:6px;margin-top:4px"><span class="grow"></span>
-      ${t.status === 'todo' ? `<button class="btn small" onclick="THEME_EDIT.delete('${t.id}');delete DRAFTS['${t.id}'];renderAnalysis()">Отмена</button>` : ''}
+      ${t.status === 'todo' ? `<button class="btn small" onclick="THEME_EDIT.delete('${t.id}');delete DRAFTS['${t.id}'];keepDrafts();renderAnalysis()">Отмена</button>` : ''}
       <button class="btn small primary" onclick="decideTheme('${t.id}', 'todo')" ${dis} title="Ответ сохранится, замечание будет ждать исправления в ТЗ — «Исправить ТЗ агентом»">Сохранить ответ</button>
       ${disBtn}</div>${notRelevant}</div>`;
 }
@@ -4895,7 +5009,7 @@ function reviewHtml(rv, st) {
       ${st?.settled && rv.verdict !== 'ready' ? `<span class="muted" style="font-size:12px" title="Вердикт ревьюера до разбора замечаний">при проверке: ${esc((REVIEW_VERDICT[rv.verdict] || [rv.verdict])[0])}</span>` : ''}
       <span class="badge ${vcls}">${esc(vt)}</span></div>
     ${st?.themes ? `<div class="hint">Замечаний ${st.themes}: ${esc(reviewTally(st))}.</div>` : ''}
-    ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(e)}</div>`).join('')}`;
+    ${errors.map(([k, e]) => `<div class="err">Проверка «${esc(k)}» не удалась: ${esc(plainErr(e))}</div>`).join('')}`;
   if (!rv.themes)       // a report kept elsewhere (a run of the pipeline): as the reviewer gave it
     return head + (v ? `<details class="opt" open><summary><b>Дефекты ТЗ</b> — ${v.score}/100, замечаний ${v.findings.length}</summary>${validationHtml(v)}</details>` : '')
       + (rv.lifecycle ? `<details class="opt" open><summary><b>Соответствие жизненному циклу системы</b> — расхождений ${rv.lifecycle.conflicts.filter(c => c.kind !== 'new').length}</summary>${lifecycleHtml(rv.lifecycle)}</details>` : '');
@@ -4913,7 +5027,9 @@ function leftLine(ts) {
 function fixButton(rv, ts, busy, id = '') {
   const all = rv.themes.filter(t => t.status === 'todo').length, here = ts.filter(t => t.status === 'todo').length;
   const other = all - here, where = ts.some(lcTheme) ? 'замечаний к документу (шаг 2)' : 'расхождений жизненного цикла (шаг 3)';
-  if (!all) return id ? `<button class="btn primary small" id="${id}" disabled title="Сначала ответьте на замечания ниже">Исправить ТЗ агентом</button>` : '';
+  // disabled: the reason is written next to it (a tooltip is not seen on a phone or from the keyboard)
+  if (!all) return id ? `<span class="hint" id="${id}-why" style="margin:0 6px 0 0">доступно после первого сохранённого ответа</span>
+    <button class="btn primary small" id="${id}" disabled aria-describedby="${id}-why">Исправить ТЗ агентом</button>` : '';
   return `<button class="btn primary small" ${id ? `id="${id}"` : ''} onclick="fixFindings(this)" ${busy ? 'disabled' : ''}
     title="Агент внесёт ответы в ТЗ; прежний текст сохранится${other ? `. Вместе с ними — ${other} ${where}` : ''}">Исправить ТЗ агентом (${all})</button>`;
 }
@@ -4972,7 +5088,7 @@ function acceptSuggestions(scope = 'doc') {
 async function settleFindings(ids, status, answer, note, theme) {
   try {
     const r = await api('PUT', `/api/analyses/${AN.id}/review/findings`, {ids, status, answer, note});
-    if (theme) { delete DRAFTS[theme.id]; THEME_EDIT.delete(theme.id); }
+    if (theme) { delete DRAFTS[theme.id]; keepDrafts(); THEME_EDIT.delete(theme.id); }
     FIX_MSG = r.model || '';
     const no = theme?.no ? `№ ${theme.no}: ` : '';
     toast(status === 'todo' ? `${no}ответ сохранён — замечание ждёт исправления в ТЗ («Исправить ТЗ агентом»)`
@@ -5624,6 +5740,14 @@ async function loadPipeReviews() {
   pipeReviewChanged();
 }
 const PIPE_LEFT_SHOWN = 5;
+// A long reason (the check before a test explains itself at length): its first sentence, the rest on a click.
+function foldText(text, cls) {
+  text = String(text || '');
+  if (text.length <= 220) return `<div class="${cls}">${esc(text)}</div>`;
+  const dot = text.slice(0, 200).search(/[.:;] /);
+  const head = dot > 40 ? text.slice(0, dot + 1) : text.slice(0, 160).replace(/\s+\S*$/, '') + '…';
+  return `<details class="foldtext ${cls}"><summary>${esc(head)} <span class="muted">Подробнее</span></summary><div>${esc(text)}</div></details>`;
+}
 function pipeAnRow(a) {        // requirements on their way to test design: the step, why, where to go on
   const [st, cls] = anStepBadge(a, a.step);
   const why = a.status === 'running' ? (a.work === 'fix' ? 'агент исправляет ТЗ' : 'ревьюер проверяет требования')
@@ -5670,6 +5794,8 @@ function pipeStartLabel() {
   const none = PIPE_SRC === 'review' ? !pipeReady() : PIPE_SRC === 'picks' && !PIPE_SEL.size;
   $('#pipeStart').disabled = none;
   $('#pipeStart').title = !none ? '' : PIPE_SRC === 'picks' ? 'Отметьте сценарии в списке' : 'Нет требований, готовых к тест-дизайну';
+  // no requirements ready: the settings of a run are not shown - the note above says what is left to do
+  $('#pipeRun').classList.toggle('hidden', PIPE_SRC === 'review' && !pipeReady());
 }
 $('#pipeSrc').addEventListener('click', e => { const b = e.target.closest('[data-src]'); if (b) setPipeSrc(b.dataset.src); });
 $('#pipeSrc').addEventListener('keydown', e => {       // a radio group: arrows move the choice
@@ -5708,7 +5834,7 @@ function renderPipeScen() {
     if (s.analysis_id !== last) {
       last = s.analysis_id;
       const group = shown.filter(x => x.analysis_id === last);
-      html += `<tr><td class="chk"><input type="checkbox" data-pick-an="${last}" ${group.every(x => PIPE_SEL.has(scenKey(x))) ? 'checked' : ''}></td>
+      html += `<tr class="pg-group"><td class="chk"><input type="checkbox" data-pick-an="${last}" ${group.every(x => PIPE_SEL.has(scenKey(x))) ? 'checked' : ''}></td>
         <td colspan="5"><b>${esc(s.analysis || 'Анализ без названия')}</b> <span class="muted">— ${fmtTime(s.created)}, сценариев: ${group.length}</span></td></tr>`;
     }
     html += `<tr><td class="chk"><input type="checkbox" data-pick="${scenKey(s)}" ${PIPE_SEL.has(scenKey(s)) ? 'checked' : ''}></td>
@@ -5830,7 +5956,7 @@ function jobItemRow([it, i]) {
   const flag = kind === 'bug' ? '<span class="badge bad">возможный дефект</span>' : kind === 'attention' ? '<span class="badge warn">нужно подтверждение</span>'
     : kind === 'held' ? `<span class="badge warn" title="Ждёт с ${esc(fmtTime(it.waiting_since))}">ждёт: ${esc(HOLD_TITLE[it.wait] || it.wait)}</span>` : '';
   return `<tr class="${kind === 'bug' ? 'hl-bad' : kind === 'attention' ? 'hl-warn' : ''}"><td class="num">${i + 1}</td><td><span class="sc-title">${esc(it.title)}</span> ${flag}
-      ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? `<div class="err">${esc(it.error)}</div>` : ''}
+      ${it.summary ? `<div class="hint">${esc(it.summary)}</div>` : ''}${it.error ? foldText(it.error, 'err') : ''}
       ${it.skipped ? `<div class="hint">Отменён (${esc(it.skipped)})${it.status !== 'cancelled' ? ' — остановится после текущего этапа' : ''}</div>` : ''}</td>
     <td>${layerBadge(it)}${esc(it.type ? scType(it.type) : '—')}</td><td>${esc(SC_PRIOS[it.priority] || it.priority || '—')}</td>
     <td><span class="badge ${cls}">${esc(st)}</span></td><td>${run}</td><td>${quality}</td><td>${z}</td>
@@ -6425,7 +6551,7 @@ async function wizardFinish(start) {
   btns.forEach(b => b.disabled = true);
   try {
     PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: p, start});
-    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot || PROJ.pipeline.decisions.autonomous;
     WIZ = null;
     beginWith(start);
   } catch (e) { $('#wz3Err').textContent = e.message; }
@@ -7291,7 +7417,7 @@ $$('[data-save-process]').forEach(btn => btn.onclick = async () => {
     fillProcess(); $$('[data-proc-msg]').forEach(m => m.textContent = '');
     const warn = budgetPriceText(PROJ.pipeline.budget);
     msg.textContent = warn ? 'Сохранено. ' + warn : 'Сохранено';
-    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot || PROJ.pipeline.decisions.autonomous;
     renderDesignChoices();
   } catch (e) { msg.textContent = e.message; }
 });

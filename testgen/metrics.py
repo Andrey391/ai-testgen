@@ -83,7 +83,9 @@ def project_metrics(pid: str, days: int = 30) -> dict:
                   "per_day": [{"day": d, "runs": c} for d, c in sorted(per_day.items())]},
         "waits": _waits(waits, waiting_now),
         "decisions": _decisions(pid, since, sum(1 for t in tests if (t.get("created") or 0) >= since)),
+        # tokens of models without a price in the project: not in the sum, the dashboard says so
         "spending": {"month": month["month"], "usd": month["total_usd"], "rub": month["total_rub"],
+                     "unpriced_tokens": sum(r["tokens"] for r in month["rows"] if r["cost"] is None),
                      "test_generation_usd": round(statistics.mean(costs), 3) if costs else None},
     }
 

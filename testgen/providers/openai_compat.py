@@ -73,6 +73,8 @@ def error_text(e: Exception) -> str:
         return "API ИИ: модель не ответила за отведённое время — повторите или выберите модель быстрее."
     if isinstance(e, httpx.TransportError):
         return "API ИИ: ошибка сети."
+    if isinstance(e, (RuntimeError, ValueError)) and str(e):      # the studio's own words for a person
+        return str(e)
     return f"{type(e).__name__}: {e}"
 
 

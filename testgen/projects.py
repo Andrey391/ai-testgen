@@ -123,6 +123,9 @@ DEFAULT_PIPELINE = {
         "model": "", "effort": "",
     },
     "decisions": {                 # what waits for people and who decides it (pipeline, cases, inbox)
+        # tests are built without confirmations (autonomous()): findings of the reviewer, the lifecycle of the
+        # model, the choice of scenarios and similar ones, the lifecycle check before a test hold nothing
+        "autonomous": False,
         # a test of the pipeline: "all" - every new test is a draft for its author to review; "risk" - a test with
         # strong checks (mutations), no self-healing and a green run joins the suite by itself, a person reviews
         # only the weak ones and the ones the agent changed
@@ -242,6 +245,15 @@ def normalize_pipeline(p: dict | None) -> dict:
         if "effort" in stage and stage["effort"] not in EFFORTS:
             stage["effort"] = ""
     return out
+
+
+def autonomous(project: dict | None) -> bool:
+    """Tests are built without a person's confirmations (decisions.autonomous): the requirements go to test design
+    once reviewed, whatever the findings; the model learns from them at once and needs no confirmation; the cases
+    take the reviewer's proposals; every scenario is chosen; a similar test is reused or refined as the model
+    suggests; the lifecycle check before a test does not stop it. An account for the scenario's role is still
+    needed, the agent still makes no irreversible action, and a new test is still a draft by the review policy."""
+    return bool(((project or {}).get("pipeline") or {}).get("decisions", {}).get("autonomous"))
 
 
 def normalize_llm(d: dict | None) -> dict:

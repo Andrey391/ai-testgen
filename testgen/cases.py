@@ -255,17 +255,19 @@ def settle(cases: list[dict], decisions: list[dict], user: str = "", themes: lis
     return done
 
 
-def auto_accept(cases: list[dict], confidence: int) -> list[tuple[dict, dict]]:
+def auto_accept(cases: list[dict], confidence: int, everything: bool = False) -> list[tuple[dict, dict]]:
     """The reviewer's proposals that settle by themselves (decisions.auto_accept): a minor finding with a proposal,
     a major one the reviewer is sure of (`confidence` and more); never a blocker, an account or an irreversible
-    action. -> (case, finding) settled."""
+    action. everything - without confirmations (projects.autonomous): every proposal. -> (case, finding) settled."""
     out = []
     for c in cases:
         for f in (c.get("case_review") or {}).get("findings") or []:
-            if f.get("decision") or not f.get("suggestion") or f["kind"] in NEVER_AUTO or f["severity"] == "blocker":
+            if f.get("decision") or not f.get("suggestion"):
                 continue
-            if f["severity"] == "minor" or (f.get("confidence") or 0) >= confidence:
-                f["decision"] = {"action": "accept", "text": f["suggestion"], "user": AUTO, "auto": "confidence",
+            if everything or f["kind"] not in NEVER_AUTO and f["severity"] != "blocker" and (
+                    f["severity"] == "minor" or (f.get("confidence") or 0) >= confidence):
+                f["decision"] = {"action": "accept", "text": f["suggestion"], "user": AUTO,
+                                 "auto": "autonomous" if everything else "confidence",
                                  "confidence": f.get("confidence") or 0, "at": time.time()}
                 out.append((c, f))
     _clarify(cases)
