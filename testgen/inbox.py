@@ -64,12 +64,26 @@ def _scan(d, digest) -> list[tuple[str, float, object]]:
     return out
 
 
+def _job_source(j: dict) -> str:
+    """What a run without a feature name worked on, for a person: «запуск от 08.10 04:28» says nothing."""
+    titles = [i.get("title") for i in j.get("items") or [] if i.get("title")]
+    if j.get("explore"):
+        return "обход сайта"
+    if j.get("cases"):
+        return "ручные кейсы"
+    if j.get("links"):
+        return ", ".join(j["links"][:2])
+    if titles:
+        return f"«{titles[0]}»" + (f" и ещё {len(titles) - 1}" if len(titles) > 1 else "")
+    return ""
+
+
 def _job_digest(j: dict) -> dict:
     items = j.get("items") or []
     need = sum(1 for i in items if i.get("status") == "needs_attention" and not i.get("test_id") and not i.get("skipped"))
     held = [i for i in items if i.get("status") == "waiting" and i.get("wait") and not i.get("skipped")]
     return {k: j.get(k) for k in ("id", "status", "feature", "created", "finished", "waiting_since", "user")} | {
-        "need": need, "held": len(held), "held_kind": held[0]["wait"] if held else "",
+        "need": need, "held": len(held), "held_kind": held[0]["wait"] if held else "", "source": _job_source(j),
         "held_since": min((i.get("waiting_since") or 0 for i in held), default=None) or None}
 
 
@@ -92,7 +106,7 @@ def _job_entries(pid: str) -> list[dict]:
     out = []
     for n, j in enumerate(_jobs(pid)):
         route = f"/p/{pid}/pipe/{j['id']}"
-        name = j.get("feature") or f"запуск от {_when(j.get('created'))}"
+        name = j.get("feature") or f"Запуск от {_when(j.get('created'))}" + (f" ({j['source']})" if j.get("source") else "")
         if j.get("status") in notify.WAITS:
             out.append(_entry("job", f"{name}: ждёт {notify.WAITS[j['status']]}", route,
                               since=j.get("held_since") or j.get("waiting_since") or j.get("created"),

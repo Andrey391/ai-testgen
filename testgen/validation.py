@@ -74,6 +74,9 @@ def _task(standard: str, checklist: str, site_map: bool = False) -> str:
 # Seconds of silence in the streamed report before it is given up. The report is long (up to 16 000 tokens): a gateway
 # that waits for a whole answer cuts it off (504 after ~5 min) - streamed, it keeps coming while the model writes.
 WAIT = 300
+# The answer cut at its length limit: what a person can do about it.
+TOO_LONG = ("ответ модели оборвался на лимите длины — документ слишком большой для одной проверки. "
+            "Повторите проверку; если повторится, разделите ТЗ на части по разделам и проверьте каждую отдельно")
 
 
 async def validate(project: dict, document: str, standard: str = "", notes: str = "") -> dict:
@@ -87,7 +90,7 @@ async def validate(project: dict, document: str, standard: str = "", notes: str 
                             schema=Validation, max_tokens=16000, project_id=project["id"], stage_name="requirements",
                             stream=True, timeout=WAIT)
     if reply.stop == "max_tokens":
-        raise RuntimeError("Отчёт не поместился в лимит ответа: проверьте документ по частям.")
+        raise RuntimeError(TOO_LONG)
     if reply.parsed is None:
         raise RuntimeError("Модель не смогла проверить документ.")
     out = reply.parsed.model_dump()

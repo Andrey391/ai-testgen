@@ -747,7 +747,7 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     if recheck:
         blocked.append("ТЗ исправлено агентом после проверки — проверьте его заново")
     for name, error in errors.items():
-        blocked.append(f"проверка «{name}» не выполнена: {error}")
+        blocked.append(f"проверка «{name}» не выполнена: {review.clean_error(error)}")
     # Counted by themes, as a person settles them: a theme of the lifecycle alone (its conflicts and questions,
     # l<i>/lq<i>) is settled with the lifecycle, the others with the document.
     left = [t for t in review.themes(rv) if t["blocking"] and t["status"] in (review.OPEN, review.TODO)]

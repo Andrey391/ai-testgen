@@ -559,6 +559,7 @@ class StudioSession:
         self.source: dict | None = None     # where it came from, for «Вернуться к …» (server._source, once)
         self._creds_kept = False
         self.project_id, self.project_name = project["id"], project["name"]
+        self.lang = projects.language(project)      # the texts the studio writes into steps itself
         self.cfg = project["pipeline"]["authoring"]
         self.run_cfg = project["pipeline"]["run"]
         self.connections = project.get("connections", [])
@@ -815,7 +816,8 @@ class StudioSession:
                         f"the browser:\n{done}\n\n{self.task}\n\nCurrent page state:")
             else:
                 if self.engine != "api":
-                    step = new_step("navigate", f"Open {self.url}", self.url, source="system")
+                    step = new_step("navigate", f"{'Open' if self.lang == 'en' else 'Открыть'} {self.url}", self.url,
+                                    source="system")
                     await self._run_step(step)
                 # a test fixed at its first step starts from scratch with the fix task
                 fixing = self.task.startswith(FIX_TASK)
