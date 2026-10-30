@@ -31,7 +31,7 @@ from pydantic import BaseModel
 
 from testgen import (access, analyses, apiclient, audit, auth, blocks, catalog, checks, db, defects, explorer, exporters, fs, inbox, knowledge,
                      llm, mailbox, mcp_hub, mcp_server, metrics, monitoring, mutations, notify, pipeline, projects,
-                     publisher, reports, reuse, review, runs, scenarios, skills, sources, sso, storage, suite, tasks, traffic,
+                     publisher, reports, reuse, review, runs, scenarios, schedules, skills, sources, sso, storage, suite, tasks, traffic,
                      trackers, validation, vault, workqueue)
 from testgen import worker as worker_mod
 from testgen import cases as cases_mod
@@ -92,6 +92,7 @@ async def lifespan(_app):
             w = worker_mod.Worker(int(os.environ.get("TESTGEN_WORKER_CONCURRENCY", "2")), name=f"web-{INSTANCE_ID}")
             background.append((w, submit(w.serve())))
         background.append((None, submit(_keep_owners())))
+    background.append((None, submit(_schedules())))
     # The MCP session manager runs only once: each start of the app (tests start it several times
     # in one process) gets a new one, and the mounted /mcp routes switch to it.
     MCP._session_manager = None
@@ -118,6 +119,20 @@ async def _keep_owners() -> None:
                 print(f"owners: {e}")
         monitoring.SESSIONS.set(len(SESSIONS))
         await asyncio.sleep(30)
+
+
+def _start_scheduled(p: dict, s: dict, tests: list[dict]) -> None:
+    worker_mod.start_suite(p, s, tests, submit)
+
+
+async def _schedules() -> None:
+    """Scheduled suite runs (schedules.py): every instance looks, the lock of a project's schedules lets one start."""
+    while True:
+        try:
+            await asyncio.to_thread(schedules.tick, _start_scheduled)
+        except Exception as e:
+            print(f"schedules: {e}")
+        await asyncio.sleep(schedules.TICK)
 
 
 PUBLIC = {"/", "/guide", "/api/auth/login", "/api/auth/register", "/api/auth/me", "/api/auth/logout", "/api/health",
@@ -261,6 +276,10 @@ AUDIT_ACTIONS = {
     ("POST", "/api/runs/{rid}/retry"): "run.start",
     ("POST", "/api/runs/{rid}/fix"): "studio.start",
     ("POST", "/api/suites/{sid}/retry"): "suite.start",
+    ("POST", "/api/projects/{pid}/schedules"): "schedule.create",
+    ("PUT", "/api/projects/{pid}/schedules/{sid}"): "schedule.update",
+    ("DELETE", "/api/projects/{pid}/schedules/{sid}"): "schedule.delete",
+    ("POST", "/api/projects/{pid}/schedules/{sid}/run"): "schedule.run",
 }
 # Frequent and harmless: polling the Studio, the agent's steps, the pipeline's choices.
 AUDIT_SKIP = ("/api/sessions/{sid}/", "/api/jobs/{jid}/", "/api/scenarios", "/api/requirements/")
@@ -302,6 +321,7 @@ ROLE_RULES = {
     ("POST", "/api/projects/{pid}/runs"): "viewer",
     ("POST", "/api/runs/{rid}/retry"): "viewer",
     ("POST", "/api/suites/{sid}/retry"): "viewer",
+    ("POST", "/api/projects/{pid}/schedules/{sid}/run"): "viewer",
     ("GET", "/api/tests/{tid}/credentials"): "editor",
     ("PUT", "/api/projects/{pid}"): "owner",
     ("DELETE", "/api/projects/{pid}"): "owner",
@@ -2367,6 +2387,67 @@ async def retry_suite(sid: str, request: Request):
 def suite_junit(sid: str):
     s = suite_or_404(sid)
     return Response(reports.junit(s), media_type="application/xml", headers=_attachment(f"junit-{sid}.xml", "xml"))
+
+
+# ---------- Scheduled suite runs ----------
+
+class ScheduleBody(BaseModel):
+    name: str = ""
+    enabled: bool = True
+    mode: str = "daily"              # daily: `days` (0 = Monday) at `times` ("02:00"); interval: every_hours
+    days: list[int] = []
+    times: list[str] = []
+    every_hours: int = 0
+    tz: str = ""
+    tags: list[str] = []
+    test_ids: list[str] = []
+    include_drafts: bool = False
+    device: str = ""
+
+
+@app.get("/api/projects/{pid}/schedules")
+def list_schedules(pid: str):
+    project(pid)
+    return [schedules.view(s) for s in schedules.list_for(pid)]
+
+
+def _save_schedule(pid: str, body: ScheduleBody, request: Request, sid: str = "") -> dict:
+    _check_device(body.device)
+    try:
+        return schedules.view(schedules.save(pid, body.model_dump(), request.state.user or "", sid))
+    except schedules.Invalid as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404, "Расписание не найдено")
+
+
+@app.post("/api/projects/{pid}/schedules")
+def create_schedule(pid: str, body: ScheduleBody, request: Request):
+    return _save_schedule(pid, body, request)
+
+
+@app.put("/api/projects/{pid}/schedules/{sid}")
+def update_schedule(pid: str, sid: str, body: ScheduleBody, request: Request):
+    return _save_schedule(pid, body, request, sid)
+
+
+@app.delete("/api/projects/{pid}/schedules/{sid}")
+def delete_schedule(pid: str, sid: str):
+    if not schedules.delete(pid, sid):
+        raise HTTPException(404, "Расписание не найдено")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/schedules/{sid}/run")
+def run_schedule_now(pid: str, sid: str):
+    """«Запустить сейчас»: the schedule's suite out of time."""
+    try:
+        s = schedules.run_now(project(pid), sid, _start_scheduled)
+    except KeyError:
+        raise HTTPException(404, "Расписание не найдено")
+    if s["last"]["status"] != "started":
+        raise HTTPException(409 if s["last"]["status"] == "skipped" else 400, s["last"]["note"])
+    return schedules.view(s)
 
 
 # ---------- Planner: site exploration and coverage ----------

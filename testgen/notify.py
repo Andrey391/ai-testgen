@@ -185,7 +185,8 @@ def message(project: dict, kind: str, **kw) -> tuple[str, str] | None:
             return None
         verdict = "успешно" if s.get("passed") else "есть падения"
         failed = [i for i in s["items"] if i["status"] in ("failed", "error") and not i["quarantined"]]
-        lines = [f"Набор {' '.join('#' + t for t in s.get('tags') or []) or '(все тесты)'}: {verdict}",
+        by = f" по расписанию «{html.escape(s['schedule']['name'])}»" if s.get("schedule") else ""
+        lines = [f"Набор {' '.join('#' + t for t in s.get('tags') or []) or '(все тесты)'}{by}: {verdict}",
                  f"прошло {c.get('passed', 0)}, нестабильных {c.get('flaky', 0)}, упало {c.get('failed', 0)}, "
                  f"ошибок {c.get('error', 0)} из {c.get('total', 0)}"]
         for i in failed[:10]:       # each failed test - straight to its run
