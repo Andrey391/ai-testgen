@@ -623,7 +623,7 @@ def _require_lifecycle(p: dict, sc: dict | None = None) -> None:
     """Tests from requirements are generated only after a person confirmed the lifecycle of the system
     (the setting "requirements.confirm_model"; the pipeline waits for it instead): the parts of it the
     scenario `sc` needs (its groups of entities and the roles), without a scenario - all of it."""
-    if not p["pipeline"]["requirements"].get("confirm_model"):
+    if not p["pipeline"]["requirements"].get("confirm_model") or projects.autonomous(p):
         return
     doc = knowledge.get(p["id"])
     only = knowledge.units_for(p["id"], sc, doc) if sc else None
@@ -1463,7 +1463,7 @@ async def create_session(body: NewSession, request: Request):
     if sc and p["pipeline"]["requirements"].get("preflight"):
         # The scenario's role has an account and the scenario keeps to the restrictions and lifecycles.
         try:
-            check = await knowledge.preflight(p, sc, lifecycle=not body.accept_lifecycle)
+            check = await knowledge.preflight(p, sc, lifecycle=not body.accept_lifecycle and not projects.autonomous(p))
         except llm.BudgetExceeded as e:
             raise HTTPException(429, str(e))
         except Exception as e:
@@ -2762,7 +2762,7 @@ def _learn_waits(p: dict, a: dict | None) -> str | None:
             or text.lstrip().startswith(explorer.MAP_TITLE):
         return ""
     left = review.unresolved(a.get("review"))
-    if left:
+    if left and not projects.autonomous(p):     # without confirmations the model learns the text as it is
         return (f"Модель приложения обновится по требованиям, когда замечания, блокирующие тест-дизайн, будут "
                 f"исправлены или отмечены неактуальными (осталось {len(left)})")
     return None

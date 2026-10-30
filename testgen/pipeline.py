@@ -637,8 +637,12 @@ class Job:
         self.review = a["review"]
         self.validation = self.review.get("validation") or a.get("validation")
         # ready (require_ready): what the reviewer found is settled - the run says how, not the reviewer's verdict
-        self._log(f"Требования проверены ревьюером и разобраны во вкладке «Требования»: "
-                  f"{review.settled_summary(self.review)}")
+        waived = analyses.readiness(a, project)["waived"]
+        if waived:
+            self._log("Режим без подтверждений: требования идут в тест-дизайн как есть — " + "; ".join(waived), "warn")
+        else:
+            self._log(f"Требования проверены ревьюером и разобраны во вкладке «Требования»: "
+                      f"{review.settled_summary(self.review)}")
         if cfg["scenarios"]["enabled"]:
             analyses.restart(self.project_id, a["id"], force=True, work="design")
             self.analysis_id = a["id"]
@@ -818,12 +822,15 @@ class Job:
                 knowledge.need(self.project_id, data)      # sets record_id of the test data in place
             for sc in fresh:
                 sc["data_needed"] = True
-        doc = knowledge.get(self.project_id) if cfg.get("confirm_model") else None
+        auto = projects.autonomous(project)
+        doc = knowledge.get(self.project_id) if cfg.get("confirm_model") and not auto else None
         out = {}
         for item, sc in todo:
             if item.get("skipped"):
                 continue
-            why = ("cases" if self.cases and case_review.unsettled([sc]) else
+            if auto and item["status"] not in DONE_ITEMS and reuse.pending(item.get("match")):
+                self._reuse_by_itself(item)
+            why = ("cases" if self.cases and not auto and case_review.unsettled([sc]) else
                    "model" if doc is not None and knowledge.confirmed_for(
                        self.project_id, sc, doc)["state"] != "confirmed" else
                    "reuse" if item["status"] not in DONE_ITEMS and reuse.pending(item.get("match")) else "")
@@ -831,6 +838,16 @@ class Job:
             if why:
                 out[id(item)] = why
         return out
+
+    def _reuse_by_itself(self, item: dict) -> None:
+        """Without confirmations (projects.autonomous): what to do with a similar earlier test or scenario is what
+        the model saw - the same check is reused, a part of it refined. In the log and the audit."""
+        m = item["match"]
+        m["decision"] = "reuse" if m.get("relation") == "same" or m["kind"] == "scenario" else "refine"
+        self._log(f"«{item['title']}»: похоже на «{m['title']}» — {reuse.DECISION_TITLES[m['decision']]} "
+                  "(режим без подтверждений)")
+        audit.record("decision.auto", user=case_review.AUTO, project_id=self.project_id, target={"jid": self.id},
+                     details={"item": item["title"][:200], "how": "autonomous", "reuse": m["decision"]}, via="pipeline")
 
     def _mark(self, item: dict, why: str) -> None:
         """An item begins or stops waiting for a decision (`why` - HOLDS, "" - none): how long it waited is kept
@@ -911,17 +928,25 @@ class Job:
         # by «Отменить» (reopen).
         auto = [(c, f) for c in chosen for f in case_review.findings([c]) if (f.get("decision") or {}).get("auto")]
         dc = project["pipeline"]["decisions"]
-        if dc["auto_accept"]:
-            auto += case_review.auto_accept(chosen, dc["auto_confidence"])
+        # Without confirmations every proposal is taken, and a case does not wait for the findings left (_holds).
+        alone = projects.autonomous(project)
+        if dc["auto_accept"] or alone:
+            auto += case_review.auto_accept(chosen, dc["auto_confidence"], everything=alone)
         for c, f in auto:
             d = f["decision"]
             how = (f"по прежнему ответу команды: {d['text'][:200]}" if d["auto"] == "memory"
+                   else "принято предложение ревьюера (режим без подтверждений)" if d["auto"] == "autonomous"
                    else f"принято предложение ревьюера (уверенность {d.get('confidence', 0)}%)")
-            self._log(f"«{c['title']}»: замечание «{f['problem'][:120]}» — {how}; отменить — «Отменить» в ревью кейсов")
+            self._log(f"«{c['title']}»: замечание «{f['problem'][:120]}» — {how}"
+                      + ("" if alone else "; отменить — «Отменить» в ревью кейсов"))
             audit.record("decision.auto", user=d["user"], project_id=self.project_id, target={"jid": self.id},
                          details={"finding": f["id"], "case": c["title"][:200], "how": d["auto"],
                                   "confidence": d.get("confidence")}, via="pipeline")
-        if "themes" not in self.cases:
+        left = case_review.unsettled(chosen)
+        if alone and left:
+            self._log(f"Режим без подтверждений: кейсы идут в работу с неразобранными замечаниями без предложения "
+                      f"ревьюера ({len(left)}) — агент автоматизирует их как написано", "warn")
+        if "themes" not in self.cases and not alone:
             # One answer for many cases: the findings one answer settles are asked once, as a theme.
             try:
                 self.cases["themes"] = await case_review.group(project, chosen)
@@ -989,8 +1014,6 @@ class Job:
             if not a:
                 raise ValueError("Анализ требований удалён")
             r = analyses.readiness(a, project)
-            if r["ready"]:
-                break
             if r["settled"] and r["learn"] and not r["learned"] and learn_from and not tried:
                 tried = True
                 self._log("Требования разобраны: модель приложения учится на них — новое ждёт подтверждения")
@@ -1002,6 +1025,10 @@ class Job:
                     self._log(f"Модель приложения не обновлена: {_err(e)} — «В модель приложения» во вкладке "
                               "«Требования»", "warn")
                 continue
+            if r["ready"]:
+                if r["waived"]:
+                    self._log("Режим без подтверждений: тест-дизайн не ждёт — " + "; ".join(r["waived"]), "warn")
+                break
             status = "awaiting_review" if not r["settled"] else "awaiting_model"
             if (status, r["blocked"]) != said:
                 said = (status, r["blocked"])
@@ -1041,6 +1068,9 @@ class Job:
         stay in the analysis for a later run."""
         rest = " — остальные остаются в списке «Сценарии из анализа требований»" if self.analysis_id else ""
         what = "кейсы" if self.cases else "сценарии"
+        if mode == "manual" and projects.autonomous(projects.get(self.project_id)):
+            mode = "all"
+            self._log(f"Режим без подтверждений: в работу идут все {what}")
         if mode == "manual":
             self.preselect = [i for i, s in enumerate(self.scenarios) if s.get("priority") != "low"]
             self._waiting("awaiting_selection")
@@ -1062,13 +1092,14 @@ class Job:
         """Run an authoring session to its end -> done | error | stalled | timeout | cancelled.
         `started`: a person already continues it in Studio - just wait for it."""
         a = project["pipeline"]["authoring"]
+        autopilot = a["autopilot"] or projects.autonomous(project)
         s.origin = {"job": self.id}
         self.sessions[s.id] = s
         self._session = s
         item["session_id"] = s.id
         self.save()
         if not started:
-            s.starts_in_autopilot = bool(a["autopilot"])
+            s.starts_in_autopilot = bool(autopilot)
             try:
                 await s.start()
             except Exception as e:
@@ -1076,7 +1107,7 @@ class Job:
                 s.chat.append({"role": "system", "text": _err(e)})
                 s.checkpoint()
                 raise
-        auto = a["autopilot"] and not started
+        auto = autopilot and not started
         if auto and s.status != "done":
             s.set_autopilot(True)
         outcome = await self._wait(s, auto)
@@ -1243,7 +1274,8 @@ class Job:
             # Before the test: the role has an account, the scenario keeps to the restrictions and lifecycles.
             item["status"] = "preflight"
             # A person ran it anyway («Запустить всё равно»): only the account of the role is checked.
-            check = await knowledge.preflight(project, sc, lifecycle=not item.get("lifecycle_accepted"))
+            check = await knowledge.preflight(project, sc, lifecycle=not item.get("lifecycle_accepted")
+                                              and not projects.autonomous(project))
             item["preflight"] = check["problems"]
             if not check["ok"]:
                 item["status"], item["error"] = "needs_attention", knowledge.preflight_text(check)
@@ -1259,7 +1291,7 @@ class Job:
                           credentials={} if guest else projects.account_credentials(project["id"], account),
                           account=account, engine="api" if sc.get("layer") == "api" else "",
                           use_login_state=not guest)
-        self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] else 'с подтверждением шагов'})")
+        self._log(f"«{sc['title']}»: генерация теста ({'Auto-Pilot' if a['autopilot'] or projects.autonomous(project) else 'с подтверждением шагов'})")
         outcome = await self._author(project, item, s)
         return await self._authored(project, item, sc, s, outcome)
 

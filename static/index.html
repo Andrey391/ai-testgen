@@ -1666,6 +1666,10 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
           <div class="stage-head"><span class="num">✓</span><h3 class="grow" style="margin:0">Решения команды</h3></div>
           <div class="hint">Что ждёт людей и кто это решает. Конвейер не держит весь запуск: кейсы и сценарии без открытых решений идут в работу сразу, ждут только спорные. Решения, принятые без человека, записываются в журнал действий и журнал запуска; их можно отменить.</div>
           <div class="grid3">
+          <div class="checks" style="margin-top:8px">
+            <label class="inline"><input type="checkbox" data-p="decisions.autonomous"> <b>Без подтверждений</b> — автотесты строятся, ничего не ожидая от людей</label>
+          </div>
+          <div class="hint">Требования идут в тест-дизайн сразу после проверки ревьюером, даже с неразобранными замечаниями; модель приложения учится на них и не ждёт подтверждения жизненного цикла; к ручным кейсам принимаются все предложения ревьюера; в работу берутся все сценарии; похожий прежний тест переиспользуется или дорабатывается, как предложила модель; проверка жизненного цикла перед тестом не останавливает; агент идёт в Auto-Pilot. Остаётся: учётная запись роли сценария, запрет необратимых действий и ревью готового теста по политике ниже. Всё, что решено без человека, — в журнале запуска.</div>
             <div><label>Тест конвейера попадает в набор</label>
               <select data-p="decisions.review_policy">
                 <option value="all">После ревью автора — каждый</option>
@@ -2202,7 +2206,7 @@ async function switchProject(pid) {
   $$('.projName').forEach(x => x.textContent = PROJ.name);
   $('#whoami').textContent = ME.user + (ME.is_admin && ME.auth_enabled ? ' (админ)' : ` · ${roleTitle(PROJ.role)}`);
   if (!$('#fUrl').value || $('#fUrl').dataset.auto) { $('#fUrl').value = PROJ.base_url; $('#fUrl').dataset.auto = '1'; }
-  $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+  $('#fAuto').checked = PROJ.pipeline.authoring.autopilot || PROJ.pipeline.decisions.autonomous;
   $('#fLogin').placeholder = PROJ.app_username || '';
   fillAccountSelect($('#fAccount'), '');
   api('GET', `/api/tests?project_id=${pid}`).then(ts => $('#fFreshBox').classList.toggle('hidden',
@@ -4703,7 +4707,9 @@ function scenTabHtml(r, busy) {
   }
   return `<div class="box next"><div class="row"><b class="grow">Требования готовы к тест-дизайну</b>
       <button class="btn primary small" onclick="toPipeline()" ${busy ? 'disabled' : ''} title="Конвейер спроектирует сценарии по этим требованиям и сгенерирует тесты">Генерировать тест-кейсы в конвейере →</button></div>
-      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div></div>` + coverageHtml() + scen;
+      <div class="hint">${SCEN.length ? 'Новые сценарии добавятся к уже спроектированным.' : 'Сценарии и тесты по ним появятся здесь.'}</div>
+      ${r.waived?.length ? `<div class="hint" style="color:var(--warn)">Режим без подтверждений: тест-дизайн не ждёт —</div>
+        <ul>${r.waived.map(b => `<li class="hint" style="margin:0">${esc(b)}</li>`).join('')}</ul>` : ''}</div>` + coverageHtml() + scen;
 }
 // Which numbered requirements of the text the scenarios check: the ones without a scenario are named.
 function coverageHtml() {
@@ -6425,7 +6431,7 @@ async function wizardFinish(start) {
   btns.forEach(b => b.disabled = true);
   try {
     PROJ = await api('PUT', `/api/projects/${PID}`, {pipeline: p, start});
-    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot || PROJ.pipeline.decisions.autonomous;
     WIZ = null;
     beginWith(start);
   } catch (e) { $('#wz3Err').textContent = e.message; }
@@ -7291,7 +7297,7 @@ $$('[data-save-process]').forEach(btn => btn.onclick = async () => {
     fillProcess(); $$('[data-proc-msg]').forEach(m => m.textContent = '');
     const warn = budgetPriceText(PROJ.pipeline.budget);
     msg.textContent = warn ? 'Сохранено. ' + warn : 'Сохранено';
-    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot;
+    $('#fAuto').checked = PROJ.pipeline.authoring.autopilot || PROJ.pipeline.decisions.autonomous;
     renderDesignChoices();
   } catch (e) { msg.textContent = e.message; }
 });

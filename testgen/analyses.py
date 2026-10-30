@@ -786,8 +786,15 @@ def readiness(a: dict, project: dict | None = None, doc: dict | None = None) -> 
     done["lifecycle"] = (bool(rv) and LIFECYCLE_CHECK not in errors and not lc_left and (not learn or learned)
                          and not updates and state == "confirmed")
     step = next((s for s in STEPS[:-1] if not done[s]), "scenarios")
-    return {"ready": not blocked, "blocked": blocked, "step": step, "done": done,
-            "settled": bool(rv) and not errors and not left and not recheck, "recheck": recheck,
+    settled = bool(rv) and not errors and not left and not recheck
+    # Without confirmations (projects.autonomous): reviewed requirements go to test design as they are - what
+    # would hold them is only told (`waived`); the model learns from them right after the review (_learn_waits,
+    # Job._await_requirements), a failed lesson does not hold them either.
+    waived = []
+    if projects.autonomous(project) and rv:
+        waived, blocked, settled, step = blocked, [], True, "scenarios"
+    return {"ready": not blocked, "blocked": blocked, "waived": waived, "step": step, "done": done,
+            "settled": settled, "recheck": recheck,
             "left": len(left) - len(lc_left), "lifecycle_left": len(lc_left),
             "learn": learn, "learned": learned, "updates": updates, "confirm": confirm, "units": units, "parts": parts,
             "state": state, "missing": knowledge.missing(doc) if doc else []}

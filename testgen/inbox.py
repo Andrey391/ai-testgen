@@ -128,7 +128,7 @@ def _review_entries(pid: str) -> list[dict]:
 def _model_entries(pid: str, project: dict) -> list[dict]:
     cfg = (project.get("pipeline") or {}).get("requirements") or {}
     sig = knowledge.Sql.signature(pid)
-    key = (sig, bool(cfg.get("confirm_model")))
+    key = (sig, bool(cfg.get("confirm_model")) and not projects.autonomous(project))     # nothing waits for it
     hit = _MODEL.get(pid)
     if sig is not None and hit and hit[0] == key:
         return hit[1]
@@ -225,7 +225,9 @@ def project_inbox(pid: str, user: str = "", alive=lambda cp: False) -> list[dict
     """Every entry of the project, by kind (KINDS), the oldest first within a kind. `alive` - the session of a
     checkpoint still runs (not interrupted)."""
     project = projects.get(pid) or {}
-    entries = (_job_entries(pid) + _review_entries(pid) + _model_entries(pid, project) + _heal_entries(pid)
+    # Without confirmations the findings of the reviewer hold no test design: they are not a decision to wait for.
+    findings = [] if projects.autonomous(project) else _review_entries(pid)
+    entries = (_job_entries(pid) + findings + _model_entries(pid, project) + _heal_entries(pid)
                + _test_review_entries(pid) + _outdated_entries(pid) + _session_entries(pid, alive) + _task_entries(pid, user))
     route(entries, project)
     return sorted(entries, key=lambda e: (KINDS.index(e["kind"]), e["since"] or 0))
