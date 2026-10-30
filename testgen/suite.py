@@ -337,4 +337,4 @@ def list_suites(pid: str, limit: int = 30) -> list[dict]:
             except ValueError:
                 continue
     return [{k: s.get(k) for k in ("id", "status", "started", "finished", "passed", "summary", "tags", "trigger",
-                                   "user")} for s in sorted(out.values(), key=lambda s: s["started"], reverse=True)][:limit]
+                                   "user", "schedule")} for s in sorted(out.values(), key=lambda s: s["started"], reverse=True)][:limit]

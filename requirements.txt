@@ -8,6 +8,8 @@ httpx
 Faker
 pypdf
 python-multipart
+# Time zones of scheduled suite runs (schedules.py): Windows has no system tz database.
+tzdata
 # Encrypted secrets (vault.py), OIDC ID tokens and LDAP / Active Directory login (sso.py).
 cryptography>=42
 PyJWT>=2.8

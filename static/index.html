@@ -926,6 +926,7 @@ select.inline{width:auto;padding:3px 6px;font-size:12px}
         <table style="margin-top:8px"><thead><tr><th>Тест</th><th class="wide">Шагов</th><th>Последние запуски</th><th class="wide">Качество проверок</th><th class="wide" id="tmsHead">Система тестов</th><th></th></tr></thead>
         <tbody id="testsBody"></tbody></table>
       </div>
+      <div class="card hidden" data-tests-sec="suites" id="schedBox"></div>
       <div class="card hidden" data-tests-sec="suites">
         <h3>Запуски наборов</h3>
         <table><thead><tr><th>Запуск</th><th>Итог</th><th>Теги</th><th class="wide">Кто</th><th></th></tr></thead>
@@ -3193,7 +3194,7 @@ function showTestsSec(sec, own) {
     OPEN_TEST = null; clearTimeout(runTimer); clearTimeout(suiteTimer);
     setRoute(testsPath());
   }
-  if (TESTS_SEC === 'suites') loadSuites();
+  if (TESTS_SEC === 'suites') { loadSuites(); loadSchedules(); }
   if (TESTS_SEC === 'coverage') loadCoverage();
 }
 $('#testsSecs').addEventListener('click', e => { const b = e.target.closest('[data-sec]'); if (b) showTestsSec(b.dataset.sec, true); });
@@ -3297,7 +3298,7 @@ async function loadTests() {
   }).join('') || `<tr><td colspan="6" class="muted">${filtered ? 'Нет тестов по этим условиям. <button class="linkbtn" onclick="resetFilters()">Сбросить фильтры</button>'
     : tag ? 'Нет тестов с этим тегом.' : `В проекте пока нет тестов. <button class="linkbtn" onclick="beginWith('studio')">Записать тест в Studio</button>
       или <button class="linkbtn" onclick="showTab('pipe', true)">сгенерировать в конвейере</button> по проверенным требованиям.`}</td></tr>`;
-  if (TESTS_SEC === 'suites') loadSuites();
+  if (TESTS_SEC === 'suites') { loadSuites(); loadSchedules(); }
   if (TESTS_SEC === 'coverage') loadCoverage();
   if (OPEN_TEST && !$('#testBox').classList.contains('hidden')) openTest(OPEN_TEST, true);
 }
@@ -3967,7 +3968,7 @@ async function loadSuites() {
   $('#suitesBody').innerHTML = list.map(s => `<tr class="click" onclick="openSuite('${s.id}')"><td>${fmtTime(s.started)}</td>
     <td>${s.status === 'running' ? runBadge('running') : `<span class="badge ${s.passed ? 'ok' : 'bad'}">${s.passed ? 'успешно' : 'есть падения'}</span>`}
       <span class="muted" style="font-size:12px">${s.summary?.total ? `${s.summary.passed + s.summary.flaky}/${s.summary.total}` : ''}</span></td>
-    <td>${(s.tags || []).map(t => '#' + esc(t)).join(' ') || 'все'}</td><td class="wide">${esc(s.user || s.trigger || '')}</td>
+    <td>${(s.tags || []).map(t => '#' + esc(t)).join(' ') || 'все'}</td><td class="wide">${s.schedule ? `<span title="По расписанию, от имени ${esc(s.user || '')}">⏱ ${esc(s.schedule.name)}</span>` : esc(s.user || s.trigger || '')}</td>
     <td class="row">${s.status !== 'running' && !s.passed ? `<button class="btn small" onclick="event.stopPropagation();retrySuite('${s.id}', this)" title="Прогнать заново только упавшие тесты этого набора">Повторить упавшие</button>` : ''}${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit" onclick="event.stopPropagation()">JUnit</a>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="5" class="muted">Наборы ещё не запускались: нажмите «Запустить набор» (все тесты или тесты выбранного тега) — или запускайте из CI (<code>python -m testgen.run</code>).</td></tr>';
 }
@@ -3980,7 +3981,7 @@ async function openSuite(sid, quiet) {
   const box = $('#suiteBox'); box.classList.remove('hidden');
   const c = s.summary || {}, total = s.items.length, pct = n => `${(n || 0) / total * 100}%`;
   const doneN = s.items.filter(i => !['queued', 'running'].includes(i.status)).length;
-  box.innerHTML = `<div class="row"><b class="grow">Набор ${(s.tags || []).map(t => '#' + esc(t)).join(' ') || '(все тесты)'} — ${s.status === 'running' ? `выполняется ${doneN}/${total}` : s.passed ? '<span class="ok">успешно</span>' : '<span class="err">есть падения</span>'}</b>
+  box.innerHTML = `<div class="row"><b class="grow">Набор ${(s.tags || []).map(t => '#' + esc(t)).join(' ') || '(все тесты)'}${s.schedule ? ` по расписанию «${esc(s.schedule.name)}»` : ''} — ${s.status === 'running' ? `выполняется ${doneN}/${total}` : s.passed ? '<span class="ok">успешно</span>' : '<span class="err">есть падения</span>'}</b>
       <span class="muted" style="font-size:12px">${fmtTime(s.started)}${usageText(s.usage)}</span>
       ${s.status !== 'running' && s.items.some(i => RETRYABLE.includes(i.status)) ? `<button class="btn small" onclick="retrySuite('${s.id}', this)" title="Новый прогон набора только из упавших, нестабильных и завершившихся ошибкой тестов">Перезапустить упавшие (${new Set(s.items.filter(i => RETRYABLE.includes(i.status)).map(i => i.test_id)).size})</button>` : ''}
       ${s.status !== 'running' ? `<a class="btn small" href="/api/suites/${s.id}/junit">JUnit XML</a>` : ''}
@@ -3993,6 +3994,105 @@ async function openSuite(sid, quiet) {
       <td>${i.status === 'queued' ? `<span class="muted">${(i.after || []).some(j => ['queued', 'running'].includes(s.items[j]?.status)) ? 'ждёт тесты с общими данными' : 'в очереди'}</span>` : runBadge(i.status)}</td><td class="muted">${i.duration != null ? i.duration + ' с' : ''}</td></tr>`).join('')}</tbody></table>`;
   if (s.status === 'running') suiteTimer = setTimeout(() => openSuite(sid, true), 1500);
   else if (!$('#tab-tests').classList.contains('hidden')) loadTests();
+}
+
+// scheduled suite runs: the regression goes by itself at given times
+const WEEK = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
+const SCHED_LAST = {started: 'запущен', skipped: 'пропущен', empty: 'нет тестов', missed: 'пропущен', error: 'ошибка'};
+let SCHEDULES = [], SCHED_EDIT = null;       // SCHED_EDIT: the schedule in the form ({} - a new one), null - no form
+const myTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; } };
+async function loadSchedules() {
+  if (!PID) return;
+  const pid = PID;
+  try { SCHEDULES = await api('GET', `/api/projects/${PID}/schedules`); }
+  catch (e) { $('#schedBox').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  if (pid === PID) renderSchedules();
+}
+function schedLastHtml(l) {
+  if (!l) return '<span class="muted">ещё не запускался</span>';
+  if (l.status === 'started') return `<a href="#" onclick="openSuite('${l.suite_id}');return false">${fmtTime(l.at)}</a>`;
+  return `<span class="badge ${l.status === 'error' ? 'bad' : 'off'}">${SCHED_LAST[l.status] || esc(l.status)}</span> <span class="muted">${fmtTime(l.at)}</span>`
+    + (l.note ? `<div class="hint">${esc(l.note)}</div>` : '');
+}
+function renderSchedules() {
+  const rows = SCHEDULES.map(s => `<tr><td><b>${esc(s.name)}</b><div class="hint">${esc(s.when)}${s.tz && s.tz !== myTz() ? ` (${esc(s.tz)})` : ''} · ${(s.tags || []).map(t => '#' + esc(t)).join(' ') || (s.test_ids?.length ? `тестов: ${s.test_ids.length}` : 'все тесты')}${s.include_drafts ? ' · с черновиками' : ''}${s.device ? ' · ' + esc(s.device) : ''}</div></td>
+    <td>${s.enabled ? (s.next ? fmtTime(s.next) : '—') : '<span class="badge off">выключено</span>'}</td>
+    <td>${schedLastHtml(s.last)}</td>
+    <td class="row"><label class="inline" title="Включить или выключить расписание"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSchedule('${s.id}', this)"> вкл</label>
+      <button class="btn small" onclick="runScheduleNow('${s.id}', this)" title="Запустить набор этого расписания сейчас — следующий запуск по времени не сдвигается">Запустить сейчас</button>
+      <button class="btn small" onclick="editSchedule('${s.id}')">Изменить</button>
+      <button class="btn small" onclick="deleteSchedule('${s.id}')" aria-label="Удалить расписание">✕</button></td></tr>`).join('');
+  $('#schedBox').innerHTML = `<div class="row"><h3 class="grow" style="margin:0">Расписание</h3>
+      ${SCHED_EDIT ? '' : '<button class="btn small primary" onclick="editSchedule()">+ Расписание</button>'}</div>
+    <div class="hint">Набор запускается сам в заданное время — как «Запустить набор». Итоги — в «Запусках наборов» ниже, уведомление — по настройкам «Проект → Общие → Уведомления».</div>
+    ${SCHED_EDIT ? schedFormHtml(SCHED_EDIT) : ''}
+    ${SCHEDULES.length ? `<table style="margin-top:8px"><thead><tr><th>Расписание</th><th>Следующий запуск</th><th>Последний запуск</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : SCHED_EDIT ? '' : '<div class="muted" style="margin-top:8px">Расписаний нет. Добавьте, например, ночную регрессию: пн–пт в 02:00.</div>'}`;
+  if (SCHED_EDIT) schedMode();
+}
+function schedFormHtml(s) {
+  const days = s.days || [0, 1, 2, 3, 4], tag = (s.tags || [])[0] || '';
+  const tags = [...new Set([...[...$('#tagFilter').options].map(o => o.value).filter(Boolean), ...(tag ? [tag] : [])])];
+  return `<div class="card" style="margin-top:8px" id="schForm">
+    <label for="schName">Название</label><input id="schName" value="${esc(s.name || '')}" placeholder="Например: Ночная регрессия">
+    <label for="schMode">Когда</label><select id="schMode" onchange="schedMode()">
+      <option value="daily" ${s.mode !== 'interval' ? 'selected' : ''}>В дни недели в заданное время</option>
+      <option value="interval" ${s.mode === 'interval' ? 'selected' : ''}>Каждые N часов</option></select>
+    <div id="schDaily"><div class="chips" style="margin-top:6px" role="group" aria-label="Дни недели">${WEEK.map((d, i) => `<label class="inline"><input type="checkbox" data-day="${i}" ${days.includes(i) ? 'checked' : ''}> ${d}</label>`).join('')}</div>
+      <label for="schTimes">Время (ЧЧ:ММ, несколько — через запятую)</label><input id="schTimes" value="${esc((s.times || ['02:00']).join(', '))}" placeholder="02:00, 14:00">
+      <div class="hint">Часовой пояс: ${esc(s.tz || myTz() || 'Europe/Moscow')}</div></div>
+    <div id="schInterval"><label for="schHours">Каждые, часов</label><input id="schHours" type="number" min="1" max="168" value="${s.every_hours || 4}" style="width:120px"></div>
+    <label for="schTag">Тесты</label><select id="schTag"><option value="">Все тесты в наборе</option>${tags.map(t => `<option value="${esc(t)}" ${t === tag ? 'selected' : ''}>#${esc(t)}</option>`).join('')}</select>
+    <label for="schDevice">Экран</label><input id="schDevice" value="${esc(s.device || '')}" placeholder="как в проекте, или 1366x768, iPhone 13">
+    <label class="inline" title="Черновики и тесты на ревью обычно в набор не входят"><input type="checkbox" id="schDrafts" ${s.include_drafts ? 'checked' : ''}> с черновиками</label>
+    <div class="row" style="margin-top:8px"><button class="btn primary" onclick="saveSchedule(this)">${s.id ? 'Сохранить' : 'Добавить расписание'}</button>
+      <button class="btn" onclick="SCHED_EDIT = null; renderSchedules()">Отмена</button></div></div>`;
+}
+function schedMode() {
+  const daily = $('#schMode').value === 'daily';
+  $('#schDaily').classList.toggle('hidden', !daily);
+  $('#schInterval').classList.toggle('hidden', daily);
+}
+function editSchedule(id) {
+  SCHED_EDIT = id ? {...SCHEDULES.find(s => s.id === id)} : {};
+  renderSchedules();
+  $('#schName')?.focus();
+}
+function schedBody(s) {
+  return {name: s.name || '', enabled: s.enabled !== false, mode: s.mode || 'daily', days: s.days || [], times: s.times || [],
+          every_hours: s.every_hours || 0, tz: s.tz || myTz(), tags: s.tags || [], test_ids: s.test_ids || [],
+          include_drafts: !!s.include_drafts, device: s.device || ''};
+}
+async function saveSchedule(btn) {
+  const e = SCHED_EDIT, tag = $('#schTag').value;
+  const body = {...schedBody(e), name: $('#schName').value.trim(), mode: $('#schMode').value,
+    days: $$('#schForm [data-day]').filter(x => x.checked).map(x => +x.dataset.day),
+    times: $('#schTimes').value.split(/[,;\s]+/).filter(Boolean).map(x => x.length === 4 ? '0' + x : x),
+    every_hours: +$('#schHours').value || 0, tags: tag ? [tag] : [], test_ids: tag ? [] : e.test_ids || [],
+    include_drafts: $('#schDrafts').checked, device: $('#schDevice').value.trim()};
+  btn.disabled = true;
+  try {
+    const s = await api(e.id ? 'PUT' : 'POST', `/api/projects/${PID}/schedules${e.id ? '/' + e.id : ''}`, body);
+    SCHED_EDIT = null;
+    toast(`Расписание «${s.name}» сохранено` + (s.next ? `: следующий запуск ${fmtTime(s.next)}` : ''));
+    loadSchedules();
+  } catch (err) { notice(btn, err.message); btn.disabled = false; }
+}
+async function toggleSchedule(id, box) {
+  const s = SCHEDULES.find(x => x.id === id);
+  try { await api('PUT', `/api/projects/${PID}/schedules/${id}`, {...schedBody(s), enabled: box.checked}); loadSchedules(); }
+  catch (e) { box.checked = !box.checked; notice(box, e.message); }
+}
+async function runScheduleNow(id, btn) {
+  btn.disabled = true;
+  try { const s = await api('POST', `/api/projects/${PID}/schedules/${id}/run`); openSuite(s.last.suite_id); loadSuites(); loadSchedules(); }
+  catch (e) { notice(btn, e.message); btn.disabled = false; }
+}
+async function deleteSchedule(id) {
+  const s = SCHEDULES.find(x => x.id === id);
+  if (!await sure('Удалить расписание?', 'Удалить расписание', 'Набор больше не будет запускаться сам. Прошедшие запуски останутся в «Запусках наборов».', s?.name || '')) return;
+  try { await api('DELETE', `/api/projects/${PID}/schedules/${id}`); toast('Расписание удалено'); loadSchedules(); }
+  catch (e) { toast(e.message, 'bad'); }
 }
 
 // the QA lead's dashboard
